@@ -18,6 +18,7 @@ import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { StudentReportsService } from './student-reports.service';
 import {
+  ExportStudentCategoriesQueryDto,
   ExportStudentStrengthQueryDto,
   StudentStrengthCellQueryDto,
   StudentStrengthQueryDto,
@@ -70,6 +71,24 @@ export class StudentReportsController {
     @Res() res: Response,
   ) {
     const file = await this.reports.exportStrength(query, user);
+    res.set({
+      'Content-Type': file.contentType,
+      'Content-Disposition': `attachment; filename="${file.filename}"`,
+      'Content-Length': file.buffer.length,
+    });
+    res.send(file.buffer);
+  }
+
+  /** TAFSD-452: Special Categories reads through `strength` and `strength/students` with its filters; only the file differs. */
+  @Get('categories/export')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#export')
+  async exportCategories(
+    @Query() query: ExportStudentCategoriesQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+    @Res() res: Response,
+  ) {
+    const file = await this.reports.exportCategories(query, user);
     res.set({
       'Content-Type': file.contentType,
       'Content-Disposition': `attachment; filename="${file.filename}"`,

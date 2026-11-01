@@ -22,6 +22,8 @@ import {
   buildStrengthGrid,
   genderOf,
   inCell,
+  isLinked,
+  matchesCategoryFilters,
   normalizeStrengthOptions,
   sessionStartFor,
   splitValue,
@@ -32,6 +34,7 @@ import {
   type StrengthRow,
   type StrengthStudent,
 } from './strength.util';
+import type { ExportStudentCategoriesQueryDto } from './dto/student-strength-query.dto';
 import type {
   ExportStudentStrengthQueryDto,
   StudentStrengthCellQueryDto,
@@ -40,6 +43,28 @@ import type {
 
 /** The most students one drill-down returns; the count above it is exact either way. */
 const CELL_STUDENT_CAP = 1000;
+
+/** TAFSD-452: another student of the same family. */
+export interface SiblingRef {
+  cc: number;
+  full_name: string | null;
+  status: string;
+  class_name: string | null;
+  section: string | null;
+  campus: string | null;
+}
+
+/** TAFSD-452: what the drill-down and the list sheet show beyond the grid's fields. */
+export interface CategoryDetail {
+  /** Enrolled siblings: these make the student linked. */
+  siblings: SiblingRef[];
+  /** Siblings with any other status (left, graduated, …): listed, never linking. */
+  other_siblings: SiblingRef[];
+  fee_endowment_reason: string | null;
+  fee_endowment_until: string | null;
+  complementary_reason: string | null;
+  complementary_until: string | null;
+}
 
 /**
  * TAFSD-451: Student Reports, starting with Student Strength. Students are
@@ -68,7 +93,7 @@ export class StudentReportsService {
     query: StudentStrengthCellQueryDto,
     user: IJwtStaffPayload,
   ) {
-    const { opts, ctx, roll } = await this.load(query, user);
+    const { opts, ctx, roll, details } = await this.load(query, user);
     const hits = roll.filter((s) =>
       inCell(s, { row: query.row, column: query.column }, opts, ctx),
     );
@@ -94,25 +119,47 @@ export class StudentReportsService {
         gender: genderOf(s.gender).label,
         status: splitValue(s, 'status', ctx).label,
         age: splitValue(s, 'age', ctx).label,
+        // TAFSD-452
+        is_fee_endowment: s.is_fee_endowment,
+        is_complementary: s.is_complementary,
+        ...details.get(s.cc)!,
       })),
     };
   }
 
-  async exportStrength(
-    query: ExportStudentStrengthQueryDto,
+  exportStrength(query: ExportStudentStrengthQueryDto, user: IJwtStaffPayload) {
+    return this.exportReport(query, user, 'strength');
+  }
+
+  /** TAFSD-452: the same grid, then one list sheet per campus naming each student's siblings. */
+  exportCategories(
+    query: ExportStudentCategoriesQueryDto,
     user: IJwtStaffPayload,
   ) {
-    const { opts, ctx, roll } = await this.load(query, user);
+    return this.exportReport(query, user, 'categories');
+  }
+
+  private async exportReport(
+    query: ExportStudentStrengthQueryDto,
+    user: IJwtStaffPayload,
+    kind: 'strength' | 'categories',
+  ) {
+    const { opts, ctx, roll, details } = await this.load(query, user);
     const grid = buildStrengthGrid(roll, opts, ctx);
-    const title = 'STUDENT STRENGTH REPORT';
-    const basename = `student-strength-${ctx.today}`;
+    const title =
+      kind === 'strength'
+        ? 'STUDENT STRENGTH REPORT'
+        : 'SPECIAL CATEGORIES REPORT';
+    const tabName =
+      kind === 'strength' ? 'Student Strength' : 'Special Categories';
+    const basename = `${kind === 'strength' ? 'student-strength' : 'special-categories'}-${ctx.today}`;
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'The American Foundation School';
 
     if (grid.student_count === 0) {
       writeEmptySheet(
         workbook,
-        'Student Strength',
+        tabName,
         'No students match the current filters.',
       );
       return schoolWorkbookFile(workbook, query, basename, title);
@@ -131,7 +178,11 @@ export class StudentReportsService {
       ctx.today,
     );
 
-    writeSchoolSheets(workbook, await this.strengthSheets(grid, opts), {
+    const tabs = await this.campusTabs();
+    const sheets = this.strengthSheets(grid, opts, tabs, tabName);
+    if (kind === 'categories')
+      sheets.push(...this.categoryListSheets(roll, details, tabs, ctx.today));
+    writeSchoolSheets(workbook, sheets, {
       reportTitle: title,
       heading,
       periodLine: `AS ON ${this.longDate(ctx.today)}`,
@@ -187,6 +238,13 @@ export class StudentReportsService {
         status: true,
         dob: true,
         doa: true,
+        family_id: true,
+        is_fee_endowment: true,
+        fee_endowment_reason: true,
+        fee_endowment_until: true,
+        is_complementary: true,
+        complementary_reason: true,
+        complementary_until: true,
         campuses: { select: { campus_name: true } },
         classes: {
           select: {
@@ -204,6 +262,23 @@ export class StudentReportsService {
         },
       },
     });
+
+    const families = await this.familyMembers(rows);
+    const details = new Map<number, CategoryDetail>();
+    const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+    for (const r of rows) {
+      const others = (
+        r.family_id != null ? (families.get(r.family_id) ?? []) : []
+      ).filter((m) => m.cc !== r.cc);
+      details.set(r.cc, {
+        siblings: others.filter((m) => m.status === 'ENROLLED'),
+        other_siblings: others.filter((m) => m.status !== 'ENROLLED'),
+        fee_endowment_reason: r.fee_endowment_reason,
+        fee_endowment_until: day(r.fee_endowment_until),
+        complementary_reason: r.complementary_reason,
+        complementary_until: day(r.complementary_until),
+      });
+    }
 
     let roll: StrengthStudent[] = rows.map((r) => ({
       cc: r.cc,
@@ -225,13 +300,61 @@ export class StudentReportsService {
       segment_id: r.classes?.segment_id ?? null,
       segment: r.classes?.segments?.name ?? null,
       segment_order: r.classes?.segments?.display_order ?? null,
+      enrolled_siblings: details.get(r.cc)!.siblings.length,
+      is_fee_endowment: r.is_fee_endowment,
+      is_complementary: r.is_complementary,
     }));
     // Gender is free text in the table, so it is filtered after folding it.
     if (query.gender?.length) {
       const wanted = new Set<string>(query.gender);
       roll = roll.filter((s) => wanted.has(genderOf(s.gender).key));
     }
-    return { opts, ctx, roll };
+    if (query.siblings?.length || query.category?.length)
+      roll = roll.filter((s) =>
+        matchesCategoryFilters(s, query.siblings, query.category),
+      );
+    return { opts, ctx, roll, details };
+  }
+
+  /**
+   * TAFSD-452: every student of the loaded students' families, across the whole
+   * school, not just the filtered or scoped ones: a sibling in another campus
+   * still makes a student linked.
+   */
+  private async familyMembers(
+    rows: { family_id: number | null }[],
+  ): Promise<Map<number, SiblingRef[]>> {
+    const ids = [
+      ...new Set(rows.map((r) => r.family_id).filter((id) => id != null)),
+    ];
+    const out = new Map<number, SiblingRef[]>();
+    if (!ids.length) return out;
+    const members = await this.prisma.students.findMany({
+      where: { family_id: { in: ids }, deleted_at: null },
+      select: {
+        cc: true,
+        family_id: true,
+        full_name: true,
+        status: true,
+        classes: { select: { description: true } },
+        sections: { select: { description: true } },
+        campuses: { select: { campus_name: true } },
+      },
+      orderBy: [{ class_id: 'desc' }, { full_name: 'asc' }],
+    });
+    for (const m of members) {
+      const list = out.get(m.family_id!) ?? [];
+      list.push({
+        cc: m.cc,
+        full_name: m.full_name,
+        status: String(m.status),
+        class_name: m.classes?.description ?? null,
+        section: m.sections?.description ?? null,
+        campus: m.campuses?.campus_name ?? null,
+      });
+      out.set(m.family_id!, list);
+    }
+    return out;
   }
 
   // ─── Excel ──────────────────────────────────────────────────────────────────
@@ -240,10 +363,12 @@ export class StudentReportsService {
    * One sheet per campus (class rows, or class groups of section rows with a
    * SUBTOTAL each), or a single sheet of campus rows when only campuses are asked for.
    */
-  private async strengthSheets(
+  private strengthSheets(
     grid: StrengthGrid,
     opts: StrengthOptions,
-  ): Promise<SchoolSheet[]> {
+    tabs: Map<string, string>,
+    tabName: string,
+  ): SchoolSheet[] {
     const countColumns: SchoolSheetColumn[] = [
       ...grid.columns.map((c) => ({
         header: c.subtotal ? 'TOTAL' : c.label,
@@ -271,7 +396,7 @@ export class StudentReportsService {
     if (opts.rows === 'campus') {
       return [
         {
-          tab: 'Student Strength',
+          tab: tabName,
           campus: 'ALL CAMPUSES',
           columns: [
             { header: 'CAMPUS', key: 'label', width: 26 },
@@ -282,7 +407,6 @@ export class StudentReportsService {
       ];
     }
 
-    const tabs = await this.campusTabs();
     const sheets: SchoolSheet[] = [];
     for (const campus of grid.rows.filter((r) => r.level === 'campus')) {
       const under = grid.rows.filter(
@@ -319,6 +443,92 @@ export class StudentReportsService {
         rows: groups.flatMap((g) => g.rows),
         groups,
         rowNoun: ['SECTION', 'SECTIONS'],
+      });
+    }
+    return sheets;
+  }
+
+  /**
+   * TAFSD-452: per campus, every student in class groups (with the group's
+   * count), their Enrolled siblings, siblings who aren't (left, graduated, …), and
+   * Fee Endowment / Complementary with the end date.
+   */
+  private categoryListSheets(
+    roll: StrengthStudent[],
+    details: Map<number, CategoryDetail>,
+    tabs: Map<string, string>,
+    today: string,
+  ): SchoolSheet[] {
+    const sib = (m: SiblingRef) => {
+      const where = [m.class_name, m.section].filter(Boolean).join(' ');
+      return `${(m.full_name ?? `CC ${m.cc}`).toUpperCase()}${where ? ` (${where.toUpperCase()})` : ''}`;
+    };
+    const other = (m: SiblingRef) =>
+      `${(m.full_name ?? `CC ${m.cc}`).toUpperCase()} (${m.status.replace(/_/g, ' ')})`;
+    const benefit = (on: boolean, until: string | null) => {
+      if (!on) return '';
+      if (!until) return 'YES';
+      const [y, mo, d] = until.split('-');
+      return `${until < today ? 'ENDED' : 'UNTIL'} ${d}-${mo}-${y}`;
+    };
+
+    const byCampus = new Map<string, StrengthStudent[]>();
+    for (const s of roll) {
+      const name = s.campus?.trim() || 'No campus';
+      byCampus.set(name, [...(byCampus.get(name) ?? []), s]);
+    }
+    const sheets: SchoolSheet[] = [];
+    for (const name of [...byCampus.keys()].sort((a, b) =>
+      a.localeCompare(b),
+    )) {
+      const students = byCampus
+        .get(name)!
+        .sort(
+          (a, b) =>
+            (a.class_id ?? Number.MAX_SAFE_INTEGER) -
+              (b.class_id ?? Number.MAX_SAFE_INTEGER) ||
+            (a.section ?? '').localeCompare(b.section ?? '') ||
+            (a.full_name ?? '').localeCompare(b.full_name ?? ''),
+        );
+      const groups = new Map<string, Array<Record<string, string | number>>>();
+      for (const s of students) {
+        const d = details.get(s.cc)!;
+        const label = (s.class_name?.trim() || 'No class').toUpperCase();
+        groups.set(label, [
+          ...(groups.get(label) ?? []),
+          {
+            section: (s.section ?? '').toUpperCase(),
+            gr: s.gr_number ?? '',
+            name: (s.full_name ?? `CC ${s.cc}`).toUpperCase(),
+            linked: isLinked(s) ? 'YES' : 'NO',
+            siblings: d.siblings.map(sib).join(', '),
+            others: d.other_siblings.map(other).join(', '),
+            fe: benefit(s.is_fee_endowment, d.fee_endowment_until),
+            comp: benefit(s.is_complementary, d.complementary_until),
+          },
+        ]);
+      }
+      const list = [...groups.entries()].map(([label, rows]) => ({
+        label,
+        rows,
+      }));
+      const code = tabs.get(name) ?? name;
+      sheets.push({
+        tab: `${code.slice(0, 26)} LIST`,
+        campus: campusLine(name),
+        columns: [
+          { header: 'SECTION', key: 'section', width: 10 },
+          { header: 'GR NO', key: 'gr', width: 10 },
+          { header: 'STUDENT NAME', key: 'name', width: 28 },
+          { header: 'HAS SIBLINGS', key: 'linked', width: 10 },
+          { header: 'SIBLINGS IN SCHOOL', key: 'siblings', width: 40 },
+          { header: 'SIBLINGS NOT ENROLLED', key: 'others', width: 32 },
+          { header: 'FEE ENDOWMENT', key: 'fe', width: 18 },
+          { header: 'COMPLEMENTARY', key: 'comp', width: 18 },
+        ],
+        rows: list.flatMap((g) => g.rows),
+        groups: list,
+        rowNoun: ['STUDENT', 'STUDENTS'],
       });
     }
     return sheets;
@@ -384,6 +594,26 @@ export class StudentReportsService {
     if (query.gender?.length)
       lines.push(
         `GENDER: ${query.gender.map((g) => (g === 'UNKNOWN' ? 'NOT SET' : g)).join(', ')}`,
+      );
+    if (query.siblings?.length)
+      lines.push(
+        `SIBLINGS: ${query.siblings
+          .map((v) =>
+            v === 'LINKED' ? 'HAS SIBLINGS IN SCHOOL' : 'NO SIBLINGS IN SCHOOL',
+          )
+          .join(', ')}`,
+      );
+    if (query.category?.length)
+      lines.push(
+        `CATEGORY: ${query.category
+          .map((v) =>
+            v === 'FEE_ENDOWMENT'
+              ? 'FEE ENDOWMENT'
+              : v === 'COMPLEMENTARY'
+                ? 'COMPLEMENTARY'
+                : 'NEITHER',
+          )
+          .join(', ')}`,
       );
     if (lines.length === 0) lines.push('ALL STUDENTS ON ROLL');
     if (opts.split) {
