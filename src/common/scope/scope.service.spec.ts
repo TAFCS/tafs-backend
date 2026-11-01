@@ -96,3 +96,103 @@ describe('ScopeService.withCategoryDepartments', () => {
     expect(svc.canSeeEmployee(user, { department_id: ADMINISTRATION, staff_category_id: TEACHER })).toBe(false);
   });
 });
+
+describe('ScopeService.assertEmployee with reporting hierarchy', () => {
+  it('allows actions on any employee when hierarchy is not active (subordinates undefined)', () => {
+    const user = staff(); // subordinates: undefined
+    expect(() => service.assertEmployee(user, { id: 10, campus_id: 1 })).not.toThrow();
+  });
+
+  it('restricts to subordinates when subordinates is set', () => {
+    const manager = staff({ subordinates: [10, 20] });
+    // Subordinates pass
+    expect(() => service.assertEmployee(manager, { id: 10 })).not.toThrow();
+    expect(() => service.assertEmployee(manager, { id: 20 })).not.toThrow();
+    expect(service.canSeeEmployee(manager, { id: 10 })).toBe(true);
+
+    // Peer or superior or self (not in subordinates) throws
+    expect(() => service.assertEmployee(manager, { id: 99 })).toThrow(/reporting hierarchy/i);
+    expect(service.canSeeEmployee(manager, { id: 99 })).toBe(false);
+
+    // Missing id throws
+    expect(() => service.assertEmployee(manager, { id: null })).toThrow(/reporting hierarchy/i);
+  });
+
+  it('never restricts SUPER_ADMIN by hierarchy', () => {
+    const admin = staff({ subordinates: [10] }, StaffRole.SUPER_ADMIN);
+    expect(() => service.assertEmployee(admin, { id: 99 })).not.toThrow();
+  });
+});
+
+describe('ScopeService.hierarchy enforcement toggle and resolution', () => {
+  let mockPrisma: any;
+  let hierarchySvc: ScopeService;
+
+  beforeEach(() => {
+    mockPrisma = {
+      app_config: {
+        findUnique: jest.fn(),
+        upsert: jest.fn(),
+      },
+      employee_profiles: {
+        findUnique: jest.fn(),
+      },
+      employee_reporting_lines: {
+        findMany: jest.fn(),
+      },
+      user_scope_entries: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    hierarchySvc = new ScopeService(mockPrisma);
+  });
+
+  it('reads enforcement state from app_config', async () => {
+    mockPrisma.app_config.findUnique.mockResolvedValueOnce({ value: 'true' });
+    await expect(hierarchySvc.isHierarchyEnforced()).resolves.toBe(true);
+
+    mockPrisma.app_config.findUnique.mockResolvedValueOnce({ value: 'false' });
+    hierarchySvc.invalidateScopeCache();
+    await expect(hierarchySvc.isHierarchyEnforced()).resolves.toBe(false);
+
+    mockPrisma.app_config.findUnique.mockResolvedValueOnce(null);
+    hierarchySvc.invalidateScopeCache();
+    await expect(hierarchySvc.isHierarchyEnforced()).resolves.toBe(false);
+  });
+
+  it('persists enforcement toggle in app_config and clears cache', async () => {
+    await hierarchySvc.setHierarchyEnforced(true, 'admin_user');
+    expect(mockPrisma.app_config.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { key: 'enforce_reporting_hierarchy' },
+        create: expect.objectContaining({ value: 'true', updated_by: 'admin_user' }),
+        update: expect.objectContaining({ value: 'true', updated_by: 'admin_user' }),
+      }),
+    );
+  });
+
+  it('populates subordinates when enforcement is active', async () => {
+    mockPrisma.app_config.findUnique.mockResolvedValue({ value: 'true' });
+    mockPrisma.employee_profiles.findUnique.mockResolvedValue({ id: 1, employment_status: 'ACTIVE' });
+    mockPrisma.employee_reporting_lines.findMany.mockResolvedValue([
+      { employee_id: 2, manager_id: 1 },
+      { employee_id: 3, manager_id: 2 },
+    ]);
+
+    const baseScope = { ...EMPTY_SCOPE };
+    const res = await hierarchySvc.withReportingHierarchy('user_1', baseScope);
+    expect(res.subordinates?.sort()).toEqual([2, 3]);
+  });
+
+  it('sets NO_MATCH_ID when caller has no subordinates in an active hierarchy', async () => {
+    mockPrisma.app_config.findUnique.mockResolvedValue({ value: 'true' });
+    mockPrisma.employee_profiles.findUnique.mockResolvedValue({ id: 5, employment_status: 'ACTIVE' });
+    mockPrisma.employee_reporting_lines.findMany.mockResolvedValue([
+      { employee_id: 2, manager_id: 1 },
+    ]);
+
+    const baseScope = { ...EMPTY_SCOPE };
+    const res = await hierarchySvc.withReportingHierarchy('user_5', baseScope);
+    expect(res.subordinates).toEqual([NO_MATCH_ID]);
+  });
+});

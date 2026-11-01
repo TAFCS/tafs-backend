@@ -31,4 +31,13 @@ export class ReportingHierarchyController {
     const data = await this.service.setManagers(employeeId, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Reporting lines saved');
   }
+
+  @Put('enforcement')
+  async setEnforcement(
+    @Body('enforced') enforced: boolean,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.service.setEnforcement(Boolean(enforced), user);
+    return createApiResponse(data, HttpStatus.OK, 'Reporting hierarchy enforcement updated');
+  }
 }

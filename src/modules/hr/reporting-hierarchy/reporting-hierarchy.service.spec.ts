@@ -34,8 +34,13 @@ function mk(people: ReturnType<typeof row>[]) {
   };
   const audit = { log: jest.fn() };
   const progression = { recordProgressionChange: jest.fn() };
-  const svc = new ReportingHierarchyService(prisma as any, audit as any, progression as any);
-  return { svc, tx, audit, progression };
+  const scope = {
+    isHierarchyEnforced: jest.fn().mockResolvedValue(false),
+    setHierarchyEnforced: jest.fn().mockResolvedValue(true),
+    invalidateScopeCache: jest.fn(),
+  };
+  const svc = new ReportingHierarchyService(prisma as any, audit as any, progression as any, scope as any);
+  return { svc, tx, audit, progression, scope };
 }
 
 const superAdmin = { sub: 'u1', username: 'sa', role: StaffRole.SUPER_ADMIN } as any;
@@ -79,5 +84,21 @@ describe('ReportingHierarchyService', () => {
     const { svc } = mk([row(1), row(2, { employment_status: 'LEFT' })]);
     await expect(svc.setManagers(1, { manager_ids: [9] }, superAdmin)).rejects.toBeInstanceOf(NotFoundException);
     await expect(svc.setManagers(1, { manager_ids: [2] }, superAdmin)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('allows super admin to toggle enforcement and logs to audit', async () => {
+    const { svc, audit, scope } = mk([row(1)]);
+    await expect(svc.setEnforcement(true, campusAdmin)).rejects.toBeInstanceOf(ForbiddenException);
+
+    const res = await svc.setEnforcement(true, superAdmin);
+    expect(res).toEqual({ enforced: true });
+    expect(scope.setHierarchyEnforced).toHaveBeenCalledWith(true, 'u1');
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity_type: 'APP_CONFIG',
+        entity_id: 'enforce_reporting_hierarchy',
+        new_value: 'true',
+      }),
+    );
   });
 });

@@ -20,9 +20,28 @@ export type UserScope = {
   sections: number[];
   departments: number[];
   staffCategories: number[];
+  /** Subordinate employee IDs when reporting hierarchy is enforced. */
+  subordinates?: number[];
 };
 
-export const EMPTY_SCOPE: UserScope = Object.freeze({
+export type ScopeDimensionField =
+  | 'campuses'
+  | 'segments'
+  | 'classes'
+  | 'sections'
+  | 'departments'
+  | 'staffCategories';
+
+export const SCOPE_DIMENSION_FIELDS: ScopeDimensionField[] = [
+  'campuses',
+  'segments',
+  'classes',
+  'sections',
+  'departments',
+  'staffCategories',
+];
+
+export const EMPTY_SCOPE: Record<ScopeDimensionField, number[]> & { subordinates?: number[] } = Object.freeze({
   campuses: [],
   segments: [],
   classes: [],
@@ -38,7 +57,7 @@ export const EMPTY_SCOPE: UserScope = Object.freeze({
 export const NO_MATCH_ID = -1;
 
 /** Maps a scope field onto its persisted ScopeDimension enum value. */
-export const SCOPE_FIELD_BY_DIMENSION: Record<ScopeDimension, keyof UserScope> = {
+export const SCOPE_FIELD_BY_DIMENSION: Record<ScopeDimension, ScopeDimensionField> = {
   CAMPUS: 'campuses',
   SEGMENT: 'segments',
   CLASS: 'classes',
@@ -102,24 +121,24 @@ export function effectiveScopeOf(user: {
 }
 
 /** True when the dimension places no restriction on this user. */
-export function isUnrestricted(scope: UserScope, field: keyof UserScope): boolean {
-  return scope[field].length === 0;
+export function isUnrestricted(scope: UserScope, field: ScopeDimensionField): boolean {
+  return (scope[field]?.length ?? 0) === 0;
 }
 
 /** True when `id` is inside the user's scope for that dimension. */
 export function scopeAllows(
   scope: UserScope,
-  field: keyof UserScope,
+  field: ScopeDimensionField,
   id: number | null | undefined,
 ): boolean {
   if (isUnrestricted(scope, field)) return true;
   if (id == null) return false;
-  return scope[field].includes(id);
+  return scope[field]?.includes(id) ?? false;
 }
 
 /** True when the user has no restriction on any dimension. */
 export function isFullyUnrestricted(scope: UserScope): boolean {
-  return (Object.keys(scope) as (keyof UserScope)[]).every((f) => isUnrestricted(scope, f));
+  return SCOPE_DIMENSION_FIELDS.every((f) => isUnrestricted(scope, f));
 }
 
 type IdFilter = { in: number[] };
@@ -142,14 +161,81 @@ function compact<T extends Record<string, unknown>>(obj: T): Partial<T> {
  * class is an assignment (`employee_class_section_assignments`), not an
  * attribute, and treating it as scope would hide every non-teaching employee
  * from a class-scoped user. See the handoff before changing this.
+ *
+ * When reporting hierarchy is enforced, `subordinates` is populated and narrows
+ * the query to people below the caller in the tree.
  */
 export function whereForEmployees(scope: UserScope) {
   return compact({
+    id: scope.subordinates ? maybeIn(scope.subordinates) : undefined,
     campus_id: maybeIn(scope.campuses),
     segment_id: maybeIn(scope.segments),
     department_id: maybeIn(scope.departments),
     staff_category_id: maybeIn(scope.staffCategories),
   });
+}
+
+/**
+ * Resolves all subordinate employee IDs below `callerId` in the reporting hierarchy.
+ *
+ * Traverses `employee_reporting_lines` (manager -> employee) using BFS.
+ * Safe against cycles and multi-manager trees:
+ * - Collects all ancestors (superiors above caller) first.
+ * - Collects descendants, skipping any already-visited node, the caller, or any ancestor.
+ * - Excludes the caller themselves and any superiors from the return list.
+ */
+export function findSubordinates(
+  callerId: number,
+  lines: { employee_id: number; manager_id: number }[],
+): number[] {
+  const subordinatesMap = new Map<number, number[]>();
+  const superiorsMap = new Map<number, number[]>();
+
+  for (const line of lines) {
+    const subs = subordinatesMap.get(line.manager_id) ?? [];
+    subs.push(line.employee_id);
+    subordinatesMap.set(line.manager_id, subs);
+
+    const sups = superiorsMap.get(line.employee_id) ?? [];
+    sups.push(line.manager_id);
+    superiorsMap.set(line.employee_id, sups);
+  }
+
+  // 1. Find all ancestors (people above caller)
+  const ancestors = new Set<number>();
+  const ancestorQueue = [...(superiorsMap.get(callerId) ?? [])];
+  while (ancestorQueue.length > 0) {
+    const curr = ancestorQueue.shift()!;
+    if (!ancestors.has(curr)) {
+      ancestors.add(curr);
+      const higher = superiorsMap.get(curr);
+      if (higher) {
+        for (const h of higher) {
+          if (!ancestors.has(h)) ancestorQueue.push(h);
+        }
+      }
+    }
+  }
+
+  // 2. Find all descendants (people below caller)
+  const descendants = new Set<number>();
+  const descendantQueue = [...(subordinatesMap.get(callerId) ?? [])];
+  while (descendantQueue.length > 0) {
+    const curr = descendantQueue.shift()!;
+    if (!descendants.has(curr) && curr !== callerId && !ancestors.has(curr)) {
+      descendants.add(curr);
+      const lower = subordinatesMap.get(curr);
+      if (lower) {
+        for (const l of lower) {
+          if (!descendants.has(l) && l !== callerId && !ancestors.has(l)) {
+            descendantQueue.push(l);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(descendants);
 }
 
 /**

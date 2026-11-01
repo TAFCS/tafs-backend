@@ -11,6 +11,7 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { isPendingMigrationError, readUntilMigrated } from '../../../utils/pending-migration.util';
 import { EmployeeProgressionService, progressionSnapshotFromRow } from '../employees/employee-progression.service';
+import { ScopeService } from '../../../common/scope/scope.service';
 import { SetManagersDto } from './dto/set-managers.dto';
 
 const PERSON_SELECT = {
@@ -44,6 +45,7 @@ export class ReportingHierarchyService {
     private readonly prisma: PrismaService,
     private readonly auditLogs: AuditLogsService,
     private readonly progression: EmployeeProgressionService,
+    private readonly scope: ScopeService,
   ) {}
 
   private assertSuperAdmin(user: IJwtStaffPayload) {
@@ -55,7 +57,7 @@ export class ReportingHierarchyService {
   /** Every active employee, plus every line between two active employees, oldest first. */
   async getTree(user: IJwtStaffPayload) {
     this.assertSuperAdmin(user);
-    const [employees, campuses, departments] = await Promise.all([
+    const [employees, campuses, departments, enforced] = await Promise.all([
       this.prisma.employee_profiles.findMany({
         where: { employment_status: EmployeeStatus.ACTIVE },
         select: PERSON_SELECT,
@@ -66,6 +68,7 @@ export class ReportingHierarchyService {
         orderBy: { id: 'asc' },
       }),
       this.prisma.departments.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+      this.scope.isHierarchyEnforced(),
     ]);
 
     let migrated = true;
@@ -85,7 +88,7 @@ export class ReportingHierarchyService {
       },
     );
 
-    return { migrated, employees, lines, campuses, departments };
+    return { migrated, employees, lines, campuses, departments, enforced };
   }
 
   /** Replaces the set of people `employeeId` reports to. */
@@ -174,9 +177,29 @@ export class ReportingHierarchyService {
       note: `Reporting lines for ${employee.full_name ?? `employee #${employeeId}`} set in Reporting Hierarchy`,
     });
 
+    this.scope.invalidateScopeCache();
+
     return {
       employee_id: employeeId,
       lines: managerIds.map((manager_id) => ({ employee_id: employeeId, manager_id })),
     };
+  }
+
+  /** Sets whether reporting hierarchy is actively enforced on actions. SUPER_ADMIN only. */
+  async setEnforcement(enforced: boolean, user: IJwtStaffPayload) {
+    this.assertSuperAdmin(user);
+    await this.scope.setHierarchyEnforced(enforced, user.sub ?? user.username ?? 'super_admin');
+    this.auditLogs.log({
+      entity_type: 'APP_CONFIG',
+      entity_id: 'enforce_reporting_hierarchy',
+      action: 'UPDATED',
+      section: 'hr',
+      field: 'enforce_reporting_hierarchy',
+      old_value: null,
+      new_value: String(enforced),
+      changed_by: user.sub ?? user.username ?? 'super_admin',
+      note: `Reporting hierarchy enforcement turned ${enforced ? 'ON' : 'OFF'} by ${user.fullName ?? user.username ?? 'super admin'}`,
+    });
+    return { enforced };
   }
 }

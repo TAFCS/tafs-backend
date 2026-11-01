@@ -11,7 +11,7 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
 import { ScopeService } from '../../common/scope/scope.service';
-import { EMPTY_SCOPE, type UserScope } from '../../common/scope/scope.types';
+import { EMPTY_SCOPE, SCOPE_DIMENSION_FIELDS, type UserScope } from '../../common/scope/scope.types';
 import { isSuperAdmin } from '../../common/auth/super-admin';
 import {
   actionKey,
@@ -474,13 +474,13 @@ export class AccessService {
   assertGrantableScope(actor: IJwtStaffPayload, granted: Partial<UserScope>, prefix = 'You may not grant scope wider than your own') {
     if (isSuperAdmin(actor)) return;
     const mine = this.scopeService.scopeOf(actor);
-    for (const field of Object.keys(EMPTY_SCOPE) as (keyof UserScope)[]) {
-      if (mine[field].length === 0) continue;
+    for (const field of SCOPE_DIMENSION_FIELDS) {
+      if ((mine[field]?.length ?? 0) === 0) continue;
       const requested = granted[field] ?? [];
       if (requested.length === 0) {
         throw new ForbiddenException(`${prefix}: ${field} would be unrestricted.`);
       }
-      const outside = requested.filter((id) => !mine[field].includes(id));
+      const outside = requested.filter((id) => !mine[field]?.includes(id));
       if (outside.length > 0) {
         throw new ForbiddenException(`${prefix}: ${field} ${outside.join(', ')}.`);
       }
@@ -813,8 +813,8 @@ export class AccessService {
       const previous = await this.scopeService.resolve(userId);
       const next = await this.scopeService.setScope(userId, dto.scope);
       const summarise = (sc: UserScope) =>
-        (Object.keys(EMPTY_SCOPE) as (keyof UserScope)[])
-          .map((k) => `${k}=[${[...sc[k]].sort((a, b) => a - b).join(',')}]`)
+        SCOPE_DIMENSION_FIELDS
+          .map((k) => `${k}=[${[...(sc[k] ?? [])].sort((a, b) => a - b).join(',')}]`)
           .join(' ');
       const before = summarise(previous);
       const after = summarise(next);
