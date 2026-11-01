@@ -13,6 +13,9 @@ export const STRENGTH_SPLITS = [
   'new_returning',
   'discipline',
   'segment',
+  // TAFSD-452: special categories.
+  'siblings',
+  'category',
 ] as const;
 export type StrengthSplit = (typeof STRENGTH_SPLITS)[number];
 
@@ -24,7 +27,24 @@ export const STRENGTH_SPLIT_LABELS: Record<StrengthSplit, string> = {
   new_returning: 'New / returning',
   discipline: 'Discipline',
   segment: 'Segment',
+  siblings: 'Siblings',
+  category: 'Fee Endowment / Complementary',
 };
+
+/**
+ * TAFSD-452: a student is linked when at least one other student of the same
+ * family is Enrolled. Siblings who left or graduated are listed, but don't link.
+ */
+export const SIBLING_FILTERS = ['LINKED', 'SINGLE'] as const;
+export type SiblingFilter = (typeof SIBLING_FILTERS)[number];
+
+/** Full names only: never "FE" or "Comp". */
+export const CATEGORY_FILTERS = [
+  'FEE_ENDOWMENT',
+  'COMPLEMENTARY',
+  'NONE',
+] as const;
+export type CategoryFilter = (typeof CATEGORY_FILTERS)[number];
 
 export const STRENGTH_ROW_LEVELS = ['campus', 'class', 'section'] as const;
 export type StrengthRowLevel = (typeof STRENGTH_ROW_LEVELS)[number];
@@ -49,6 +69,33 @@ export interface StrengthStudent {
   segment_id: number | null;
   segment: string | null;
   segment_order: number | null;
+  /** TAFSD-452: other students of the same family who are Enrolled. */
+  enrolled_siblings: number;
+  is_fee_endowment: boolean;
+  is_complementary: boolean;
+}
+
+export const isLinked = (s: Pick<StrengthStudent, 'enrolled_siblings'>) =>
+  s.enrolled_siblings > 0;
+
+/** Each filter matches any of its values; empty matches everyone. */
+export function matchesCategoryFilters(
+  s: StrengthStudent,
+  siblings: readonly SiblingFilter[] | undefined,
+  category: readonly CategoryFilter[] | undefined,
+): boolean {
+  if (siblings?.length) {
+    const want = isLinked(s) ? 'LINKED' : 'SINGLE';
+    if (!siblings.includes(want)) return false;
+  }
+  if (category?.length) {
+    const hit =
+      (s.is_fee_endowment && category.includes('FEE_ENDOWMENT')) ||
+      (s.is_complementary && category.includes('COMPLEMENTARY')) ||
+      (!s.is_fee_endowment && !s.is_complementary && category.includes('NONE'));
+    if (!hit) return false;
+  }
+  return true;
 }
 
 export interface StrengthContext {
@@ -165,6 +212,22 @@ export function splitValue(
             label: s.segment?.trim() || `Segment ${s.segment_id}`,
             order: s.segment_order ?? 0,
           };
+    case 'siblings':
+      return isLinked(s)
+        ? { key: 'sib:linked', label: 'Has siblings', order: 0 }
+        : { key: 'sib:single', label: 'No siblings', order: 1 };
+    case 'category':
+      if (s.is_fee_endowment && s.is_complementary)
+        return {
+          key: 'cat:both',
+          label: 'Fee Endowment and Complementary',
+          order: 2,
+        };
+      if (s.is_fee_endowment)
+        return { key: 'cat:fe', label: 'Fee Endowment', order: 0 };
+      if (s.is_complementary)
+        return { key: 'cat:comp', label: 'Complementary', order: 1 };
+      return { key: 'cat:none', label: 'Neither', order: 3 };
   }
 }
 

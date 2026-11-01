@@ -3,6 +3,7 @@ import {
   buildStrengthGrid,
   genderOf,
   inCell,
+  matchesCategoryFilters,
   sessionStartFor,
   splitValue,
   type StrengthStudent,
@@ -31,6 +32,9 @@ const student = (over: Partial<StrengthStudent> = {}): StrengthStudent => ({
   segment_id: 2,
   segment: 'Junior',
   segment_order: 2,
+  enrolled_siblings: 0,
+  is_fee_endowment: false,
+  is_complementary: false,
   ...over,
 });
 
@@ -188,5 +192,61 @@ describe('buildStrengthGrid', () => {
     expect(
       roll.filter((s) => inCell(s, { row: classRow.key }, opts, ctx)),
     ).toHaveLength(classRow.total);
+  });
+});
+
+describe('special categories (TAFSD-452)', () => {
+  it('splits by siblings: linked only with an Enrolled sibling', () => {
+    expect(
+      splitValue(student({ enrolled_siblings: 2 }), 'siblings', ctx).label,
+    ).toBe('Has siblings');
+    expect(splitValue(student(), 'siblings', ctx).label).toBe('No siblings');
+  });
+
+  it('names categories in full, never FE or Comp', () => {
+    const label = (fe: boolean, comp: boolean) =>
+      splitValue(
+        student({ is_fee_endowment: fe, is_complementary: comp }),
+        'category',
+        ctx,
+      ).label;
+    expect(label(true, false)).toBe('Fee Endowment');
+    expect(label(false, true)).toBe('Complementary');
+    expect(label(true, true)).toBe('Fee Endowment and Complementary');
+    expect(label(false, false)).toBe('Neither');
+  });
+
+  it('matches any value within a filter, and every filter together', () => {
+    const fe = student({ is_fee_endowment: true, enrolled_siblings: 1 });
+    const single = student();
+    expect(matchesCategoryFilters(fe, ['LINKED'], undefined)).toBe(true);
+    expect(matchesCategoryFilters(single, ['LINKED'], undefined)).toBe(false);
+    expect(matchesCategoryFilters(single, ['LINKED', 'SINGLE'], [])).toBe(true);
+    expect(matchesCategoryFilters(fe, ['LINKED'], ['FEE_ENDOWMENT'])).toBe(
+      true,
+    );
+    expect(matchesCategoryFilters(fe, ['SINGLE'], ['FEE_ENDOWMENT'])).toBe(
+      false,
+    );
+    expect(matchesCategoryFilters(single, undefined, ['NONE'])).toBe(true);
+    expect(
+      matchesCategoryFilters(fe, undefined, ['NONE', 'COMPLEMENTARY']),
+    ).toBe(false);
+  });
+
+  it('crosses siblings with the category for combinations', () => {
+    const g = buildStrengthGrid(
+      [
+        student({ enrolled_siblings: 1, is_fee_endowment: true }),
+        student({ enrolled_siblings: 1 }),
+        student({ is_fee_endowment: true }),
+      ],
+      { rows: 'campus', split: 'siblings', split2: 'category' },
+      ctx,
+    );
+    expect(g.totals.counts['sib:linked~cat:fe']).toBe(1);
+    expect(g.totals.counts['sib:linked~cat:none']).toBe(1);
+    expect(g.totals.counts['sib:single~cat:fe']).toBe(1);
+    expect(g.totals.counts['sib:linked~*']).toBe(2);
   });
 });

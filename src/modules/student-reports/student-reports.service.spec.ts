@@ -23,13 +23,28 @@ const row = (cc: number, over: Record<string, unknown> = {}) => ({
   sections: { description: 'A' },
   houses: { house_name: 'Red' },
   student_admissions: [],
+  family_id: null,
+  is_fee_endowment: false,
+  fee_endowment_reason: null,
+  fee_endowment_until: null,
+  is_complementary: false,
+  complementary_reason: null,
+  complementary_until: null,
   ...over,
 });
 
+// TAFSD-452: 1 and 2 are Enrolled siblings; 3's only sibling (9) has left; 4 has no family.
 const ROLL = [
-  row(1),
-  row(2, { gender: 'Female' }),
+  row(1, {
+    family_id: 100,
+    is_fee_endowment: true,
+    fee_endowment_until: new Date('2027-06-30'),
+  }),
+  row(2, { gender: 'Female', family_id: 100 }),
   row(3, {
+    family_id: 200,
+    is_complementary: true,
+    complementary_until: new Date('2026-01-01'),
     gender: 'female',
     section_id: 11,
     sections: { description: 'B' },
@@ -46,10 +61,27 @@ const ROLL = [
   }),
 ];
 
+const LEFT_SIBLING = row(9, {
+  family_id: 200,
+  status: 'LEFT',
+  full_name: 'Left Sibling',
+});
+
 function service(roll = ROLL) {
   const where = { deleted_at: null, scoped: true };
   const prisma = {
-    students: { findMany: jest.fn().mockResolvedValue(roll) },
+    students: {
+      // The roll, or (TAFSD-452) the families' members across the school.
+      findMany: jest.fn((args: { where: { family_id?: { in: number[] } } }) => {
+        const fam = args.where.family_id?.in;
+        if (!fam) return Promise.resolve(roll);
+        return Promise.resolve(
+          [...ROLL, LEFT_SIBLING].filter((r) =>
+            fam.includes(r.family_id as number),
+          ),
+        );
+      }),
+    },
     campuses: {
       findMany: jest.fn().mockResolvedValue([
         {
@@ -147,5 +179,69 @@ describe('StudentReportsService', () => {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(file.buffer as any);
     expect(wb.worksheets).toHaveLength(1);
+  });
+
+  describe('special categories (TAFSD-452)', () => {
+    it('links students through an Enrolled sibling only', async () => {
+      const { svc } = service();
+      const g = await svc.strength({ rows: 'campus', split: 'siblings' }, user);
+      expect(g.totals.counts['sib:linked']).toBe(2);
+      expect(g.totals.counts['sib:single']).toBe(2);
+    });
+
+    it('filters by siblings and category', async () => {
+      const { svc } = service();
+      const single = await svc.strength(
+        { rows: 'campus', siblings: ['SINGLE'] },
+        user,
+      );
+      expect(single.totals.total).toBe(2);
+      const fe = await svc.strength(
+        { rows: 'campus', category: ['FEE_ENDOWMENT'] },
+        user,
+      );
+      expect(fe.totals.total).toBe(1);
+    });
+
+    it('names Enrolled siblings and the ones who left in the drill-down', async () => {
+      const { svc } = service();
+      const cell = await svc.cellStudents({ rows: 'class' }, user);
+      const byCc = new Map(cell.items.map((s) => [s.cc, s]));
+      expect(byCc.get(1)!.siblings.map((m) => m.cc)).toEqual([2]);
+      expect(byCc.get(1)!.fee_endowment_until).toBe('2027-06-30');
+      expect(byCc.get(3)!.siblings).toEqual([]);
+      expect(byCc.get(3)!.other_siblings.map((m) => m.status)).toEqual([
+        'LEFT',
+      ]);
+    });
+
+    it('exports the grid and a list sheet per campus, in full words', async () => {
+      const { svc } = service();
+      const file = await svc.exportCategories(
+        { rows: 'class', split: 'siblings', split2: 'category' },
+        user,
+      );
+      expect(file.filename).toMatch(/^special-categories-/);
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(file.buffer as any);
+      expect(wb.worksheets.map((w) => w.name)).toEqual(['GEJ', 'GEJ LIST']);
+      const text: string[] = [];
+      for (const ws of wb.worksheets)
+        ws.eachRow((r) =>
+          text.push(
+            (r.values as unknown[])
+              .filter((v) => v != null && v !== '')
+              .join(' | '),
+          ),
+        );
+      const all = text.join('\n');
+      expect(all).toContain('SPECIAL CATEGORIES REPORT');
+      expect(all).toContain('FEE ENDOWMENT');
+      expect(all).toContain('UNTIL 30-06-2027');
+      expect(all).toContain('ENDED 01-01-2026');
+      expect(all).toContain('LEFT SIBLING (LEFT)');
+      expect(all).toContain('STUDENT 2 (CLASS 3 A)');
+      expect(all).not.toMatch(/\bFE\b|\bCOMP\b/);
+    });
   });
 });

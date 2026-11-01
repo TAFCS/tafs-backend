@@ -16,8 +16,12 @@ import {
   type StudentListStatus,
 } from '../../students/dto/get-students.dto';
 import {
+  CATEGORY_FILTERS,
+  SIBLING_FILTERS,
   STRENGTH_ROW_LEVELS,
   STRENGTH_SPLITS,
+  type CategoryFilter,
+  type SiblingFilter,
   type StrengthRowLevel,
   type StrengthSplit,
 } from '../strength.util';
@@ -63,6 +67,20 @@ export class StudentStrengthQueryDto {
   @IsIn(STRENGTH_GENDERS as unknown as string[], { each: true })
   gender?: (typeof STRENGTH_GENDERS)[number][];
 
+  /** TAFSD-452: LINKED = has an Enrolled sibling in the school, SINGLE = none. */
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @IsIn(SIBLING_FILTERS as unknown as string[], { each: true })
+  siblings?: SiblingFilter[];
+
+  /** TAFSD-452: Fee Endowment, Complementary, or NONE (neither). */
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @IsIn(CATEGORY_FILTERS as unknown as string[], { each: true })
+  category?: CategoryFilter[];
+
   /** How deep the rows go: campus, campus → class, or campus → class → section. */
   @IsOptional()
   @IsIn(STRENGTH_ROW_LEVELS as unknown as string[])
@@ -99,3 +117,6 @@ export class ExportStudentStrengthQueryDto extends StudentStrengthQueryDto {
   @IsIn(['xlsx'])
   format?: 'xlsx';
 }
+
+/** TAFSD-452: the Special Categories download, with its per-campus list sheets. */
+export class ExportStudentCategoriesQueryDto extends ExportStudentStrengthQueryDto {}
