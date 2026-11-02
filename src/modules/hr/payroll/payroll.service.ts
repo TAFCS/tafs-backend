@@ -1793,8 +1793,9 @@ export class PayrollService {
     // Presence of employee_ids is what makes this a TEST run — scoped to
     // just those employees instead of every paid employee on the campus.
     const isTest = !!dto.employee_ids?.length;
+    const onlyIds = !isTest && dto.only_employee_ids?.length ? [...new Set(dto.only_employee_ids)] : null;
 
-    const candidates = isTest
+    const roster = isTest
       ? await this.prisma.employee_profiles.findMany({
           where: { id: { in: dto.employee_ids }, campus_id: dto.campus_id, monthly_pay: { not: null } },
           select: this.employeeLineSelect,
@@ -1808,6 +1809,13 @@ export class PayrollService {
           },
           select: this.employeeLineSelect,
         });
+    // TAFSD-458: a real run limited to employees picked in the generate modal.
+    const candidates = onlyIds ? roster.filter((e) => onlyIds.includes(e.id)) : roster;
+    if (onlyIds && candidates.length !== onlyIds.length) {
+      throw new BadRequestException(
+        'One or more selected employees are not on this campus\'s payroll for this cycle (wrong campus, no monthly pay, payroll switched off, or not on the roster for these dates).',
+      );
+    }
     if (candidates.length === 0) {
       throw new BadRequestException(
         isTest
@@ -1847,7 +1855,9 @@ export class PayrollService {
       employees = candidates.filter((e) => !covered.has(e.id));
       if (employees.length === 0) {
         throw new BadRequestException(
-          'Every payable employee on this campus is already on another payroll run with overlapping dates — nothing to calculate.',
+          onlyIds
+            ? 'Every selected employee is already on another payroll run with overlapping dates — nothing to calculate.'
+            : 'Every payable employee on this campus is already on another payroll run with overlapping dates — nothing to calculate.',
         );
       }
     }
@@ -1927,7 +1937,7 @@ export class PayrollService {
       field: 'status',
       new_value: isTest ? 'DRAFT_TEST' : 'DRAFT',
       changed_by: auditActorLabel(user),
-      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${touchedCount} of ${employees.length} employee(s) touched${isTest ? ', test' : ''}).`,
+      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${touchedCount} of ${employees.length} employee(s) touched${isTest ? ', test' : ''}${onlyIds ? ', selected employees only' : ''}).`,
     });
 
     return this.getRun(run.id, user);

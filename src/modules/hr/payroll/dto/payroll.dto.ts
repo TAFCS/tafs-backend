@@ -42,6 +42,19 @@ export class GeneratePayrollRunDto {
   @IsInt({ each: true })
   @Type(() => Number)
   employee_ids?: number[];
+
+  /**
+   * TAFSD-458: on a real (non-test) run, generate or recompute only these
+   * employees on the campus run, e.g. one department picked from the
+   * filters. Everyone else on the run is left as it is; generating again
+   * without this fills them in. Ignored when employee_ids makes it a test run.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsInt({ each: true })
+  @Type(() => Number)
+  only_employee_ids?: number[];
 }
 
 /**
