@@ -281,5 +281,77 @@ describe('StudentReportsService', () => {
       expect(all).toContain('STUDENT 2 (CLASS 3 A)');
       expect(all).not.toMatch(/\bFE\b|\bCOMP\b/);
     });
+
+    // TAFSD-456: one part per file.
+    const sheetsOf = async (part: 'summary' | 'list' | 'linked' | 'single') => {
+      const { svc } = service();
+      const file = await svc.exportCategories(
+        { rows: 'class', split: 'siblings', part },
+        user,
+      );
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(file.buffer as any);
+      return { file, wb };
+    };
+    const rowsOf = (ws: ExcelJS.Worksheet) => {
+      const out: { text: string; bold: boolean }[] = [];
+      ws.eachRow((r) => {
+        const cells = (r.values as unknown[]).filter(
+          (v) => v != null && v !== '',
+        );
+        out.push({ text: cells.join(' | '), bold: !!r.getCell(4).font?.bold });
+      });
+      return out;
+    };
+
+    it('exports the summary alone, and the full list alone with CC', async () => {
+      const summary = await sheetsOf('summary');
+      expect(summary.file.filename).toMatch(/^special-categories-summary-/);
+      expect(summary.wb.worksheets.map((w) => w.name)).toEqual(['GEJ']);
+      const list = await sheetsOf('list');
+      expect(list.file.filename).toMatch(/^special-categories-students-/);
+      expect(list.wb.worksheets.map((w) => w.name)).toEqual(['GEJ LIST']);
+      const text = rowsOf(list.wb.worksheets[0])
+        .map((r) => r.text)
+        .join('\n');
+      expect(text).toContain('CC');
+      expect(text).toContain('STUDENT LIST');
+      expect(text).not.toContain('BY SIBLINGS');
+    });
+
+    it('lists linked students in bold with each sibling on its own row under them', async () => {
+      const { file, wb } = await sheetsOf('linked');
+      expect(file.filename).toMatch(/^special-categories-linked-siblings-/);
+      expect(wb.worksheets.map((w) => w.name)).toEqual(['GEJ LINKED']);
+      const rows = rowsOf(wb.worksheets[0]);
+      const body = rows.filter((r) => /STUDENT [0-9]/.test(r.text));
+      // 1 and 2 are each other's siblings; 3 (only a left sibling) and 4 are single.
+      expect(
+        body.map((r) => [r.text.includes('STUDENT 1') ? 1 : 2, r.bold]),
+      ).toEqual([
+        [1, true],
+        [2, false],
+        [2, true],
+        [1, false],
+      ]);
+      expect(body[0].text).toMatch(/^1 \| CLASS 3 A \| .* \| 1 \| STUDENT 1/);
+      expect(body[1].text).toMatch(/^CLASS 3 A \| .* \| 2 \| STUDENT 2/);
+      expect(rows.some((r) => r.text.includes('CLASS 3 · 2 STUDENTS'))).toBe(
+        true,
+      );
+      expect(rows.some((r) => r.text.includes('STUDENT 3'))).toBe(false);
+    });
+
+    it('lists single children only', async () => {
+      const { file, wb } = await sheetsOf('single');
+      expect(file.filename).toMatch(/^special-categories-single-children-/);
+      const text = rowsOf(wb.worksheets[0])
+        .map((r) => r.text)
+        .join('\n');
+      expect(text).toContain('STUDENT 3');
+      expect(text).toContain('LEFT SIBLING (LEFT)');
+      expect(text).toContain('STUDENT 4');
+      expect(text).not.toContain('STUDENT 1');
+    });
   });
 });

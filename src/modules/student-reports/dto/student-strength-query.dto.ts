@@ -18,10 +18,12 @@ import {
   type StudentListStatus,
 } from '../../students/dto/get-students.dto';
 import {
+  CATEGORY_EXPORT_PARTS,
   CATEGORY_FILTERS,
   SIBLING_FILTERS,
   STRENGTH_ROW_LEVELS,
   STRENGTH_SPLITS,
+  type CategoryExportPart,
   type CategoryFilter,
   type SiblingFilter,
   type StrengthRowLevel,
@@ -85,7 +87,9 @@ export class StudentStrengthQueryDto {
 
   /** TAFSD-455: only students whose benefit ends within this many days (or has no end date: excluded). */
   @IsOptional()
-  @Transform(({ value }) => (value === '' || value == null ? undefined : Number(value)))
+  @Transform(({ value }) =>
+    value === '' || value == null ? undefined : Number(value),
+  )
   @IsInt()
   @Min(0)
   @Max(730)
@@ -134,4 +138,13 @@ export class ExportStudentStrengthQueryDto extends StudentStrengthQueryDto {
 }
 
 /** TAFSD-452: the Special Categories download, with its per-campus list sheets. */
-export class ExportStudentCategoriesQueryDto extends ExportStudentStrengthQueryDto {}
+export class ExportStudentCategoriesQueryDto extends ExportStudentStrengthQueryDto {
+  /**
+   * TAFSD-456: one part per file: the summary grid, the full student list,
+   * students with siblings (each with its siblings under it), or single
+   * children. Omitted: summary and full list together.
+   */
+  @IsOptional()
+  @IsIn(CATEGORY_EXPORT_PARTS as unknown as string[])
+  part?: CategoryExportPart;
+}

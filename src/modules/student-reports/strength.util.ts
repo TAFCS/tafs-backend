@@ -55,6 +55,15 @@ export interface ActiveBenefit {
   until: string | null;
 }
 
+/** TAFSD-456: what the Special Categories download contains. Omitted: summary and full list together. */
+export const CATEGORY_EXPORT_PARTS = [
+  'summary',
+  'list',
+  'linked',
+  'single',
+] as const;
+export type CategoryExportPart = (typeof CATEGORY_EXPORT_PARTS)[number];
+
 export const STRENGTH_ROW_LEVELS = ['campus', 'class', 'section'] as const;
 export type StrengthRowLevel = (typeof STRENGTH_ROW_LEVELS)[number];
 
