@@ -3,6 +3,8 @@ import {
   IsIn,
   IsInt,
   IsOptional,
+  Max,
+  Min,
   IsString,
   MaxLength,
 } from 'class-validator';
@@ -74,12 +76,20 @@ export class StudentStrengthQueryDto {
   @IsIn(SIBLING_FILTERS as unknown as string[], { each: true })
   siblings?: SiblingFilter[];
 
-  /** TAFSD-452: Fee Endowment, Complementary, or NONE (neither). */
+  /** TAFSD-452/455: any benefit category (Fee Endowment, Sehm-e-Sadaat, …), or NONE. */
   @IsOptional()
   @Transform(toStringArray)
   @IsArray()
   @IsIn(CATEGORY_FILTERS as unknown as string[], { each: true })
   category?: CategoryFilter[];
+
+  /** TAFSD-455: only students whose benefit ends within this many days (or has no end date: excluded). */
+  @IsOptional()
+  @Transform(({ value }) => (value === '' || value == null ? undefined : Number(value)))
+  @IsInt()
+  @Min(0)
+  @Max(730)
+  ending_within_days?: number;
 
   /** How deep the rows go: campus, campus → class, or campus → class → section. */
   @IsOptional()
@@ -111,11 +121,16 @@ export class StudentStrengthCellQueryDto extends StudentStrengthQueryDto {
   column?: string;
 }
 
-/** Excel only: the school sheet format the defaulters report uses. */
+/** The school sheet format the defaulters report uses, as Excel or (TAFSD-455) a PDF print of it. */
 export class ExportStudentStrengthQueryDto extends StudentStrengthQueryDto {
   @IsOptional()
-  @IsIn(['xlsx'])
-  format?: 'xlsx';
+  @IsIn(['xlsx', 'pdf'])
+  format?: 'xlsx' | 'pdf';
+
+  /** PDF paper. A sheet too wide for A4 prints on A3 regardless. Omitted = A4. */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
 }
 
 /** TAFSD-452: the Special Categories download, with its per-campus list sheets. */

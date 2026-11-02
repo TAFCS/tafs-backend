@@ -1,4 +1,11 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BENEFIT_SELECT,
+  STUDENT_BENEFITS,
+  benefitFields,
+  flattenBenefits,
+  type StudentBenefitKey,
+} from './student-benefits';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { GetStudentsDto } from './dto/get-students.dto';
@@ -734,12 +741,7 @@ export class StudentsService {
       selectArgs.house_id  = true;
       selectArgs.status = true;
       selectArgs.photograph_url = true;
-      selectArgs.is_complementary = true;
-      selectArgs.is_fee_endowment = true;
-      selectArgs.complementary_reason = true;
-      selectArgs.complementary_until = true;
-      selectArgs.fee_endowment_reason = true;
-      selectArgs.fee_endowment_until = true;
+      Object.assign(selectArgs, BENEFIT_SELECT);
       selectArgs.fee_start_term = true;
       selectArgs.campuses  = { select: { campus_name: true, campus_code: true } };
       selectArgs.classes   = { select: { description: true, class_code: true } };
@@ -1125,8 +1127,7 @@ export class StudentsService {
         dob: true,
         status: true,
         academic_year: true,
-        is_complementary: true,
-        is_fee_endowment: true,
+        ...BENEFIT_SELECT,
         fee_start_term: true,
         primary_phone: true,
         whatsapp_number: true,
@@ -1206,6 +1207,9 @@ export class StudentsService {
       academic_year: { header: 'Academic Year', width: 15, getValue: (s) => s.academic_year || s.student_admissions?.[0]?.academic_year || '' },
       is_complementary: { header: 'Is Complementary', width: 18, getValue: (s) => s.is_complementary ? 'Yes' : 'No' },
       is_fee_endowment: { header: 'Is Fee Endowment', width: 18, getValue: (s) => s.is_fee_endowment ? 'Yes' : 'No' },
+      is_fee_endowment_mtf: { header: 'Is Fee Endowment (Monthly Tuition Fee)', width: 22, getValue: (s) => s.is_fee_endowment_mtf ? 'Yes' : 'No' },
+      is_sehm_e_sadaat: { header: 'Is Sehm-e-Sadaat', width: 18, getValue: (s) => s.is_sehm_e_sadaat ? 'Yes' : 'No' },
+      is_sehm_e_imam: { header: 'Is Sehm-e-Imam', width: 18, getValue: (s) => s.is_sehm_e_imam ? 'Yes' : 'No' },
       fee_start_term: { header: 'Fee Start Term', width: 15, getValue: (s) => s.fee_start_term || '' },
       residential_address: { header: 'Residential Address', width: 35, getValue: (s) => s.families?.primary_address || '' },
       sibling_count: { header: 'Sibling Count', width: 15, getValue: (s) => s.families?.students ? Math.max(0, s.families.students.length - 1) : 0 },
@@ -1494,16 +1498,7 @@ export class StudentsService {
           ? `${s.classes.description}${s.sections ? ` (${s.sections.description})` : ''}`
           : s.student_admissions?.[0]?.requested_grade,
       enrollment_status: s.status,
-      is_complementary: s.is_complementary,
-      is_fee_endowment: s.is_fee_endowment,
-      complementary_reason: s.complementary_reason ?? null,
-      complementary_until: s.complementary_until
-        ? new Date(s.complementary_until).toISOString().slice(0, 10)
-        : null,
-      fee_endowment_reason: s.fee_endowment_reason ?? null,
-      fee_endowment_until: s.fee_endowment_until
-        ? new Date(s.fee_endowment_until).toISOString().slice(0, 10)
-        : null,
+      ...flattenBenefits(s),
       fee_start_term: s.fee_start_term,
       graduated_from_class_id: s.graduated_from_class_id,
       graduated_from_class: s.graduated_from_class,
@@ -3838,8 +3833,9 @@ export class StudentsService {
   }
 
   /**
-   * COMP / FE benefits approaching or past expiry (for home dashboard).
-   * within_days: include until dates on or before today+within_days (default 14).
+   * Fee benefits (Fee Endowment, Complementary, Sehm-e-Sadaat, …) due for
+   * renewal, for the home dashboard. A benefit shows from its reminder date
+   * (TAFSD-455) or, without one, from `withinDays` (default 14) before it ends.
    */
   async getFeeBenefitExpiryAlerts(withinDays = 14, user?: IJwtStaffPayload) {
     const days = Math.min(Math.max(Number(withinDays) || 14, 1), 90);
@@ -3851,30 +3847,26 @@ export class StudentsService {
     const scopedCampusIds = user ? this.scope.campusIdsFor(user) : undefined;
     const campusFilter = scopedCampusIds ? { campus_id: { in: scopedCampusIds } } : {};
 
+    const due = (until: Date | null, remindFrom: Date | null) =>
+      !!until && (until <= horizon || (!!remindFrom && remindFrom <= today));
+
     const students = await this.prisma.students.findMany({
       where: {
         deleted_at: null,
         ...campusFilter,
-        OR: [
-          {
-            is_complementary: true,
-            complementary_until: { not: null, lte: horizon },
-          },
-          {
-            is_fee_endowment: true,
-            fee_endowment_until: { not: null, lte: horizon },
-          },
-        ],
+        OR: STUDENT_BENEFITS.map((b) => {
+          const f = benefitFields(b);
+          return {
+            [f.flag]: true,
+            [f.until]: { not: null },
+            OR: [{ [f.until]: { lte: horizon } }, { [f.remindFrom]: { lte: today } }],
+          };
+        }),
       },
       select: {
         cc: true,
         full_name: true,
-        complementary_until: true,
-        complementary_reason: true,
-        fee_endowment_until: true,
-        fee_endowment_reason: true,
-        is_complementary: true,
-        is_fee_endowment: true,
+        ...BENEFIT_SELECT,
         classes: { select: { description: true } },
       },
       orderBy: { full_name: 'asc' },
@@ -3886,42 +3878,34 @@ export class StudentsService {
       student_id: number;
       student_name: string | null;
       current_class: string | null;
-      benefit_type: 'COMPLEMENTARY' | 'FEE_ENDOWMENT';
+      benefit_type: StudentBenefitKey;
+      benefit_label: string;
       until: string;
+      remind_from: string | null;
       reason: string | null;
       days_remaining: number;
     }> = [];
 
-    for (const s of students) {
-      if (s.is_complementary && s.complementary_until) {
-        const until = new Date(s.complementary_until);
-        until.setUTCHours(0, 0, 0, 0);
-        if (until.getTime() <= horizon.getTime()) {
-          alerts.push({
-            student_id: s.cc,
-            student_name: s.full_name,
-            current_class: s.classes?.description ?? null,
-            benefit_type: 'COMPLEMENTARY',
-            until: until.toISOString().slice(0, 10),
-            reason: s.complementary_reason,
-            days_remaining: Math.round((until.getTime() - today.getTime()) / msPerDay),
-          });
-        }
-      }
-      if (s.is_fee_endowment && s.fee_endowment_until) {
-        const until = new Date(s.fee_endowment_until);
-        until.setUTCHours(0, 0, 0, 0);
-        if (until.getTime() <= horizon.getTime()) {
-          alerts.push({
-            student_id: s.cc,
-            student_name: s.full_name,
-            current_class: s.classes?.description ?? null,
-            benefit_type: 'FEE_ENDOWMENT',
-            until: until.toISOString().slice(0, 10),
-            reason: s.fee_endowment_reason,
-            days_remaining: Math.round((until.getTime() - today.getTime()) / msPerDay),
-          });
-        }
+    for (const s of students as Array<Record<string, any>>) {
+      for (const b of STUDENT_BENEFITS) {
+        const f = benefitFields(b);
+        if (!s[f.flag]) continue;
+        const until = s[f.until] ? new Date(s[f.until]) : null;
+        const remindFrom = s[f.remindFrom] ? new Date(s[f.remindFrom]) : null;
+        until?.setUTCHours(0, 0, 0, 0);
+        remindFrom?.setUTCHours(0, 0, 0, 0);
+        if (!until || !due(until, remindFrom)) continue;
+        alerts.push({
+          student_id: s.cc,
+          student_name: s.full_name,
+          current_class: s.classes?.description ?? null,
+          benefit_type: b.key,
+          benefit_label: b.label,
+          until: until.toISOString().slice(0, 10),
+          remind_from: remindFrom ? remindFrom.toISOString().slice(0, 10) : null,
+          reason: s[f.reason] ?? null,
+          days_remaining: Math.round((until.getTime() - today.getTime()) / msPerDay),
+        });
       }
     }
 

@@ -33,8 +33,7 @@ const student = (over: Partial<StrengthStudent> = {}): StrengthStudent => ({
   segment: 'Junior',
   segment_order: 2,
   enrolled_siblings: 0,
-  is_fee_endowment: false,
-  is_complementary: false,
+  benefits: [],
   ...over,
 });
 
@@ -195,6 +194,8 @@ describe('buildStrengthGrid', () => {
   });
 });
 
+const FE = { key: 'FEE_ENDOWMENT' as const, until: '2027-07-31' };
+
 describe('special categories (TAFSD-452)', () => {
   it('splits by siblings: linked only with an Enrolled sibling', () => {
     expect(
@@ -206,7 +207,12 @@ describe('special categories (TAFSD-452)', () => {
   it('names categories in full, never FE or Comp', () => {
     const label = (fe: boolean, comp: boolean) =>
       splitValue(
-        student({ is_fee_endowment: fe, is_complementary: comp }),
+        student({
+          benefits: [
+            ...(fe ? [{ key: 'FEE_ENDOWMENT' as const, until: null }] : []),
+            ...(comp ? [{ key: 'COMPLEMENTARY' as const, until: null }] : []),
+          ],
+        }),
         'category',
         ctx,
       ).label;
@@ -217,7 +223,7 @@ describe('special categories (TAFSD-452)', () => {
   });
 
   it('matches any value within a filter, and every filter together', () => {
-    const fe = student({ is_fee_endowment: true, enrolled_siblings: 1 });
+    const fe = student({ benefits: [FE], enrolled_siblings: 1 });
     const single = student();
     expect(matchesCategoryFilters(fe, ['LINKED'], undefined)).toBe(true);
     expect(matchesCategoryFilters(single, ['LINKED'], undefined)).toBe(false);
@@ -237,16 +243,53 @@ describe('special categories (TAFSD-452)', () => {
   it('crosses siblings with the category for combinations', () => {
     const g = buildStrengthGrid(
       [
-        student({ enrolled_siblings: 1, is_fee_endowment: true }),
+        student({ enrolled_siblings: 1, benefits: [FE] }),
         student({ enrolled_siblings: 1 }),
-        student({ is_fee_endowment: true }),
+        student({ benefits: [FE] }),
       ],
       { rows: 'campus', split: 'siblings', split2: 'category' },
       ctx,
     );
-    expect(g.totals.counts['sib:linked~cat:fe']).toBe(1);
+    expect(g.totals.counts['sib:linked~cat:fee_endowment']).toBe(1);
     expect(g.totals.counts['sib:linked~cat:none']).toBe(1);
-    expect(g.totals.counts['sib:single~cat:fe']).toBe(1);
+    expect(g.totals.counts['sib:single~cat:fee_endowment']).toBe(1);
     expect(g.totals.counts['sib:linked~*']).toBe(2);
+  });
+});
+
+describe('more categories and ending soon (TAFSD-455)', () => {
+  const ses = { key: 'SEHM_E_SADAAT' as const, until: '2027-03-31' };
+  const mtf = { key: 'FEE_ENDOWMENT_MTF' as const, until: '2027-07-31' };
+
+  it('labels the new categories and combinations in full', () => {
+    expect(splitValue(student({ benefits: [ses] }), 'category', ctx).label).toBe(
+      'Sehm-e-Sadaat',
+    );
+    expect(
+      splitValue(student({ benefits: [mtf, ses] }), 'category', ctx).label,
+    ).toBe('Fee Endowment (Monthly Tuition Fee) and Sehm-e-Sadaat');
+  });
+
+  it('orders single categories before combinations, Neither last', () => {
+    const order = (b: (typeof FE)[]) =>
+      splitValue(student({ benefits: b }), 'category', ctx).order as number;
+    expect(order([FE])).toBeLessThan(order([ses]));
+    expect(order([ses])).toBeLessThan(order([FE, ses]));
+    expect(order([FE, ses])).toBeLessThan(order([]));
+  });
+
+  it('filters by a new category', () => {
+    expect(matchesCategoryFilters(student({ benefits: [ses] }), undefined, ['SEHM_E_SADAAT'])).toBe(true);
+    expect(matchesCategoryFilters(student({ benefits: [FE] }), undefined, ['SEHM_E_SADAAT'])).toBe(false);
+  });
+
+  it('keeps only benefits ending by the date, within the chosen categories', () => {
+    const s = student({ benefits: [FE, ses] });
+    expect(matchesCategoryFilters(s, undefined, undefined, '2027-04-01')).toBe(true);
+    expect(matchesCategoryFilters(s, undefined, undefined, '2027-03-01')).toBe(false);
+    expect(matchesCategoryFilters(s, undefined, ['FEE_ENDOWMENT'], '2027-04-01')).toBe(false);
+    expect(
+      matchesCategoryFilters(student({ benefits: [{ key: 'COMPLEMENTARY', until: null }] }), undefined, undefined, '2030-01-01'),
+    ).toBe(false);
   });
 });

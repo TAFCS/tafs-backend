@@ -1,9 +1,23 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { StudentsService } from '../students/students.service';
 import type { GetStudentsDto } from '../students/dto/get-students.dto';
+import {
+  BENEFIT_SELECT,
+  STUDENT_BENEFITS,
+  benefitActive,
+  benefitFields,
+  type StudentBenefitKey,
+} from '../students/student-benefits';
+
+/** YYYY-MM-DD plus n days. */
+const addDays = (ymd: string, n: number) => {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
 import {
   campusLine,
   defaulterSheetHeading,
@@ -41,6 +55,9 @@ import type {
   StudentStrengthQueryDto,
 } from './dto/student-strength-query.dto';
 
+/** TAFSD-455: the Special Categories PDF lists every student; same cap as the fee reports' PDFs. */
+const PDF_LIST_STUDENT_CAP = 2_000;
+
 /** The most students one drill-down returns; the count above it is exact either way. */
 const CELL_STUDENT_CAP = 1000;
 
@@ -60,10 +77,15 @@ export interface CategoryDetail {
   siblings: SiblingRef[];
   /** Siblings with any other status (left, graduated, …): listed, never linking. */
   other_siblings: SiblingRef[];
-  fee_endowment_reason: string | null;
-  fee_endowment_until: string | null;
-  complementary_reason: string | null;
-  complementary_until: string | null;
+  /** TAFSD-455: every benefit switched on, including ones past their end date (active = false). */
+  benefits: Array<{
+    key: StudentBenefitKey;
+    label: string;
+    reason: string | null;
+    until: string | null;
+    remind_from: string | null;
+    active: boolean;
+  }>;
 }
 
 /**
@@ -119,9 +141,6 @@ export class StudentReportsService {
         gender: genderOf(s.gender).label,
         status: splitValue(s, 'status', ctx).label,
         age: splitValue(s, 'age', ctx).label,
-        // TAFSD-452
-        is_fee_endowment: s.is_fee_endowment,
-        is_complementary: s.is_complementary,
         ...details.get(s.cc)!,
       })),
     };
@@ -180,8 +199,14 @@ export class StudentReportsService {
 
     const tabs = await this.campusTabs();
     const sheets = this.strengthSheets(grid, opts, tabs, tabName);
-    if (kind === 'categories')
+    if (kind === 'categories') {
+      // The list sheets name every student; the fee reports cap PDF at the same size.
+      if (query.format === 'pdf' && roll.length > PDF_LIST_STUDENT_CAP)
+        throw new BadRequestException(
+          `PDF export lists at most ${PDF_LIST_STUDENT_CAP.toLocaleString()} students (this has ${roll.length.toLocaleString()}). Narrow the filters, for example to one category, or export Excel.`,
+        );
       sheets.push(...this.categoryListSheets(roll, details, tabs, ctx.today));
+    }
     writeSchoolSheets(workbook, sheets, {
       reportTitle: title,
       heading,
@@ -239,12 +264,7 @@ export class StudentReportsService {
         dob: true,
         doa: true,
         family_id: true,
-        is_fee_endowment: true,
-        fee_endowment_reason: true,
-        fee_endowment_until: true,
-        is_complementary: true,
-        complementary_reason: true,
-        complementary_until: true,
+        ...BENEFIT_SELECT,
         campuses: { select: { campus_name: true } },
         classes: {
           select: {
@@ -273,10 +293,20 @@ export class StudentReportsService {
       details.set(r.cc, {
         siblings: others.filter((m) => m.status === 'ENROLLED'),
         other_siblings: others.filter((m) => m.status !== 'ENROLLED'),
-        fee_endowment_reason: r.fee_endowment_reason,
-        fee_endowment_until: day(r.fee_endowment_until),
-        complementary_reason: r.complementary_reason,
-        complementary_until: day(r.complementary_until),
+        benefits: STUDENT_BENEFITS.filter(
+          (b) => (r as Record<string, unknown>)[b.flag],
+        ).map((b) => {
+          const f = benefitFields(b);
+          const row = r as Record<string, any>;
+          return {
+            key: b.key,
+            label: b.label,
+            reason: row[f.reason] ?? null,
+            until: day(row[f.until]),
+            remind_from: day(row[f.remindFrom]),
+            active: benefitActive(row, b, today),
+          };
+        }),
       });
     }
 
@@ -301,17 +331,23 @@ export class StudentReportsService {
       segment: r.classes?.segments?.name ?? null,
       segment_order: r.classes?.segments?.display_order ?? null,
       enrolled_siblings: details.get(r.cc)!.siblings.length,
-      is_fee_endowment: r.is_fee_endowment,
-      is_complementary: r.is_complementary,
+      benefits: details
+        .get(r.cc)!
+        .benefits.filter((b) => b.active)
+        .map((b) => ({ key: b.key, until: b.until })),
     }));
     // Gender is free text in the table, so it is filtered after folding it.
     if (query.gender?.length) {
       const wanted = new Set<string>(query.gender);
       roll = roll.filter((s) => wanted.has(genderOf(s.gender).key));
     }
-    if (query.siblings?.length || query.category?.length)
+    const endingBy =
+      query.ending_within_days != null
+        ? addDays(today, query.ending_within_days)
+        : undefined;
+    if (query.siblings?.length || query.category?.length || endingBy)
       roll = roll.filter((s) =>
-        matchesCategoryFilters(s, query.siblings, query.category),
+        matchesCategoryFilters(s, query.siblings, query.category, endingBy),
       );
     return { opts, ctx, roll, details };
   }
@@ -465,12 +501,14 @@ export class StudentReportsService {
     };
     const other = (m: SiblingRef) =>
       `${(m.full_name ?? `CC ${m.cc}`).toUpperCase()} (${m.status.replace(/_/g, ' ')})`;
-    const benefit = (on: boolean, until: string | null) => {
-      if (!on) return '';
-      if (!until) return 'YES';
-      const [y, mo, d] = until.split('-');
-      return `${until < today ? 'ENDED' : 'UNTIL'} ${d}-${mo}-${y}`;
-    };
+    const benefits = (d: CategoryDetail) =>
+      d.benefits
+        .map((b) => {
+          if (!b.until) return b.label.toUpperCase();
+          const [y, mo, dd] = b.until.split('-');
+          return `${b.label.toUpperCase()} ${b.until < today ? 'ENDED' : 'UNTIL'} ${dd}-${mo}-${y}`;
+        })
+        .join('; ');
 
     const byCampus = new Map<string, StrengthStudent[]>();
     for (const s of roll) {
@@ -503,8 +541,7 @@ export class StudentReportsService {
             linked: isLinked(s) ? 'YES' : 'NO',
             siblings: d.siblings.map(sib).join(', '),
             others: d.other_siblings.map(other).join(', '),
-            fe: benefit(s.is_fee_endowment, d.fee_endowment_until),
-            comp: benefit(s.is_complementary, d.complementary_until),
+            category: benefits(d),
           },
         ]);
       }
@@ -523,8 +560,7 @@ export class StudentReportsService {
           { header: 'HAS SIBLINGS', key: 'linked', width: 10 },
           { header: 'SIBLINGS IN SCHOOL', key: 'siblings', width: 40 },
           { header: 'SIBLINGS NOT ENROLLED', key: 'others', width: 32 },
-          { header: 'FEE ENDOWMENT', key: 'fe', width: 18 },
-          { header: 'COMPLEMENTARY', key: 'comp', width: 18 },
+          { header: 'SPECIAL CATEGORY', key: 'category', width: 40 },
         ],
         rows: list.flatMap((g) => g.rows),
         groups: list,
@@ -607,14 +643,14 @@ export class StudentReportsService {
       lines.push(
         `CATEGORY: ${query.category
           .map((v) =>
-            v === 'FEE_ENDOWMENT'
-              ? 'FEE ENDOWMENT'
-              : v === 'COMPLEMENTARY'
-                ? 'COMPLEMENTARY'
-                : 'NEITHER',
+            v === 'NONE'
+              ? 'NEITHER'
+              : STUDENT_BENEFITS.find((b) => b.key === v)!.label.toUpperCase(),
           )
           .join(', ')}`,
       );
+    if (query.ending_within_days != null)
+      lines.push(`ENDING WITHIN ${query.ending_within_days} DAYS`);
     if (lines.length === 0) lines.push('ALL STUDENTS ON ROLL');
     if (opts.split) {
       const parts = [opts.split, opts.split2]
