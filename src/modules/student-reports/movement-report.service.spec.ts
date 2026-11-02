@@ -175,6 +175,7 @@ describe('TAFSD-453: MovementReportService', () => {
       const all = text.join('\n');
       expect(all).toContain('ADMISSIONS AND WITHDRAWALS REPORT');
       expect(all).toContain('FROM 1 AUGUST 2026 TO 31 OCTOBER 2026');
+      expect(all).toContain('SESSION 2026–2027');
       if (part === 'list') {
         expect(all).toContain('MOVED ABROAD');
         expect(all).toContain('NEW STUDENT');
@@ -184,5 +185,23 @@ describe('TAFSD-453: MovementReportService', () => {
         expect(all).toContain('NET');
       }
     }
+  });
+
+  it('names every session a long range covers in the heading', async () => {
+    const file = await service().export(
+      { from: '2018-08-01', to: '2026-10-31', period: 'session' },
+      user,
+    );
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(file.buffer as any);
+    const text: string[] = [];
+    wb.worksheets[0].eachRow((r) =>
+      text.push(
+        (r.values as unknown[])
+          .filter((v) => v != null && v !== '')
+          .join(' | '),
+      ),
+    );
+    expect(text.join('\n')).toContain('SESSIONS 2018–2019 TO 2026–2027');
   });
 });
