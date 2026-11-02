@@ -26,6 +26,9 @@ const POST_LIST_INCLUDE = {
   _count: { select: { post_reads: true } },
 } as const;
 
+/** Unpinned posts per parent-feed page; every pinned post rides on the first page too. */
+const FAMILY_FEED_PAGE = 50;
+
 /** Audit field whose old/new values hold a notice's full title and body as JSON. */
 const NOTICE_WORDING_FIELD = 'Wording';
 
@@ -162,34 +165,48 @@ export class NoticeBoardService {
       student_ccs: { isEmpty: true },
     };
 
-    const posts = await this.prisma.notice_board_posts.findMany({
-      where: {
-        deleted_at: null,
-        status: NoticePostStatus.APPROVED,
-        notification_only: false,
-        OR: [
-          ...(studentCcs.length ? [{ student_ccs: { hasSome: studentCcs } }] : []),
-          scopeFilter,
-        ],
-        AND: [
-          {
-            OR: [{ expires_at: null }, { expires_at: { gt: new Date() } }],
-          },
-        ],
-        ...(cursor ? { id: { lt: cursor } } : {}),
-      },
-      orderBy: [{ is_pinned: 'desc' }, { posted_at: 'desc' }],
-      include: {
-        post_reads: {
-          where: { family_id: familyId },
-          select: { read_at: true },
+    const where = {
+      deleted_at: null,
+      status: NoticePostStatus.APPROVED,
+      notification_only: false,
+      OR: [
+        ...(studentCcs.length ? [{ student_ccs: { hasSome: studentCcs } }] : []),
+        scopeFilter,
+      ],
+      AND: [
+        {
+          OR: [{ expires_at: null }, { expires_at: { gt: new Date() } }],
         },
-        users: { select: { full_name: true } },
+      ],
+    };
+    const include = {
+      post_reads: {
+        where: { family_id: familyId },
+        select: { read_at: true },
       },
-      take: 20,
+      users: { select: { full_name: true } },
+    };
+
+    // TAFSD-457: pinned posts all come on the first page; the cursor pages
+    // through unpinned posts by id. Mixing them in one id-cursored query let
+    // a stack of pinned posts fill the page and hide everything newer. The
+    // parent app only loads the first page, so it is sized to hold a few
+    // weeks of notices rather than 20 posts.
+    const pinned = cursor
+      ? []
+      : await this.prisma.notice_board_posts.findMany({
+          where: { ...where, is_pinned: true },
+          orderBy: { posted_at: 'desc' },
+          include,
+        });
+    const unpinned = await this.prisma.notice_board_posts.findMany({
+      where: { ...where, is_pinned: false, ...(cursor ? { id: { lt: cursor } } : {}) },
+      orderBy: { id: 'desc' },
+      include,
+      take: FAMILY_FEED_PAGE,
     });
 
-    return posts;
+    return [...pinned, ...unpinned];
   }
 
   async markRead(postId: number, familyId: number) {
@@ -210,17 +227,28 @@ export class NoticeBoardService {
     // plus their own. Most posts reach one campus or one family, so batches are
     // read until a full page is visible (bounded, so a narrow scope can't scan
     // the whole table).
+    //
+    // TAFSD-457: every pinned post is on the first page, so one can always be
+    // found and unpinned; the cursor pages through unpinned posts by id. With
+    // pinned posts in the same id-cursored stream, a later page repeated them
+    // and the board showed only the newest 30 posts with no way to see more.
     const reach = await this._scopeReach(user);
     const PAGE = 30;
     const BATCH = reach ? 150 : PAGE;
     const fetchedPosts: Awaited<ReturnType<typeof this._postBatch>> = [];
-    for (let skip = 0; fetchedPosts.length < PAGE && skip < BATCH * 8; skip += BATCH) {
-      const batch = await this._postBatch(cursor, user, skip, BATCH);
-      fetchedPosts.push(...(reach ? batch.filter((p) => reach.reaches(p)) : batch));
+    if (!cursor) {
+      const pinned = await this._postBatch(undefined, user, true, 0, undefined);
+      fetchedPosts.push(...(reach ? pinned.filter((p) => reach.reaches(p)) : pinned));
+    }
+    const unpinned: typeof fetchedPosts = [];
+    for (let skip = 0; unpinned.length < PAGE && skip < BATCH * 8; skip += BATCH) {
+      const batch = await this._postBatch(cursor, user, false, skip, BATCH);
+      unpinned.push(...(reach ? batch.filter((p) => reach.reaches(p)) : batch));
       if (batch.length < BATCH) break;
     }
+    fetchedPosts.push(...unpinned.slice(0, PAGE));
     const posts: ((typeof fetchedPosts)[number] & { viewer_can_manage: boolean })[] = [];
-    for (const p of fetchedPosts.slice(0, PAGE)) {
+    for (const p of fetchedPosts) {
       posts.push({ ...p, viewer_can_manage: !reach || (await this._canManagePost(user, p)) });
     }
 
@@ -230,7 +258,8 @@ export class NoticeBoardService {
       ? withTargets.map((p) => ({ ...p, targeted_students: p.targeted_students.filter((t) => reach.seesStudent(t!.cc)) }))
       : withTargets;
 
-    const allHolidays = await this.prisma.academic_calendar_days.findMany({
+    // Holiday notices ride on the first page only.
+    const allHolidays = cursor ? [] : await this.prisma.academic_calendar_days.findMany({
       where: {
         applies_to: 'STUDENT',
         day_type: { in: ['HOLIDAY', 'WORKDAY'] },
@@ -310,14 +339,21 @@ export class NoticeBoardService {
     return merged;
   }
 
-  private _postBatch(cursor: number | undefined, user: IJwtStaffPayload, skip: number, take: number) {
+  private _postBatch(
+    cursor: number | undefined,
+    user: IJwtStaffPayload,
+    pinned: boolean,
+    skip: number,
+    take: number | undefined,
+  ) {
     return this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
+        is_pinned: pinned,
         OR: [{ status: NoticePostStatus.APPROVED }, { posted_by: user.sub }],
         ...(cursor ? { id: { lt: cursor } } : {}),
       },
-      orderBy: [{ is_pinned: 'desc' }, { posted_at: 'desc' }],
+      orderBy: pinned ? { posted_at: 'desc' } : { id: 'desc' },
       include: POST_LIST_INCLUDE,
       skip,
       take,
