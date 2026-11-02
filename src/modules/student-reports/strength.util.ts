@@ -122,7 +122,9 @@ export function matchesCategoryFilters(
 }
 
 /** "Fee Endowment", or "Fee Endowment and Complementary" for a combination. */
-export function categoryValue(s: Pick<StrengthStudent, 'benefits'>): SplitValue {
+export function categoryValue(
+  s: Pick<StrengthStudent, 'benefits'>,
+): SplitValue {
   if (s.benefits.length === 0)
     return { key: 'cat:none', label: 'Neither', order: 1e6 };
   const idx = s.benefits.map((b) =>
@@ -291,6 +293,9 @@ export interface StrengthOptions {
   rows: StrengthRowLevel;
   split?: StrengthSplit | null;
   split2?: StrengthSplit | null;
+  /** The category / siblings filters: which of those columns to show even at 0. */
+  category?: CategoryFilter[];
+  siblings?: SiblingFilter[];
 }
 
 const cmp = (a: number | string, b: number | string) =>
@@ -332,7 +337,32 @@ export function normalizeStrengthOptions(
   const split = opts.split ?? null;
   const split2 =
     split && opts.split2 && opts.split2 !== split ? opts.split2 : null;
-  return { rows: opts.rows, split, split2 };
+  return { ...opts, split, split2 };
+}
+
+function fixedSplitValues(
+  split: StrengthSplit | null | undefined,
+  o: StrengthOptions,
+): Map<string, SplitValue> {
+  const out = new Map<string, SplitValue>();
+  const add = (v: SplitValue) => out.set(v.key, v);
+  if (split === 'category') {
+    const want = (k: CategoryFilter) =>
+      !o.category?.length || o.category.includes(k);
+    for (const b of STUDENT_BENEFITS)
+      if (want(b.key))
+        add(categoryValue({ benefits: [{ key: b.key, until: null }] }));
+    if (want('NONE')) add(categoryValue({ benefits: [] }));
+  }
+  if (split === 'siblings') {
+    const want = (k: SiblingFilter) =>
+      !o.siblings?.length || o.siblings.includes(k);
+    if (want('LINKED'))
+      add({ key: 'sib:linked', label: 'Has siblings', order: 0 });
+    if (want('SINGLE'))
+      add({ key: 'sib:single', label: 'No siblings', order: 1 });
+  }
+  return out;
 }
 
 export function buildStrengthGrid(
@@ -343,9 +373,10 @@ export function buildStrengthGrid(
   const o = normalizeStrengthOptions(opts);
   const split2 = o.split2;
 
-  // Columns: only values that occur, in each split's own order.
-  const v1s = new Map<string, SplitValue>();
-  const v2s = new Map<string, SplitValue>();
+  // Columns: values that occur, in each split's own order. Special category
+  // and siblings always show every value the filters allow, even at 0.
+  const v1s = fixedSplitValues(o.split, o);
+  const v2s = fixedSplitValues(split2, o);
   if (o.split)
     for (const s of students) {
       const a = splitValue(s, o.split, ctx);

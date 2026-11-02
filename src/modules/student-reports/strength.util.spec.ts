@@ -262,9 +262,9 @@ describe('more categories and ending soon (TAFSD-455)', () => {
   const mtf = { key: 'FEE_ENDOWMENT_MTF' as const, until: '2027-07-31' };
 
   it('labels the new categories and combinations in full', () => {
-    expect(splitValue(student({ benefits: [ses] }), 'category', ctx).label).toBe(
-      'Sehm-e-Sadaat',
-    );
+    expect(
+      splitValue(student({ benefits: [ses] }), 'category', ctx).label,
+    ).toBe('Sehm-e-Sadaat');
     expect(
       splitValue(student({ benefits: [mtf, ses] }), 'category', ctx).label,
     ).toBe('Fee Endowment (Monthly Tuition Fee) and Sehm-e-Sadaat');
@@ -279,17 +279,81 @@ describe('more categories and ending soon (TAFSD-455)', () => {
   });
 
   it('filters by a new category', () => {
-    expect(matchesCategoryFilters(student({ benefits: [ses] }), undefined, ['SEHM_E_SADAAT'])).toBe(true);
-    expect(matchesCategoryFilters(student({ benefits: [FE] }), undefined, ['SEHM_E_SADAAT'])).toBe(false);
+    expect(
+      matchesCategoryFilters(student({ benefits: [ses] }), undefined, [
+        'SEHM_E_SADAAT',
+      ]),
+    ).toBe(true);
+    expect(
+      matchesCategoryFilters(student({ benefits: [FE] }), undefined, [
+        'SEHM_E_SADAAT',
+      ]),
+    ).toBe(false);
   });
 
   it('keeps only benefits ending by the date, within the chosen categories', () => {
     const s = student({ benefits: [FE, ses] });
-    expect(matchesCategoryFilters(s, undefined, undefined, '2027-04-01')).toBe(true);
-    expect(matchesCategoryFilters(s, undefined, undefined, '2027-03-01')).toBe(false);
-    expect(matchesCategoryFilters(s, undefined, ['FEE_ENDOWMENT'], '2027-04-01')).toBe(false);
+    expect(matchesCategoryFilters(s, undefined, undefined, '2027-04-01')).toBe(
+      true,
+    );
+    expect(matchesCategoryFilters(s, undefined, undefined, '2027-03-01')).toBe(
+      false,
+    );
     expect(
-      matchesCategoryFilters(student({ benefits: [{ key: 'COMPLEMENTARY', until: null }] }), undefined, undefined, '2030-01-01'),
+      matchesCategoryFilters(s, undefined, ['FEE_ENDOWMENT'], '2027-04-01'),
     ).toBe(false);
+    expect(
+      matchesCategoryFilters(
+        student({ benefits: [{ key: 'COMPLEMENTARY', until: null }] }),
+        undefined,
+        undefined,
+        '2030-01-01',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('TAFSD-455: category and siblings columns', () => {
+  const roll = [
+    student({
+      cc: 1,
+      benefits: [{ key: 'FEE_ENDOWMENT', until: '2027-07-31' }],
+    }),
+    student({ cc: 2 }),
+  ];
+
+  it('shows all five benefits and Neither, even at 0', () => {
+    const g = buildStrengthGrid(
+      roll,
+      { rows: 'campus', split: 'category' },
+      ctx,
+    );
+    expect(g.columns.map((c) => c.label)).toEqual([
+      'Fee Endowment',
+      'Fee Endowment (Monthly Tuition Fee)',
+      'Complementary',
+      'Sehm-e-Sadaat',
+      'Sehm-e-Imam',
+      'Neither',
+    ]);
+    expect(g.totals.counts['cat:sehm_e_sadaat'] ?? 0).toBe(0);
+  });
+
+  it('shows only the categories the filter allows', () => {
+    const g = buildStrengthGrid(
+      [],
+      {
+        rows: 'campus',
+        split: 'siblings',
+        split2: 'category',
+        category: ['SEHM_E_SADAAT'],
+        siblings: ['SINGLE'],
+      },
+      ctx,
+    );
+    expect(g.columns.map((c) => `${c.group}/${c.label}`)).toEqual([
+      'No siblings/Sehm-e-Sadaat',
+      'No siblings/Total',
+    ]);
   });
 });
