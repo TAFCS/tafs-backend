@@ -37,6 +37,7 @@ import {
   genderOf,
   inCell,
   isLinked,
+  type CategoryExportPart,
   matchesCategoryFilters,
   normalizeStrengthOptions,
   sessionStartFor,
@@ -69,6 +70,41 @@ export interface SiblingRef {
   class_name: string | null;
   section: string | null;
   campus: string | null;
+  /** TAFSD-456: for the linked-siblings list. */
+  gr_number: string | null;
+  class_id: number | null;
+  benefits: BenefitDetail[];
+}
+
+/** TAFSD-455: a benefit switched on, including one past its end date (active = false). */
+export interface BenefitDetail {
+  key: StudentBenefitKey;
+  label: string;
+  reason: string | null;
+  until: string | null;
+  remind_from: string | null;
+  active: boolean;
+}
+
+const day = (d: Date | null | undefined) =>
+  d ? d.toISOString().slice(0, 10) : null;
+
+/** Every benefit switched on for a student row (selected with BENEFIT_SELECT). */
+function benefitDetails(
+  row: Record<string, any>,
+  today: string,
+): BenefitDetail[] {
+  return STUDENT_BENEFITS.filter((b) => row[b.flag]).map((b) => {
+    const f = benefitFields(b);
+    return {
+      key: b.key,
+      label: b.label,
+      reason: (row[f.reason] as string | null) ?? null,
+      until: day(row[f.until]),
+      remind_from: day(row[f.remindFrom]),
+      active: benefitActive(row, b, today),
+    };
+  });
 }
 
 /** TAFSD-452: what the drill-down and the list sheet show beyond the grid's fields. */
@@ -78,14 +114,7 @@ export interface CategoryDetail {
   /** Siblings with any other status (left, graduated, …): listed, never linking. */
   other_siblings: SiblingRef[];
   /** TAFSD-455: every benefit switched on, including ones past their end date (active = false). */
-  benefits: Array<{
-    key: StudentBenefitKey;
-    label: string;
-    reason: string | null;
-    until: string | null;
-    remind_from: string | null;
-    active: boolean;
-  }>;
+  benefits: BenefitDetail[];
 }
 
 /**
@@ -171,7 +200,18 @@ export class StudentReportsService {
         : 'SPECIAL CATEGORIES REPORT';
     const tabName =
       kind === 'strength' ? 'Student Strength' : 'Special Categories';
-    const basename = `${kind === 'strength' ? 'student-strength' : 'special-categories'}-${ctx.today}`;
+    // TAFSD-456: the Special Categories download in parts; omitted = summary and full list.
+    const part =
+      kind === 'categories'
+        ? (query as ExportStudentCategoriesQueryDto).part
+        : undefined;
+    const PART_NAMES: Record<CategoryExportPart, string> = {
+      summary: 'summary',
+      list: 'students',
+      linked: 'linked-siblings',
+      single: 'single-children',
+    };
+    const basename = `${kind === 'strength' ? 'student-strength' : 'special-categories'}${part ? `-${PART_NAMES[part]}` : ''}-${ctx.today}`;
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'The American Foundation School';
 
@@ -198,20 +238,53 @@ export class StudentReportsService {
     );
 
     const tabs = await this.campusTabs();
-    const sheets = this.strengthSheets(grid, opts, tabs, tabName);
-    if (kind === 'categories') {
+    const listPart = part === 'linked' || part === 'single' ? part : 'list';
+    const sheets =
+      part && part !== 'summary'
+        ? []
+        : this.strengthSheets(grid, opts, tabs, tabName);
+    if (kind === 'categories' && part !== 'summary') {
       // The list sheets name every student; the fee reports cap PDF at the same size.
       if (query.format === 'pdf' && roll.length > PDF_LIST_STUDENT_CAP)
         throw new BadRequestException(
           `PDF export lists at most ${PDF_LIST_STUDENT_CAP.toLocaleString()} students (this has ${roll.length.toLocaleString()}). Narrow the filters, for example to one category, or export Excel.`,
         );
-      sheets.push(...this.categoryListSheets(roll, details, tabs, ctx.today));
+      sheets.push(
+        ...this.categoryListSheets(roll, details, tabs, ctx.today, listPart),
+      );
+      if (!sheets.length) {
+        writeEmptySheet(
+          workbook,
+          tabName,
+          part === 'linked'
+            ? 'No students with siblings in school match the current filters.'
+            : 'No single children match the current filters.',
+        );
+        return schoolWorkbookFile(workbook, query, basename, title);
+      }
     }
     writeSchoolSheets(workbook, sheets, {
       reportTitle: title,
       heading,
       periodLine: `AS ON ${this.longDate(ctx.today)}`,
-      filterLines: await this.filterLines(query, opts),
+      filterLines: [
+        // A list has no grid, so no "BY …" layout line.
+        ...(await this.filterLines(
+          query,
+          part && part !== 'summary'
+            ? { ...opts, split: null, split2: null }
+            : opts,
+        )),
+        ...(part === 'linked'
+          ? [
+              'STUDENTS WITH SIBLINGS IN SCHOOL (STUDENT IN BOLD, SIBLINGS BELOW)',
+            ]
+          : part === 'single'
+            ? ['SINGLE CHILDREN (NO SIBLINGS IN SCHOOL)']
+            : part === 'list'
+              ? ['STUDENT LIST']
+              : []),
+      ],
       exportDate: ctx.today,
       generatedLine: `GENERATED ON ${this.pktDateTime(new Date())} BY ${this.staffLabel(user)}`,
       columns: [],
@@ -285,9 +358,8 @@ export class StudentReportsService {
       },
     });
 
-    const families = await this.familyMembers(rows);
+    const families = await this.familyMembers(rows, today);
     const details = new Map<number, CategoryDetail>();
-    const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
     for (const r of rows) {
       const others = (
         r.family_id != null ? (families.get(r.family_id) ?? []) : []
@@ -295,20 +367,7 @@ export class StudentReportsService {
       details.set(r.cc, {
         siblings: others.filter((m) => m.status === 'ENROLLED'),
         other_siblings: others.filter((m) => m.status !== 'ENROLLED'),
-        benefits: STUDENT_BENEFITS.filter(
-          (b) => (r as Record<string, unknown>)[b.flag],
-        ).map((b) => {
-          const f = benefitFields(b);
-          const row = r as Record<string, any>;
-          return {
-            key: b.key,
-            label: b.label,
-            reason: row[f.reason] ?? null,
-            until: day(row[f.until]),
-            remind_from: day(row[f.remindFrom]),
-            active: benefitActive(row, b, today),
-          };
-        }),
+        benefits: benefitDetails(r, today),
       });
     }
 
@@ -361,6 +420,7 @@ export class StudentReportsService {
    */
   private async familyMembers(
     rows: { family_id: number | null }[],
+    today: string,
   ): Promise<Map<number, SiblingRef[]>> {
     const ids = [
       ...new Set(rows.map((r) => r.family_id).filter((id) => id != null)),
@@ -373,7 +433,10 @@ export class StudentReportsService {
         cc: true,
         family_id: true,
         full_name: true,
+        gr_number: true,
+        class_id: true,
         status: true,
+        ...BENEFIT_SELECT,
         classes: { select: { description: true } },
         sections: { select: { description: true } },
         campuses: { select: { campus_name: true } },
@@ -389,6 +452,9 @@ export class StudentReportsService {
         class_name: m.classes?.description ?? null,
         section: m.sections?.description ?? null,
         campus: m.campuses?.campus_name ?? null,
+        gr_number: m.gr_number ?? null,
+        class_id: m.class_id ?? null,
+        benefits: benefitDetails(m, today),
       });
       out.set(m.family_id!, list);
     }
@@ -487,42 +553,87 @@ export class StudentReportsService {
   }
 
   /**
-   * TAFSD-452: per campus, every student in class groups (with the group's
-   * count), their Enrolled siblings, siblings who aren't (left, graduated, …), and
-   * Fee Endowment / Complementary with the end date.
+   * TAFSD-452/456: per campus, students in class groups (with the group's
+   * count). `list`: every student with their Enrolled siblings, siblings who
+   * aren't (left, graduated, …) and their special category. `single`: only
+   * students with no Enrolled sibling. `linked`: only students with one, each
+   * in bold with their siblings in the rows under it.
    */
   private categoryListSheets(
     roll: StrengthStudent[],
     details: Map<number, CategoryDetail>,
     tabs: Map<string, string>,
     today: string,
+    part: 'list' | 'linked' | 'single' = 'list',
   ): SchoolSheet[] {
+    const where = (m: { class_name: string | null; section: string | null }) =>
+      [m.class_name, m.section].filter(Boolean).join(' ').toUpperCase();
     const sib = (m: SiblingRef) => {
-      const where = [m.class_name, m.section].filter(Boolean).join(' ');
-      return `${(m.full_name ?? `CC ${m.cc}`).toUpperCase()}${where ? ` (${where.toUpperCase()})` : ''}`;
+      const w = where(m);
+      return `${(m.full_name ?? `CC ${m.cc}`).toUpperCase()}${w ? ` (${w})` : ''}`;
     };
     const other = (m: SiblingRef) =>
       `${(m.full_name ?? `CC ${m.cc}`).toUpperCase()} (${m.status.replace(/_/g, ' ')})`;
-    const benefits = (d: CategoryDetail) =>
-      d.benefits
+    const benefits = (list: BenefitDetail[]) =>
+      list
         .map((b) => {
           if (!b.until) return b.label.toUpperCase();
           const [y, mo, dd] = b.until.split('-');
           return `${b.label.toUpperCase()} ${b.until < today ? 'ENDED' : 'UNTIL'} ${dd}-${mo}-${y}`;
         })
         .join('; ');
+    const name = (m: { cc: number; full_name: string | null }) =>
+      (m.full_name ?? `CC ${m.cc}`).toUpperCase();
 
+    const students =
+      part === 'list'
+        ? roll
+        : roll.filter((s) => isLinked(s) === (part === 'linked'));
     const byCampus = new Map<string, StrengthStudent[]>();
-    for (const s of roll) {
-      const name = s.campus?.trim() || 'No campus';
-      byCampus.set(name, [...(byCampus.get(name) ?? []), s]);
+    for (const s of students) {
+      const c = s.campus?.trim() || 'No campus';
+      byCampus.set(c, [...(byCampus.get(c) ?? []), s]);
     }
+
+    const columns: SchoolSheetColumn[] =
+      part === 'linked'
+        ? [
+            { header: 'CLASS', key: 'cls', width: 14 },
+            { header: 'GR NO', key: 'gr', width: 10 },
+            { header: 'CC', key: 'cc', width: 8 },
+            { header: 'STUDENT / SIBLING', key: 'name', width: 32 },
+            { header: 'CAMPUS', key: 'campus', width: 14 },
+            { header: 'STATUS', key: 'status', width: 12 },
+            { header: 'SPECIAL CATEGORY', key: 'category', width: 40 },
+          ]
+        : part === 'single'
+          ? [
+              { header: 'SECTION', key: 'section', width: 10 },
+              { header: 'GR NO', key: 'gr', width: 10 },
+              { header: 'CC', key: 'cc', width: 8 },
+              { header: 'STUDENT NAME', key: 'name', width: 30 },
+              { header: 'SIBLINGS NOT ENROLLED', key: 'others', width: 34 },
+              { header: 'SPECIAL CATEGORY', key: 'category', width: 40 },
+            ]
+          : [
+              { header: 'SECTION', key: 'section', width: 10 },
+              { header: 'GR NO', key: 'gr', width: 10 },
+              { header: 'CC', key: 'cc', width: 8 },
+              { header: 'STUDENT NAME', key: 'name', width: 28 },
+              { header: 'HAS SIBLINGS', key: 'linked', width: 10 },
+              { header: 'SIBLINGS IN SCHOOL', key: 'siblings', width: 40 },
+              { header: 'SIBLINGS NOT ENROLLED', key: 'others', width: 32 },
+              { header: 'SPECIAL CATEGORY', key: 'category', width: 40 },
+            ];
+    const tabSuffix =
+      part === 'linked' ? 'LINKED' : part === 'single' ? 'SINGLE' : 'LIST';
+
     const sheets: SchoolSheet[] = [];
-    for (const name of [...byCampus.keys()].sort((a, b) =>
+    for (const campus of [...byCampus.keys()].sort((a, b) =>
       a.localeCompare(b),
     )) {
-      const students = byCampus
-        .get(name)!
+      const list = byCampus
+        .get(campus)!
         .sort(
           (a, b) =>
             (a.class_id ?? Number.MAX_SAFE_INTEGER) -
@@ -530,42 +641,69 @@ export class StudentReportsService {
             (a.section ?? '').localeCompare(b.section ?? '') ||
             (a.full_name ?? '').localeCompare(b.full_name ?? ''),
         );
-      const groups = new Map<string, Array<Record<string, string | number>>>();
-      for (const s of students) {
+      const groups = new Map<
+        string,
+        { rows: Array<Record<string, string | number>>; count: number }
+      >();
+      for (const s of list) {
         const d = details.get(s.cc)!;
         const label = (s.class_name?.trim() || 'No class').toUpperCase();
-        groups.set(label, [
-          ...(groups.get(label) ?? []),
-          {
+        const g = groups.get(label) ?? { rows: [], count: 0 };
+        g.count++;
+        if (part === 'linked') {
+          // The student in bold, numbered; their siblings under it, unnumbered.
+          g.rows.push({
+            __sno: g.count,
+            __bold: 1,
+            cls: where(s),
+            gr: s.gr_number ?? '',
+            cc: s.cc,
+            name: name(s),
+            campus: (tabs.get(s.campus ?? '') ?? s.campus ?? '').toUpperCase(),
+            status: s.status.replace(/_/g, ' '),
+            category: benefits(d.benefits),
+          });
+          for (const m of [...d.siblings, ...d.other_siblings])
+            g.rows.push({
+              __sno: '',
+              cls: where(m),
+              gr: m.gr_number ?? '',
+              cc: m.cc,
+              name: name(m),
+              campus: (
+                tabs.get(m.campus ?? '') ??
+                m.campus ??
+                ''
+              ).toUpperCase(),
+              status: m.status.replace(/_/g, ' '),
+              category: benefits(m.benefits),
+            });
+        } else {
+          g.rows.push({
             section: (s.section ?? '').toUpperCase(),
             gr: s.gr_number ?? '',
-            name: (s.full_name ?? `CC ${s.cc}`).toUpperCase(),
+            cc: s.cc,
+            name: name(s),
             linked: isLinked(s) ? 'YES' : 'NO',
             siblings: d.siblings.map(sib).join(', '),
             others: d.other_siblings.map(other).join(', '),
-            category: benefits(d),
-          },
-        ]);
+            category: benefits(d.benefits),
+          });
+        }
+        groups.set(label, g);
       }
-      const list = [...groups.entries()].map(([label, rows]) => ({
+      const out = [...groups.entries()].map(([label, g]) => ({
         label,
-        rows,
+        rows: g.rows,
+        count: g.count,
       }));
-      const code = tabs.get(name) ?? name;
+      const code = tabs.get(campus) ?? campus;
       sheets.push({
-        tab: `${code.slice(0, 26)} LIST`,
-        campus: campusLine(name),
-        columns: [
-          { header: 'SECTION', key: 'section', width: 10 },
-          { header: 'GR NO', key: 'gr', width: 10 },
-          { header: 'STUDENT NAME', key: 'name', width: 28 },
-          { header: 'HAS SIBLINGS', key: 'linked', width: 10 },
-          { header: 'SIBLINGS IN SCHOOL', key: 'siblings', width: 40 },
-          { header: 'SIBLINGS NOT ENROLLED', key: 'others', width: 32 },
-          { header: 'SPECIAL CATEGORY', key: 'category', width: 40 },
-        ],
-        rows: list.flatMap((g) => g.rows),
-        groups: list,
+        tab: `${code.slice(0, 24)} ${tabSuffix}`,
+        campus: campusLine(campus),
+        columns,
+        rows: out.flatMap((g) => g.rows),
+        groups: out,
         rowNoun: ['STUDENT', 'STUDENTS'],
       });
     }
