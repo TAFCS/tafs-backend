@@ -7,6 +7,7 @@ import type { GetStudentsDto } from '../students/dto/get-students.dto';
 import {
   campusLine,
   defaulterSheetHeading,
+  sessionLine,
 } from '../financial-reports/defaulter-sheet-heading';
 import {
   writeSchoolSheets,
@@ -56,6 +57,12 @@ const addDays = (date: string, n: number) => {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return ymd(d);
+};
+/** "SESSION 2026–2027", or "SESSIONS 2016–2017 TO 2026–2027" across several. */
+const sessionsLine = (from: string, to: string) => {
+  const a = sessionLine(from).replace('SESSION ', '');
+  const b = sessionLine(to).replace('SESSION ', '');
+  return a === b ? `SESSION ${a}` : `SESSIONS ${a} TO ${b}`;
 };
 /** "03-11-2026". */
 const dmy = (date: string) => date.split('-').reverse().join('-');
@@ -139,14 +146,18 @@ export class MovementReportService {
       if (e.class_id != null) classes.set(e.class_id, e.class_name ?? '');
     writeSchoolSheets(workbook, sheets, {
       reportTitle: title,
-      heading: defaulterSheetHeading(
-        [...classes].map(([class_id, class_name]) => ({
-          class_id,
-          class_name,
-        })),
-        Boolean(query.class_id?.length),
-        today,
-      ),
+      heading: {
+        ...defaulterSheetHeading(
+          [...classes].map(([class_id, class_name]) => ({
+            class_id,
+            class_name,
+          })),
+          Boolean(query.class_id?.length),
+          opts.to,
+        ),
+        // The sessions the dates cover, not just today's.
+        session: sessionsLine(opts.from, opts.to),
+      },
       periodLine: `FROM ${this.reports.longDate(opts.from)} TO ${this.reports.longDate(opts.to)}`,
       filterLines: [
         ...(await this.filterLines(query, opts, list)),
