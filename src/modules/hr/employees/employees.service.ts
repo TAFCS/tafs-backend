@@ -621,6 +621,9 @@ const listSelect = {
   employee_code: true,
   employment_status: true,
   employment_subtype: true,
+  // TAFSD-458: the payroll generate picker shows who a run can't pay.
+  payroll_enabled: true,
+  date_of_leaving: true,
   job_title: true,
   personal_phone: true,
   campus_id: true,

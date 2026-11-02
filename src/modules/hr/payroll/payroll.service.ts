@@ -210,6 +210,14 @@ function cycleRosterStatusWhere(periodStart: Date): Prisma.employee_profilesWher
   ];
 }
 
+/** TAFSD-458: a picked employee generateRun left out, and why. */
+export type SkippedEmployee = {
+  employee_id: number;
+  full_name: string | null;
+  employee_code: string | null;
+  reason: string;
+};
+
 /** TAFSD-372: first payroll cycle paid day by day at the pay in effect on each day. */
 export const PAY_BY_EFFECTIVE_DATE_FROM = new Date(Date.UTC(2026, 9, 26));
 
@@ -1810,11 +1818,16 @@ export class PayrollService {
           select: this.employeeLineSelect,
         });
     // TAFSD-458: a real run limited to employees picked in the generate modal.
+    // A pick that can't be paid on this run is skipped with a reason rather
+    // than failing everyone else's.
     const candidates = onlyIds ? roster.filter((e) => onlyIds.includes(e.id)) : roster;
+    const skipped: SkippedEmployee[] = [];
     if (onlyIds && candidates.length !== onlyIds.length) {
-      throw new BadRequestException(
-        'One or more selected employees are not on this campus\'s payroll for this cycle (wrong campus, no monthly pay, payroll switched off, or not on the roster for these dates).',
-      );
+      const onRoster = new Set(candidates.map((e) => e.id));
+      skipped.push(...(await this.rosterSkipReasons(onlyIds.filter((id) => !onRoster.has(id)), dto.campus_id, periodStart)));
+    }
+    if (onlyIds && candidates.length === 0) {
+      throw new BadRequestException(`None of the selected employees can be paid on this run. ${this.skippedSummary(skipped)}`);
     }
     if (candidates.length === 0) {
       throw new BadRequestException(
@@ -1853,12 +1866,58 @@ export class PayrollService {
       );
       const covered = new Set(overlapping.map((c) => c.employee_id));
       employees = candidates.filter((e) => !covered.has(e.id));
+      if (onlyIds) {
+        const seen = new Set<number>();
+        for (const c of overlapping) {
+          if (seen.has(c.employee_id)) continue;
+          seen.add(c.employee_id);
+          const r = c.payroll_runs;
+          skipped.push({
+            employee_id: c.employee_id,
+            full_name: c.employee_profiles.full_name,
+            employee_code: c.employee_profiles.employee_code,
+            reason: `Already on ${r.kind === PayrollRunKind.CUSTOM ? 'custom run' : 'payroll run'} #${r.id} (${r.period_start.toISOString().slice(0, 10)} to ${r.period_end.toISOString().slice(0, 10)}, ${r.campuses.campus_name}) for overlapping dates`,
+          });
+        }
+      }
       if (employees.length === 0) {
         throw new BadRequestException(
           onlyIds
-            ? 'Every selected employee is already on another payroll run with overlapping dates — nothing to calculate.'
+            ? `None of the selected employees can be paid on this run. ${this.skippedSummary(skipped)}`
             : 'Every payable employee on this campus is already on another payroll run with overlapping dates — nothing to calculate.',
         );
+      }
+    }
+    // Picks whose line on this run is already finalized or excluded are left
+    // alone by upsertOpenLines; say so instead of counting them as done.
+    if (onlyIds && existing) {
+      const ids = employees.map((e) => e.id);
+      const [locked, excluded] = await Promise.all([
+        this.prisma.payroll_run_lines.findMany({
+          where: { payroll_run_id: existing.id, employee_id: { in: ids }, finalized_at: { not: null } },
+          select: { employee_id: true },
+        }),
+        this.prisma.payroll_run_exclusions.findMany({
+          where: { payroll_run_id: existing.id, employee_id: { in: ids } },
+          select: { employee_id: true },
+        }),
+      ]);
+      const leftAlone = [...locked, ...excluded].map((r) => r.employee_id);
+      const profiles = leftAlone.length
+        ? await this.prisma.employee_profiles.findMany({
+            where: { id: { in: leftAlone } },
+            select: { id: true, full_name: true, employee_code: true },
+          })
+        : [];
+      const names = new Map(profiles.map((p) => [p.id, p]));
+      for (const [rows, reason] of [
+        [locked, 'Already finalized on this run (un-finalize the line to recompute it)'],
+        [excluded, 'Excluded from this run (re-include them on the run page first)'],
+      ] as const) {
+        for (const { employee_id } of rows) {
+          const e = names.get(employee_id);
+          skipped.push({ employee_id, full_name: e?.full_name ?? null, employee_code: e?.employee_code ?? null, reason });
+        }
       }
     }
     // Re-generating for the same period replaces it in place (recomputed from
@@ -1937,10 +1996,53 @@ export class PayrollService {
       field: 'status',
       new_value: isTest ? 'DRAFT_TEST' : 'DRAFT',
       changed_by: auditActorLabel(user),
-      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${touchedCount} of ${employees.length} employee(s) touched${isTest ? ', test' : ''}${onlyIds ? ', selected employees only' : ''}).`,
+      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${touchedCount} of ${employees.length} employee(s) touched${isTest ? ', test' : ''}${onlyIds ? `, selected employees only, ${skipped.length} skipped` : ''}).`,
     });
 
-    return this.getRun(run.id, user);
+    const result = await this.getRun(run.id, user);
+    return onlyIds ? { ...result, touched_count: touchedCount, skipped_employees: skipped } : result;
+  }
+
+  /** TAFSD-458: why each picked employee isn't on this campus's roster for the cycle. */
+  private async rosterSkipReasons(ids: number[], campusId: number, periodStart: Date): Promise<SkippedEmployee[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.prisma.employee_profiles.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        full_name: true,
+        employee_code: true,
+        campus_id: true,
+        monthly_pay: true,
+        payroll_enabled: true,
+        employment_status: true,
+        date_of_leaving: true,
+      },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return ids.map((id) => {
+      const e = byId.get(id);
+      if (!e) return { employee_id: id, full_name: null, employee_code: null, reason: 'Employee not found' };
+      const status = e.employment_status ?? 'ACTIVE';
+      const reason =
+        e.campus_id !== campusId
+          ? 'Not on this campus'
+          : e.monthly_pay == null
+            ? 'No monthly pay set'
+            : !e.payroll_enabled
+              ? 'Payroll is switched off for them (Schedule & Pay tab)'
+              : status === 'LEFT' || status === 'TERMINATED'
+                ? 'Left before this payroll cycle'
+                : `Status is ${status}; only ACTIVE employees (or those who left during the cycle) are paid`;
+      return { employee_id: id, full_name: e.full_name, employee_code: e.employee_code, reason };
+    });
+  }
+
+  private skippedSummary(skipped: SkippedEmployee[]): string {
+    const shown = skipped
+      .slice(0, 10)
+      .map((s) => `${s.full_name ?? `Employee #${s.employee_id}`}${s.employee_code ? ` (${s.employee_code})` : ''}: ${s.reason}`);
+    return shown.join('; ') + (skipped.length > 10 ? `; and ${skipped.length - 10} more` : '');
   }
 
   /**
