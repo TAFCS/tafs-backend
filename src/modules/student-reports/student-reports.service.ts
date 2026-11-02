@@ -239,6 +239,8 @@ export class StudentReportsService {
       rows: query.rows ?? 'class',
       split: query.split ?? null,
       split2: query.split2 ?? null,
+      category: query.category,
+      siblings: query.siblings,
     });
 
     const directoryQuery = {

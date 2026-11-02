@@ -215,7 +215,11 @@ describe('StudentReportsService', () => {
       const byCc = new Map(cell.items.map((s) => [s.cc, s]));
       expect(byCc.get(1)!.siblings.map((m) => m.cc)).toEqual([2]);
       expect(byCc.get(1)!.benefits).toEqual([
-        expect.objectContaining({ key: 'FEE_ENDOWMENT', until: '2027-06-30', active: true }),
+        expect.objectContaining({
+          key: 'FEE_ENDOWMENT',
+          until: '2027-06-30',
+          active: true,
+        }),
       ]);
       // TAFSD-455: an ended benefit is still listed, marked inactive.
       expect(byCc.get(3)!.benefits).toEqual([
@@ -230,9 +234,17 @@ describe('StudentReportsService', () => {
     it('prints reports A and B as PDF in the school sheet format (TAFSD-455)', async () => {
       const { svc } = service();
       for (const file of [
-        await svc.exportStrength({ rows: 'class', split: 'gender', format: 'pdf' }, user),
+        await svc.exportStrength(
+          { rows: 'class', split: 'gender', format: 'pdf' },
+          user,
+        ),
         await svc.exportCategories(
-          { rows: 'class', split: 'siblings', split2: 'category', format: 'pdf' },
+          {
+            rows: 'class',
+            split: 'siblings',
+            split2: 'category',
+            format: 'pdf',
+          },
           user,
         ),
       ]) {
