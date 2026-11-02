@@ -5,6 +5,12 @@
  * and the Excel all count the same way.
  */
 
+import {
+  STUDENT_BENEFITS,
+  STUDENT_BENEFIT_KEYS,
+  type StudentBenefitKey,
+} from '../students/student-benefits';
+
 export const STRENGTH_SPLITS = [
   'gender',
   'house',
@@ -28,7 +34,7 @@ export const STRENGTH_SPLIT_LABELS: Record<StrengthSplit, string> = {
   discipline: 'Discipline',
   segment: 'Segment',
   siblings: 'Siblings',
-  category: 'Fee Endowment / Complementary',
+  category: 'Special category',
 };
 
 /**
@@ -38,13 +44,16 @@ export const STRENGTH_SPLIT_LABELS: Record<StrengthSplit, string> = {
 export const SIBLING_FILTERS = ['LINKED', 'SINGLE'] as const;
 export type SiblingFilter = (typeof SIBLING_FILTERS)[number];
 
-/** Full names only: never "FE" or "Comp". */
-export const CATEGORY_FILTERS = [
-  'FEE_ENDOWMENT',
-  'COMPLEMENTARY',
-  'NONE',
-] as const;
-export type CategoryFilter = (typeof CATEGORY_FILTERS)[number];
+/** TAFSD-455: every benefit category, or NONE. Full names only: never "FE" or "Comp". */
+export const CATEGORY_FILTERS = [...STUDENT_BENEFIT_KEYS, 'NONE'] as const;
+export type CategoryFilter = StudentBenefitKey | 'NONE';
+
+/** A benefit the student holds today: switched on and not past its end date. */
+export interface ActiveBenefit {
+  key: StudentBenefitKey;
+  /** YYYY-MM-DD, or null when it has no end date. */
+  until: string | null;
+}
 
 export const STRENGTH_ROW_LEVELS = ['campus', 'class', 'section'] as const;
 export type StrengthRowLevel = (typeof STRENGTH_ROW_LEVELS)[number];
@@ -71,18 +80,23 @@ export interface StrengthStudent {
   segment_order: number | null;
   /** TAFSD-452: other students of the same family who are Enrolled. */
   enrolled_siblings: number;
-  is_fee_endowment: boolean;
-  is_complementary: boolean;
+  /** TAFSD-455: in STUDENT_BENEFITS order. Ended benefits are left out, so they don't count. */
+  benefits: ActiveBenefit[];
 }
 
 export const isLinked = (s: Pick<StrengthStudent, 'enrolled_siblings'>) =>
   s.enrolled_siblings > 0;
 
-/** Each filter matches any of its values; empty matches everyone. */
+/**
+ * Each filter matches any of its values; empty matches everyone.
+ * `endingBy` (YYYY-MM-DD, TAFSD-455) keeps students holding a benefit that ends
+ * on or before that day; with categories chosen, only those benefits count.
+ */
 export function matchesCategoryFilters(
   s: StrengthStudent,
   siblings: readonly SiblingFilter[] | undefined,
   category: readonly CategoryFilter[] | undefined,
+  endingBy?: string,
 ): boolean {
   if (siblings?.length) {
     const want = isLinked(s) ? 'LINKED' : 'SINGLE';
@@ -90,12 +104,36 @@ export function matchesCategoryFilters(
   }
   if (category?.length) {
     const hit =
-      (s.is_fee_endowment && category.includes('FEE_ENDOWMENT')) ||
-      (s.is_complementary && category.includes('COMPLEMENTARY')) ||
-      (!s.is_fee_endowment && !s.is_complementary && category.includes('NONE'));
+      s.benefits.some((b) => category.includes(b.key)) ||
+      (s.benefits.length === 0 && category.includes('NONE'));
     if (!hit) return false;
   }
+  if (endingBy) {
+    const keys = category?.filter((c) => c !== 'NONE');
+    const ending = s.benefits.some(
+      (b) =>
+        (!keys?.length || keys.includes(b.key)) &&
+        b.until != null &&
+        b.until <= endingBy,
+    );
+    if (!ending) return false;
+  }
   return true;
+}
+
+/** "Fee Endowment", or "Fee Endowment and Complementary" for a combination. */
+export function categoryValue(s: Pick<StrengthStudent, 'benefits'>): SplitValue {
+  if (s.benefits.length === 0)
+    return { key: 'cat:none', label: 'Neither', order: 1e6 };
+  const idx = s.benefits.map((b) =>
+    STUDENT_BENEFITS.findIndex((x) => x.key === b.key),
+  );
+  return {
+    key: `cat:${s.benefits.map((b) => b.key.toLowerCase()).join('+')}`,
+    label: idx.map((i) => STUDENT_BENEFITS[i].label).join(' and '),
+    // Single categories first in list order, then combinations.
+    order: (idx.length - 1) * 1000 + idx.reduce((a, i) => a * 10 + i, 0),
+  };
 }
 
 export interface StrengthContext {
@@ -217,17 +255,7 @@ export function splitValue(
         ? { key: 'sib:linked', label: 'Has siblings', order: 0 }
         : { key: 'sib:single', label: 'No siblings', order: 1 };
     case 'category':
-      if (s.is_fee_endowment && s.is_complementary)
-        return {
-          key: 'cat:both',
-          label: 'Fee Endowment and Complementary',
-          order: 2,
-        };
-      if (s.is_fee_endowment)
-        return { key: 'cat:fe', label: 'Fee Endowment', order: 0 };
-      if (s.is_complementary)
-        return { key: 'cat:comp', label: 'Complementary', order: 1 };
-      return { key: 'cat:none', label: 'Neither', order: 3 };
+      return categoryValue(s);
   }
 }
 

@@ -201,6 +201,12 @@ describe('StudentReportsService', () => {
         user,
       );
       expect(fe.totals.total).toBe(1);
+      // TAFSD-455: student 3's Complementary ended on 2026-01-01, so it doesn't count.
+      const comp = await svc.strength(
+        { rows: 'campus', category: ['COMPLEMENTARY'] },
+        user,
+      );
+      expect(comp.totals.total).toBe(0);
     });
 
     it('names Enrolled siblings and the ones who left in the drill-down', async () => {
@@ -208,11 +214,31 @@ describe('StudentReportsService', () => {
       const cell = await svc.cellStudents({ rows: 'class' }, user);
       const byCc = new Map(cell.items.map((s) => [s.cc, s]));
       expect(byCc.get(1)!.siblings.map((m) => m.cc)).toEqual([2]);
-      expect(byCc.get(1)!.fee_endowment_until).toBe('2027-06-30');
+      expect(byCc.get(1)!.benefits).toEqual([
+        expect.objectContaining({ key: 'FEE_ENDOWMENT', until: '2027-06-30', active: true }),
+      ]);
+      // TAFSD-455: an ended benefit is still listed, marked inactive.
+      expect(byCc.get(3)!.benefits).toEqual([
+        expect.objectContaining({ key: 'COMPLEMENTARY', active: false }),
+      ]);
       expect(byCc.get(3)!.siblings).toEqual([]);
       expect(byCc.get(3)!.other_siblings.map((m) => m.status)).toEqual([
         'LEFT',
       ]);
+    });
+
+    it('prints reports A and B as PDF in the school sheet format (TAFSD-455)', async () => {
+      const { svc } = service();
+      for (const file of [
+        await svc.exportStrength({ rows: 'class', split: 'gender', format: 'pdf' }, user),
+        await svc.exportCategories(
+          { rows: 'class', split: 'siblings', split2: 'category', format: 'pdf' },
+          user,
+        ),
+      ]) {
+        expect(file.contentType).toBe('application/pdf');
+        expect(file.filename).toMatch(/-A[34]\.pdf$/);
+      }
     });
 
     it('exports the grid and a list sheet per campus, in full words', async () => {
@@ -237,8 +263,8 @@ describe('StudentReportsService', () => {
       const all = text.join('\n');
       expect(all).toContain('SPECIAL CATEGORIES REPORT');
       expect(all).toContain('FEE ENDOWMENT');
-      expect(all).toContain('UNTIL 30-06-2027');
-      expect(all).toContain('ENDED 01-01-2026');
+      expect(all).toContain('FEE ENDOWMENT UNTIL 30-06-2027');
+      expect(all).toContain('COMPLEMENTARY ENDED 01-01-2026');
       expect(all).toContain('LEFT SIBLING (LEFT)');
       expect(all).toContain('STUDENT 2 (CLASS 3 A)');
       expect(all).not.toMatch(/\bFE\b|\bCOMP\b/);
