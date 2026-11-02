@@ -801,7 +801,7 @@ export class StudentReportsService {
     return lines;
   }
 
-  private async campusTabs(): Promise<Map<string, string>> {
+  async campusTabs(): Promise<Map<string, string>> {
     const campuses = await this.prisma.campuses.findMany({
       select: { campus_name: true, campus_code: true },
     });
@@ -819,7 +819,7 @@ export class StudentReportsService {
   }
 
   /** "1 NOVEMBER 2026". */
-  private longDate(iso: string): string {
+  longDate(iso: string): string {
     const [y, m, d] = iso.split('-').map(Number);
     const month = new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-GB', {
       month: 'long',
@@ -829,7 +829,7 @@ export class StudentReportsService {
   }
 
   /** "01-11-2026 05:30 AM" in Pakistan time. */
-  private pktDateTime(date: Date): string {
+  pktDateTime(date: Date): string {
     const p = Object.fromEntries(
       new Intl.DateTimeFormat('en-GB', {
         timeZone: 'Asia/Karachi',
@@ -847,9 +847,7 @@ export class StudentReportsService {
   }
 
   /** "AAWAIZ ALI (aawaiz.ali)". */
-  private staffLabel(
-    user: Pick<IJwtStaffPayload, 'username' | 'fullName'>,
-  ): string {
+  staffLabel(user: Pick<IJwtStaffPayload, 'username' | 'fullName'>): string {
     const name = user.fullName?.trim();
     return name ? `${name.toUpperCase()} (${user.username})` : user.username;
   }

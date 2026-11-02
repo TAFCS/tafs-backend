@@ -17,6 +17,12 @@ import { RequireAction } from '../../decorators/require-action.decorator';
 import { CheckPolicies } from '../../decorators/check-policies.decorator';
 import { Action } from '../auth/casl/actions';
 import { StudentReportsService } from './student-reports.service';
+import { MovementReportService } from './movement-report.service';
+import {
+  ExportMovementQueryDto,
+  MovementCellQueryDto,
+  MovementQueryDto,
+} from './dto/movement-query.dto';
 import {
   ExportStudentCategoriesQueryDto,
   ExportStudentStrengthQueryDto,
@@ -32,7 +38,10 @@ import {
 @Controller('student-reports')
 @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
 export class StudentReportsController {
-  constructor(private readonly reports: StudentReportsService) {}
+  constructor(
+    private readonly reports: StudentReportsService,
+    private readonly movementReport: MovementReportService,
+  ) {}
 
   @Get('strength')
   @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
@@ -89,6 +98,52 @@ export class StudentReportsController {
     @Res() res: Response,
   ) {
     const file = await this.reports.exportCategories(query, user);
+    res.set({
+      'Content-Type': file.contentType,
+      'Content-Disposition': `attachment; filename="${file.filename}"`,
+      'Content-Length': file.buffer.length,
+    });
+    res.send(file.buffer);
+  }
+
+  /** TAFSD-453: Admissions and Withdrawals (report C). */
+  @Get('movement')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#view')
+  async movement(
+    @Query() query: MovementQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return createApiResponse(
+      await this.movementReport.movement(query, user),
+      HttpStatus.OK,
+      'Admissions and withdrawals retrieved',
+    );
+  }
+
+  @Get('movement/students')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#view')
+  async movementStudents(
+    @Query() query: MovementCellQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    return createApiResponse(
+      await this.movementReport.cellStudents(query, user),
+      HttpStatus.OK,
+      'Students retrieved',
+    );
+  }
+
+  @Get('movement/export')
+  @CheckPolicies((ability) => ability.can(Action.Read, 'Student'))
+  @RequireAction('student.directory#export')
+  async exportMovement(
+    @Query() query: ExportMovementQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+    @Res() res: Response,
+  ) {
+    const file = await this.movementReport.export(query, user);
     res.set({
       'Content-Type': file.contentType,
       'Content-Disposition': `attachment; filename="${file.filename}"`,
