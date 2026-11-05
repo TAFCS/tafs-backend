@@ -4389,6 +4389,10 @@ export class FinancialReportsService {
     user: IJwtStaffPayload,
   ) {
     this.assertDateRange(dto);
+    // A scoped user's snapshot records their scope in its filters, so it stays
+    // visible to them (snapshotInScope) and means the same thing to anyone
+    // who opens it later.
+    dto = this.floorSnapshotFiltersToScope(dto, user);
     const view = dto.view ?? 'heads';
     const filters = this.buildSnapshotFilters(dto, view);
     const filtersHash = this.hashSnapshotFilters(filters);
@@ -4433,13 +4437,29 @@ export class FinancialReportsService {
     query: ListFeeHeadsSnapshotsQueryDto,
     user: IJwtStaffPayload,
   ) {
-    void user;
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 20, 100);
     const where: Prisma.financial_report_snapshotsWhereInput = {
       report_type: FinancialReportType.FEE_HEADS,
       ...(query.status && { status: query.status }),
     };
+
+    // Scoped callers: the scope test reads the filters JSON, so filter in
+    // memory and page after. Snapshots are a handful per month, not a table
+    // that grows with students.
+    if (this.restrictedSnapshotDims(user).length > 0) {
+      const all = await this.prisma.financial_report_snapshots.findMany({
+        where,
+        orderBy: [{ generated_at: 'desc' }, { id: 'desc' }],
+      });
+      const visible = all.filter((row) => this.snapshotInScope(row.filters, user));
+      return {
+        items: visible
+          .slice((page - 1) * limit, page * limit)
+          .map((row) => this.mapSnapshotRow(row)),
+        pagination: createPaginationMeta(page, limit, visible.length),
+      };
+    }
 
     const [rows, total] = await Promise.all([
       this.prisma.financial_report_snapshots.findMany({
@@ -4464,7 +4484,7 @@ export class FinancialReportsService {
         report_type: FinancialReportType.FEE_HEADS,
       },
     });
-    if (!row) {
+    if (!row || !this.snapshotInScope(row.filters, user)) {
       throw new NotFoundException(`Fee heads snapshot ${id} not found`);
     }
 
@@ -4482,7 +4502,7 @@ export class FinancialReportsService {
         report_type: FinancialReportType.FEE_HEADS,
       },
     });
-    if (!row) {
+    if (!row || !this.snapshotInScope(row.filters, user)) {
       throw new NotFoundException(`Fee heads snapshot ${id} not found`);
     }
     if (row.status === FinancialReportSnapshotStatus.FINALIZED) {
@@ -4551,7 +4571,7 @@ export class FinancialReportsService {
         report_type: FinancialReportType.FEE_HEADS,
       },
     });
-    if (!row) {
+    if (!row || !this.snapshotInScope(row.filters, user)) {
       throw new NotFoundException(`Fee heads snapshot ${id} not found`);
     }
     if (row.status === FinancialReportSnapshotStatus.FINALIZED) {
@@ -4715,6 +4735,48 @@ export class FinancialReportsService {
       finalized_at: row.finalized_at?.toISOString() ?? null,
       notes: row.notes,
     };
+  }
+
+  /**
+   * Student scope dimensions that restrict this caller, paired with the
+   * snapshot filter key that carries the same ids. Empty for SUPER_ADMIN and
+   * for anyone unrestricted.
+   */
+  private restrictedSnapshotDims(user: IJwtStaffPayload) {
+    if (this.scope.isExempt(user)) return [];
+    const scope = this.scope.scopeOf(user);
+    const dims = [
+      { key: 'campus_id', ids: scope.campuses },
+      { key: 'segment_id', ids: scope.segments },
+      { key: 'class_id', ids: scope.classes },
+      { key: 'section_id', ids: scope.sections },
+    ] as const;
+    return dims.filter((d) => d.ids.length > 0);
+  }
+
+  /**
+   * TAFSD-482: a snapshot is visible only when every dimension the caller is
+   * scoped on was filtered to ids inside that scope. A snapshot with no campus
+   * filter covers every campus, so a campus-scoped user does not see it.
+   */
+  private snapshotInScope(filters: Prisma.JsonValue, user: IJwtStaffPayload): boolean {
+    const f = (filters ?? {}) as Record<string, unknown>;
+    return this.restrictedSnapshotDims(user).every(({ key, ids }) => {
+      const stored = f[key];
+      return (
+        Array.isArray(stored) &&
+        stored.length > 0 &&
+        stored.every((id) => typeof id === 'number' && ids.includes(id))
+      );
+    });
+  }
+
+  private floorSnapshotFiltersToScope<T extends ListFeeHeadsQueryDto>(dto: T, user: IJwtStaffPayload): T {
+    const out = { ...dto };
+    for (const { key, ids } of this.restrictedSnapshotDims(user)) {
+      if (!out[key]?.length) out[key] = [...ids];
+    }
+    return out;
   }
 
   /**

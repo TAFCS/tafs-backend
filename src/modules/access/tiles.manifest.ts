@@ -448,14 +448,23 @@ const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
 // helpers now AND the universal scope fragment on top, same pattern as
 // students.service.ts.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+// TAFSD-482: one view per report tab. All four are default so the split took
+// nothing away from anyone who already held the tile; an admin narrows a user
+// by unticking a tab. `export` stays one action, and each export route also
+// requires its own tab's view.
 const FINANCIAL_REPORTS_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'View reports', default: true },
+  { id: 'view', label: 'Open Financial Reports', description: 'The page and its filters; each tab is its own permission below', default: true },
 
-  { id: 'export', label: 'Export a report to Excel', implies: ['view'] },
-  { id: 'snapshot.manage', label: 'Create or delete a fee-heads snapshot', implies: ['view'] },
-  { id: 'snapshot.finalize', label: 'Finalize a snapshot', implies: ['view'] },
+  { id: 'fee_heads.view', label: 'Fee Heads tab', description: 'Fee heads (accrual) report and its snapshots', default: true, implies: ['view'] },
+  { id: 'deposits.view', label: 'Deposits tab', description: 'Deposits (cash) report', default: true, implies: ['view'] },
+  { id: 'fee_matrix.view', label: 'Fee Matrix tab', description: 'Student x month fee matrix', default: true, implies: ['view'] },
+  { id: 'defaulters.view', label: 'Defaulters tab', description: 'Defaulters list', default: true, implies: ['view'] },
+
+  { id: 'export', label: 'Export a report to Excel', description: 'Only from the tabs they can open', implies: ['view'] },
+  { id: 'snapshot.manage', label: 'Create or delete a fee-heads snapshot', implies: ['fee_heads.view'] },
+  { id: 'snapshot.finalize', label: 'Finalize a snapshot', implies: ['fee_heads.view'] },
   // TAFSD-384: posts a notice-board notice to one defaulting student's family.
-  { id: 'defaulters.notify', label: 'Notify a defaulter through the app', implies: ['view'] },
+  { id: 'defaulters.notify', label: 'Notify a defaulter through the app', implies: ['defaulters.view'] },
 ];
 
 // GET /by-class is shared with Student Overrides (default-fee suggestions)
