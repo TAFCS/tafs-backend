@@ -1674,6 +1674,8 @@ model leave_requests {
   attachment_url    String?            @db.VarChar(500)
   attachment_type   String?            @db.VarChar(20)
   status            LeaveRequestStatus @default(PENDING)
+  /// TAFSD-462: paid or unpaid, set on approval. Sick leave: the approver's choice; others: leave_types.is_paid.
+  is_paid           Boolean?
   reviewed_by       String?            @db.VarChar(255)
   review_reason     String?            @db.VarChar(500)
   reviewed_at       DateTime?          @db.Timestamp(6)

@@ -265,6 +265,19 @@ export class LeaveRequestsService {
       throw new BadRequestException('Only pending requests can be reviewed');
     }
 
+    // TAFSD-462: sick leave is paid or unpaid by the approver's choice;
+    // every other type by its leave type.
+    const isSick = existing.leave_types.code === 'SICK';
+    if (dto.status === LeaveRequestStatus.APPROVED && isSick && dto.isPaid === undefined) {
+      throw new BadRequestException('Choose Paid or Unpaid to approve sick leave');
+    }
+    const isPaid =
+      dto.status === LeaveRequestStatus.APPROVED
+        ? isSick
+          ? dto.isPaid!
+          : existing.leave_types.is_paid
+        : null;
+
     if (dto.status === LeaveRequestStatus.APPROVED) {
       if (!existing.employee_profiles.campus_id) {
         throw new BadRequestException('Employee has no campus assigned — cannot sync attendance');
@@ -281,6 +294,7 @@ export class LeaveRequestsService {
       where: { id },
       data: {
         status: dto.status,
+        is_paid: isPaid,
         review_reason: dto.reviewReason?.trim() || null,
         reviewed_by: user.sub,
         reviewed_at: new Date(),
@@ -296,6 +310,7 @@ export class LeaveRequestsService {
           where: { id },
           data: {
             status: LeaveRequestStatus.PENDING,
+            is_paid: null,
             review_reason: null,
             reviewed_by: null,
             reviewed_at: null,
@@ -313,10 +328,20 @@ export class LeaveRequestsService {
       old_value: 'PENDING',
       new_value: dto.status,
       changed_by: auditActorLabel(user),
-      note: this.leaveRequestNote(existing, dto.reviewReason?.trim()),
+      note: [
+        this.leaveRequestNote(existing, dto.reviewReason?.trim()),
+        isSick && isPaid !== null ? `Approved as ${isPaid ? 'paid' : 'unpaid'}.` : null,
+      ]
+        .filter(Boolean)
+        .join(' '),
     });
 
-    void this.notifyEmployeeReview(existing, dto.status, id);
+    void this.notifyEmployeeReview(
+      existing,
+      dto.status,
+      id,
+      isSick && isPaid !== null ? `approved (${isPaid ? 'paid' : 'unpaid'})` : undefined,
+    );
     return updated;
   }
 
@@ -340,6 +365,7 @@ export class LeaveRequestsService {
       where: { id },
       data: {
         status: LeaveRequestStatus.REJECTED,
+        is_paid: null,
         review_reason: reason,
         reviewed_by: user.sub,
         reviewed_at: new Date(),
