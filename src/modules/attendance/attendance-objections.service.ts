@@ -57,11 +57,13 @@ export class AttendanceObjectionsService {
     // TAFSD-413: an overridden day's clock events carry negative ids (no real
     // scan behind them) — an objection against one is a day objection.
     const scanId = dto.scan_id && dto.scan_id > 0 ? dto.scan_id : null;
+    let originalScanTime: Date | null = null;
     if (scanId) {
       const scan = await this.prisma.zk_attendance_scans.findFirst({
         where: { id: scanId, employee_id: employee.id },
       });
       if (!scan) throw new BadRequestException('Scan not found for this employee');
+      originalScanTime = scan.scan_time;
     }
 
     const objection = await this.prisma.attendance_objections.create({
@@ -69,6 +71,7 @@ export class AttendanceObjectionsService {
         employee_id: employee.id,
         attendance_date: attendanceDate,
         scan_id: scanId,
+        original_scan_time: originalScanTime,
         claimed_time: claimedTime,
         reason: dto.reason,
         status: AttendanceObjectionStatus.PENDING,
@@ -111,7 +114,7 @@ export class AttendanceObjectionsService {
         : universalCampusIds
       : campusIds;
 
-    return this.prisma.attendance_objections.findMany({
+    const objections = await this.prisma.attendance_objections.findMany({
       where: {
         ...(query.status?.length ? { status: { in: query.status } } : {}),
         employee: {
@@ -128,6 +131,36 @@ export class AttendanceObjectionsService {
       },
       orderBy: { created_at: 'desc' },
     });
+    return this.withDayScans(objections);
+  }
+
+  /**
+   * TAFSD-474: each objection with that day's punches, so a reviewer always
+   * sees what is being objected to — including a "missing clock-out" or
+   * "whole day" objection, which carries no scan_id but usually has punches.
+   */
+  private async withDayScans<T extends { employee_id: number; attendance_date: Date }>(objections: T[]) {
+    if (objections.length === 0) return [];
+    const dayKey = (employeeId: number, date: Date) => `${employeeId}:${date.toISOString().slice(0, 10)}`;
+    const pairs = [...new Map(objections.map((o) => [dayKey(o.employee_id, o.attendance_date), o])).values()];
+    const scans = await this.prisma.zk_attendance_scans.findMany({
+      where: {
+        person_type: 'STAFF',
+        is_duplicate: false,
+        OR: pairs.map((o) => ({ employee_id: o.employee_id, attendance_date: o.attendance_date })),
+      },
+      select: { id: true, employee_id: true, attendance_date: true, scan_time: true, direction: true, work_code: true },
+      orderBy: { scan_time: 'asc' },
+    });
+    const byDay = new Map<string, { id: number; scan_time: Date; direction: string | null; work_code: string | null }[]>();
+    for (const s of scans) {
+      if (s.employee_id == null) continue;
+      const key = dayKey(s.employee_id, s.attendance_date);
+      const bucket = byDay.get(key) ?? [];
+      bucket.push({ id: s.id, scan_time: s.scan_time, direction: s.direction, work_code: s.work_code });
+      byDay.set(key, bucket);
+    }
+    return objections.map((o) => ({ ...o, day_scans: byDay.get(dayKey(o.employee_id, o.attendance_date)) ?? [] }));
   }
 
   async review(id: number, dto: ReviewAttendanceObjectionDto, user: IJwtStaffPayload) {
@@ -179,6 +212,11 @@ export class AttendanceObjectionsService {
         admin_notes: dto.admin_notes ?? null,
         reviewed_by: user.sub,
         reviewed_at: new Date(),
+        // Objections raised before TAFSD-474 have no snapshot; take it now,
+        // before accepting rewrites the scan's time below.
+        ...(existing.original_scan_time == null && existing.scan
+          ? { original_scan_time: existing.scan.scan_time }
+          : {}),
       },
       include: {
         employee: { select: { id: true, full_name: true, employee_code: true } },
