@@ -12,7 +12,7 @@ export interface ExportableAttendanceLine {
   is_mapped: boolean;
   has_punches: boolean;
   daily_breakdown: DayBreakdownEntry[];
-  /** Attendance-matrix lines only; payroll-run lines carry no tenure. */
+  /** Attendance-matrix lines, and payroll-run lines since TAFSD-476. */
   tenure?: CycleTenure;
 }
 

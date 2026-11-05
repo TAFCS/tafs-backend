@@ -157,6 +157,21 @@ export function computeTenureWindows(inputs: TenureInputs): TenureWindow[] {
   return merged;
 }
 
+/**
+ * TAFSD-476: the progression rows that overlap a cycle. valid_from is a full
+ * timestamp, so a row opened later on the cycle's last day (e.g. a timing
+ * change on a join day) is after periodEnd's midnight; compare against the
+ * start of the next day instead, or that day falls out of every window.
+ */
+export function progressionOverlapWhere(periodStart: Date, periodEnd: Date) {
+  const end = toDateOnly(periodEnd);
+  const dayAfterEnd = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate() + 1));
+  return {
+    valid_from: { lt: dayAfterEnd },
+    OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+  };
+}
+
 /** True if the day (date-only) falls inside any of the given tenure windows. */
 export function isDateInAnyWindow(date: Date, windows: TenureWindow[]): boolean {
   const t = toDateOnly(date).getTime();
