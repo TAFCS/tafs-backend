@@ -83,6 +83,23 @@ export class PayrollController {
     return createApiResponse(data, HttpStatus.OK, 'Payroll run un-finalized successfully');
   }
 
+  // TAFSD-478: finalizing no longer shows a run to staff; this does.
+  @Post(':id/release')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#finalize')
+  async release(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.payrollService.releaseRun(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll run released to the staff app');
+  }
+
+  @Post(':id/unrelease')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#finalize')
+  async unrelease(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.payrollService.unreleaseRun(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll run hidden from the staff app');
+  }
+
   @Delete(':id')
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
   @RequireAction('hr.payroll#delete')

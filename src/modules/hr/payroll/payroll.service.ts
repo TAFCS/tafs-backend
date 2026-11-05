@@ -14,6 +14,7 @@ import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } f
 import { computePayrollWindow, monthShareOfDay, partialMonthDivisor } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels, tenureLabel } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
+import { isStaffVisibleRun, STAFF_VISIBLE_RUN } from './staff-visibility.util';
 import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, progressionOverlapWhere, totalWindowDays, TenureWindow } from './tenure-window.util';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
@@ -1608,7 +1609,8 @@ export class PayrollService {
     // Test runs are throwaway/repeatable — no reason to page a test employee
     // every time one gets finalized during testing. (run.is_test is already
     // rejected above, kept for parity with finalizeRun's notification guard.)
-    if (!run.is_test && line.employee_profiles.user_id) {
+    // TAFSD-478: staff only hear about a run once it's released to them.
+    if (!run.is_test && run.released_to_staff_at && line.employee_profiles.user_id) {
       const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
       void this.employeeNoticeBoard
         .createPayrollNotice(employeeId, line.employee_profiles.user_id, 'Payroll finalized', `Your payroll for ${periodLabel} has been finalized.`, runId)
@@ -2762,8 +2764,9 @@ export class PayrollService {
     });
 
     // Test runs are throwaway/repeatable — no reason to page a test employee
-    // every time one gets finalized during testing.
-    if (!run.is_test) {
+    // every time one gets finalized during testing. TAFSD-478: nor before the
+    // run is released to staff; releaseRun sends the notices then.
+    if (!run.is_test && run.released_to_staff_at) {
       const title = 'Payroll finalized';
       const body = `Your payroll for ${periodLabel} has been finalized.`;
       for (const line of finalizedNow) {
@@ -2777,6 +2780,66 @@ export class PayrollService {
 
     const updatedRun = await this.getRun(id, user);
     return { ...updatedRun, finalize_summary: { finalized: finalizedNow.length, skipped } };
+  }
+
+  /**
+   * TAFSD-478: show a run in the staff app. Separate from finalizing, so a
+   * cycle can be finalized and checked (e.g. against the manual payroll)
+   * before employees see it. Employees with a finalized line hear about it now.
+   */
+  async releaseRun(id: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({
+      where: { id },
+      include: { payroll_run_lines: { include: { employee_profiles: { select: { user_id: true } } } } },
+    });
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${id} not found`);
+    }
+    if (run.is_test) throw new BadRequestException('Test runs are never shown in the staff app.');
+    if (run.released_to_staff_at) throw new BadRequestException('This payroll run is already released to the staff app.');
+    const finalized = run.payroll_run_lines.filter((l) => l.finalized_at);
+    if (finalized.length === 0) {
+      throw new BadRequestException('Finalize at least one employee before releasing this run to the staff app.');
+    }
+
+    await this.prisma.payroll_runs.update({
+      where: { id },
+      data: { released_to_staff_at: new Date(), released_by: auditActorLabel(user) },
+    });
+    const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(id),
+      action: 'RELEASED_TO_STAFF',
+      changed_by: auditActorLabel(user),
+      note: `Released to the staff app (period ${periodLabel}, ${finalized.length} finalized line(s)).`,
+    });
+    for (const line of finalized) {
+      const userId = line.employee_profiles.user_id;
+      if (!userId) continue;
+      void this.employeeNoticeBoard
+        .createPayrollNotice(line.employee_id, userId, 'Payroll finalized', `Your payroll for ${periodLabel} has been finalized.`, id)
+        .catch((err) => this.logger.error(`Failed to send payroll-released notice for employee ${line.employee_id}`, err));
+    }
+    return this.getRun(id, user);
+  }
+
+  /** TAFSD-478: hide a released run from the staff app again. Notices already sent stay. */
+  async unreleaseRun(id: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id } });
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${id} not found`);
+    }
+    if (!run.released_to_staff_at) throw new BadRequestException('This payroll run is not released to the staff app.');
+    await this.prisma.payroll_runs.update({ where: { id }, data: { released_to_staff_at: null, released_by: null } });
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(id),
+      action: 'UNRELEASED_FROM_STAFF',
+      changed_by: auditActorLabel(user),
+      note: 'Hidden from the staff app again.',
+    });
+    return this.getRun(id, user);
   }
 
   /**
@@ -2874,7 +2937,7 @@ export class PayrollService {
     }
 
     const lines = await this.prisma.payroll_run_lines.findMany({
-      where: { employee_id: profile.id },
+      where: { employee_id: profile.id, payroll_runs: STAFF_VISIBLE_RUN },
       include: {
         payroll_runs: {
           select: {
@@ -2950,6 +3013,8 @@ export class PayrollService {
             period_start: true,
             period_end: true,
             status: true,
+            is_test: true,
+            released_to_staff_at: true,
             campuses: { select: { id: true, campus_name: true } },
           },
         },
@@ -2967,7 +3032,7 @@ export class PayrollService {
         },
       },
     });
-    if (!line) throw new NotFoundException('Payroll line not found for this period');
+    if (!line || !isStaffVisibleRun(line.payroll_runs)) throw new NotFoundException('Payroll line not found for this period');
 
     // eobi_employer_cost/sessi_employer_cost are deliberately excluded from
     // the spread below — internal-only, must never reach an employee. See
@@ -3270,7 +3335,8 @@ export class PayrollService {
 
     // Same rationale as finalizeRun: test runs are repeated constantly
     // during testing and shouldn't page the shared test employees each time.
-    if (!run.is_test && line.employee_profiles.user_id) {
+    // TAFSD-478: and nothing reaches staff before the run is released.
+    if (!run.is_test && run.released_to_staff_at && line.employee_profiles.user_id) {
       const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
       void this.employeeNoticeBoard
         .createPayrollNotice(

@@ -1732,6 +1732,10 @@ model payroll_runs {
   /// hand-picked employees over any date range. An employee is never on two
   /// non-test runs whose dates overlap.
   kind                   PayrollRunKind           @default(REGULAR)
+  /// TAFSD-478: when the run was released to the staff app. Finalizing no
+  /// longer shows a run to employees; null = staff can't see it yet.
+  released_to_staff_at   DateTime?                @db.Timestamp(6)
+  released_by            String?                  @db.VarChar(255)
   payroll_flags          payroll_flags[]
   payroll_run_exclusions payroll_run_exclusions[]
   payroll_run_lines      payroll_run_lines[]
