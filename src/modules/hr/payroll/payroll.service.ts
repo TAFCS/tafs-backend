@@ -14,6 +14,16 @@ import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } f
 import { computePayrollWindow, monthShareOfDay, partialMonthDivisor } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels, tenureLabel } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
+import {
+  applyDeductionWaiverChange,
+  DEDUCTION_KINDS,
+  DeductionKind,
+  DeductionWaivers,
+  describeDeductionWaivers,
+  hasDeductionWaivers,
+  isDeductionWaived,
+  normalizeDeductionWaivers,
+} from './deduction-waivers.util';
 import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, progressionOverlapWhere, totalWindowDays, TenureWindow } from './tenure-window.util';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
@@ -61,6 +71,9 @@ type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' 
 
 export interface DayBreakdownEntry {
   date: string;
+  /** TAFSD-472: deductions switched off on this day for this payroll run only. */
+  waived_deductions?: DeductionKind[];
+  waiver_reason?: string;
   is_working_day: boolean;
   day_type: string | null;
   day_description: string | null;
@@ -129,6 +142,7 @@ interface ComputedLine {
   eobi_waived: boolean;
   sessi_waived: boolean;
   income_tax_waived: boolean;
+  deduction_waivers: DeductionWaivers;
   daily_breakdown: DayBreakdownEntry[];
 }
 
@@ -137,12 +151,26 @@ export interface StatutoryWaivers {
   eobi: boolean;
   sessi: boolean;
   income_tax: boolean;
+  /** TAFSD-471/472: attendance deductions switched off, by type or by day. */
+  deductions?: DeductionWaivers;
 }
+
+type StatutoryKey = 'eobi' | 'sessi' | 'income_tax';
 
 const NO_WAIVERS: StatutoryWaivers = { eobi: false, sessi: false, income_tax: false };
 
-function waiversOf(line: { eobi_waived: boolean; sessi_waived: boolean; income_tax_waived: boolean }): StatutoryWaivers {
-  return { eobi: line.eobi_waived, sessi: line.sessi_waived, income_tax: line.income_tax_waived };
+function waiversOf(line: {
+  eobi_waived: boolean;
+  sessi_waived: boolean;
+  income_tax_waived: boolean;
+  deduction_waivers?: Prisma.JsonValue;
+}): StatutoryWaivers {
+  return {
+    eobi: line.eobi_waived,
+    sessi: line.sessi_waived,
+    income_tax: line.income_tax_waived,
+    deductions: normalizeDeductionWaivers(line.deduction_waivers),
+  };
 }
 
 interface DetectedFlag {
@@ -833,37 +861,52 @@ export class PayrollService {
     // or leaves mid-cycle is still paid only for the days they were employed.
     const alwaysFullPay = employee.always_full_pay === true;
     const noAttendanceCuts = fullPayOverride || alwaysFullPay;
+    // TAFSD-471/472: deductions switched off on this run, by type or by day.
+    // With any switched off, every deduction is summed day by day (the same
+    // arithmetic as the varying-pay path), skipping what is waived.
+    const deductionWaivers = normalizeDeductionWaivers(waivers.deductions);
+    const byDay = payVaries || hasDeductionWaivers(deductionWaivers);
+    const unlessWaived = (kind: DeductionKind, pick: (d: DayBreakdownEntry) => number) => (d: DayBreakdownEntry) =>
+      isDeductionWaived(deductionWaivers, kind, d.date) ? 0 : pick(d);
     const absenceDeduction = noAttendanceCuts
       ? zero
-      : payVaries
-        ? sumDays((d) => (d.classification === 'ABSENT' || d.classification === 'UNPAID_LEAVE' ? 1 : 0))
+      : byDay
+        ? sumDays(unlessWaived('ABSENCE', (d) => (d.classification === 'ABSENT' || d.classification === 'UNPAID_LEAVE' ? 1 : 0)))
         : dailyRate.times(absentDays + unpaidLeaveDays);
     const halfDayDeduction = noAttendanceCuts
       ? zero
-      : payVaries
-        ? sumDays((d) => (d.classification === 'HALF_DAY' ? 0.5 : 0))
+      : byDay
+        ? sumDays(unlessWaived('HALF_DAY', (d) => (d.classification === 'HALF_DAY' ? 0.5 : 0)))
         : dailyRate.dividedBy(2).times(halfDays);
     const lateDeduction = noAttendanceCuts
       ? zero
-      : payVaries
+      : byDay
         ? minuteRateDivisor
-          ? sumDays((d) => d.late_minutes).dividedBy(minuteRateDivisor)
+          ? sumDays(unlessWaived('LATE', (d) => d.late_minutes)).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalLateMinutes);
     const earlyLeaveDeduction = noAttendanceCuts
       ? zero
-      : payVaries
+      : byDay
         ? minuteRateDivisor
-          ? sumDays((d) => d.early_leave_minutes ?? 0).dividedBy(minuteRateDivisor)
+          ? sumDays(unlessWaived('EARLY_LEAVE', (d) => d.early_leave_minutes ?? 0)).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalEarlyLeaveMinutes);
     const breakDeduction = noAttendanceCuts
       ? zero
-      : payVaries
+      : byDay
         ? minuteRateDivisor
-          ? sumDays((d) => d.break_minutes).dividedBy(minuteRateDivisor)
+          ? sumDays(unlessWaived('BREAK', (d) => d.break_minutes)).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalBreakMinutes);
+    // Mark the days so the breakdown shows what was let off.
+    for (const d of dailyBreakdown) {
+      const off = DEDUCTION_KINDS.filter((k) => deductionWaivers.days[d.date]?.includes(k));
+      if (off.length > 0) {
+        d.waived_deductions = off;
+        if (deductionWaivers.reasons[d.date]) d.waiver_reason = deductionWaivers.reasons[d.date];
+      }
+    }
     // Prorates the salary for every day the employee was off the roster — the
     // superset of three cases:
     //   * joined mid-cycle   — days before the join date
@@ -960,6 +1003,7 @@ export class PayrollService {
       full_pay_override: fullPayOverride,
       always_full_pay: alwaysFullPay,
       eobi_waived: waivers.eobi,
+      deduction_waivers: deductionWaivers,
       sessi_waived: waivers.sessi,
       income_tax_waived: waivers.income_tax,
       daily_breakdown: dailyBreakdown,
@@ -1360,7 +1404,7 @@ export class PayrollService {
 
     const existingLine = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
-      select: { finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+      select: { finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true, deduction_waivers: true },
     });
     if (existingLine?.finalized_at) {
       throw new BadRequestException("This employee's payroll line is already finalized and cannot be regenerated.");
@@ -1447,14 +1491,14 @@ export class PayrollService {
     await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const before = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
-      select: { eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+      select: { eobi_waived: true, sessi_waived: true, income_tax_waived: true, deduction_waivers: true },
     });
     if (!before) throw new NotFoundException('This employee has no line on this payroll run.');
     const result = await this.regenerateLine(runId, employeeId, user, undefined, waivers);
 
-    const labels: Record<keyof StatutoryWaivers, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
+    const labels: Record<StatutoryKey, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
     const prev = waiversOf(before);
-    const changes = (Object.keys(labels) as (keyof StatutoryWaivers)[])
+    const changes = (Object.keys(labels) as StatutoryKey[])
       .filter((k) => waivers[k] !== undefined && waivers[k] !== prev[k])
       .map((k) => `${labels[k]} ${waivers[k] ? 'waived' : 'applied again'}`);
     if (changes.length > 0) {
@@ -1468,6 +1512,53 @@ export class PayrollService {
         note: `${changes.join(', ')} for employee ${employeeId} on this payroll run only.`,
       });
     }
+    return result;
+  }
+
+  /**
+   * TAFSD-471/472: switch attendance deductions off (or back on) for one
+   * employee on this run only — by type for the whole cycle, or on single
+   * days (e.g. let off a late arrival on 14 Oct). The attendance itself is
+   * untouched. Recomputes the line; a finalized line is locked.
+   */
+  async setDeductionWaivers(
+    runId: number,
+    employeeId: number,
+    change: { types?: DeductionKind[]; date?: string; day_kinds?: DeductionKind[]; reason?: string },
+    user: IJwtStaffPayload,
+  ) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
+    const [before, run] = await Promise.all([
+      this.prisma.payroll_run_lines.findUnique({
+        where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+        select: { deduction_waivers: true },
+      }),
+      this.prisma.payroll_runs.findUnique({ where: { id: runId }, select: { period_start: true, period_end: true } }),
+    ]);
+    if (!before || !run) throw new NotFoundException('This employee has no line on this payroll run.');
+    if (change.types === undefined && change.date === undefined) {
+      throw new BadRequestException('Say which deductions to switch off: types for the whole cycle, or a date.');
+    }
+    if (change.date) {
+      const start = run.period_start.toISOString().slice(0, 10);
+      const end = run.period_end.toISOString().slice(0, 10);
+      if (change.date < start || change.date > end) {
+        throw new BadRequestException(`${change.date} is not in this payroll cycle (${start} to ${end}).`);
+      }
+    }
+    const prev = normalizeDeductionWaivers(before.deduction_waivers);
+    const next = applyDeductionWaiverChange(prev, change);
+    const result = await this.regenerateLine(runId, employeeId, user, undefined, { deductions: next });
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINE_DEDUCTION_WAIVERS',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: auditActorLabel(user),
+      note: `Employee ${employeeId}, this payroll run only: ${describeDeductionWaivers(next)} (was: ${describeDeductionWaivers(prev)}).`,
+    });
     return result;
   }
 
@@ -1528,8 +1619,8 @@ export class PayrollService {
       : { touched: 0 };
     const requested = dto.employee_ids ? dto.employee_ids.length : openLines.length;
 
-    const labels: Record<keyof StatutoryWaivers, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
-    const changes = (Object.keys(patch) as (keyof StatutoryWaivers)[]).map(
+    const labels: Record<StatutoryKey, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
+    const changes = (Object.keys(patch) as StatutoryKey[]).map(
       (k) => `${labels[k]} ${patch[k] ? 'waived' : 'applied again'}`,
     );
     void this.auditLogs.log({
@@ -1962,7 +2053,7 @@ export class PayrollService {
       if (existing) {
         const old = await this.prisma.payroll_run_lines.findMany({
           where: { payroll_run_id: run.id },
-          select: { employee_id: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+          select: { employee_id: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true, deduction_waivers: true },
         });
         old.forEach((l) => keptWaivers.set(l.employee_id, waiversOf(l)));
         await this.prisma.payroll_run_lines.deleteMany({ where: { payroll_run_id: run.id } });
@@ -2063,7 +2154,7 @@ export class PayrollService {
     const [existingLines, exclusions] = await Promise.all([
       this.prisma.payroll_run_lines.findMany({
         where: { payroll_run_id: runId },
-        select: { employee_id: true, finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+        select: { employee_id: true, finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true, deduction_waivers: true },
       }),
       this.prisma.payroll_run_exclusions.findMany({
         where: { payroll_run_id: runId },
