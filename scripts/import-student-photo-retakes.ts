@@ -27,6 +27,7 @@
  *
  * Reports: scripts/out/photo-retakes-<stamp>[-dryrun].{json,csv}
  */
+import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import * as fs from 'node:fs/promises';
@@ -51,6 +52,7 @@ type Status =
   | 'no_gr_in_filename'
   | 'student_not_enrolled'
   | 'duplicate_student'
+  | 'duplicate_copy'
   | 'error';
 
 interface Row {
@@ -218,11 +220,21 @@ async function main() {
     row.status = 'matched';
   }
 
-  // One photo per student per batch — if two files land on the same student, a human picks.
+  // One photo per student per batch. Byte-identical copies (the same photo
+  // saved in two class folders) count once; genuinely different photos for the
+  // same student are left for a human to pick.
   const byCc = new Map<number, Row[]>();
   for (const r of rows) if (r.status === 'matched') byCc.set(r.cc!, [...(byCc.get(r.cc!) ?? []), r]);
   for (const group of byCc.values()) {
-    if (group.length > 1) for (const r of group) { r.status = 'duplicate_student'; r.note = group.map((g) => g.file).join(' | '); }
+    if (group.length < 2) continue;
+    const hashes = await Promise.all(group.map(async (r) => photoContentHash(await fs.readFile(path.join(root, r.file)))));
+    const files = group.map((g) => g.file).join(' | ');
+    if (new Set(hashes).size === 1) {
+      for (const r of group.slice(1)) { r.status = 'duplicate_copy'; r.note = `Identical to ${group[0].file}`; }
+      group[0].note = `Same image also at: ${group.slice(1).map((g) => g.file).join(' | ')}`;
+    } else {
+      for (const r of group) { r.status = 'duplicate_student'; r.note = files; }
+    }
   }
 
   // Already imported? (same bytes already in the student's history)
@@ -278,7 +290,7 @@ async function main() {
   const outDir = path.join(process.cwd(), 'scripts', 'out');
   await fs.mkdir(outDir, { recursive: true });
   const base = path.join(outDir, `photo-retakes-${stamp}${apply ? '' : '-dryrun'}`);
-  const order: Status[] = ['error', 'name_mismatch', 'gr_ambiguous', 'duplicate_student', 'student_not_enrolled', 'gr_not_found', 'no_gr_in_filename', 'matched', 'already_uploaded', 'uploaded'];
+  const order: Status[] = ['error', 'name_mismatch', 'gr_ambiguous', 'duplicate_student', 'duplicate_copy', 'student_not_enrolled', 'gr_not_found', 'no_gr_in_filename', 'matched', 'already_uploaded', 'uploaded'];
   rows.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.file.localeCompare(b.file));
   await fs.writeFile(`${base}.json`, JSON.stringify({ root, apply, counts, rows }, null, 2));
   await fs.writeFile(`${base}.csv`, toCsv(rows));
