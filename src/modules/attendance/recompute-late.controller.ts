@@ -169,6 +169,8 @@ export class RecomputeLateController {
         skipStudents: !includeStudents,
         skipStaff: !includeStaff,
         employeeWhere,
+        // Steps 1–2 below rebuild every punched day in the range anyway.
+        rebuildFromScans: false,
       });
       staleDayOffCleared += synced.cleared_staff + synced.cleared_students;
     }
