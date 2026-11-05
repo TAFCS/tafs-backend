@@ -1819,6 +1819,9 @@ model payroll_run_lines {
   loan_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
   after_leaving_deduction       Decimal                                  @default(0) @db.Decimal(12, 2)
   full_pay_override             Boolean                                  @default(false)
+  /// TAFSD-471/472: attendance deductions switched off on this run only — by
+  /// type for the whole cycle, or on single days. See deduction-waivers.util.
+  deduction_waivers             Json                                     @default("{}")
   // TAFSD-437: the profile's always_full_pay as it stood when this line was computed.
   always_full_pay               Boolean                                  @default(false)
   // TAFSD-383: waived for this line (this cycle) only, on top of the
