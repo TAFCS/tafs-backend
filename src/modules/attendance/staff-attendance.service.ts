@@ -24,7 +24,7 @@ import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import { effectiveManualStatus } from './manual-late.util';
 import { ZK_DEVICES } from './zk-device-health.util';
-import { describeCycleTenure, offRollReason } from '../hr/payroll/tenure-window.util';
+import { describeCycleTenure, offRollReason, progressionOverlapWhere } from '../hr/payroll/tenure-window.util';
 
 const STATUS_LABELS: Partial<Record<StaffAttendanceStatus, string>> = {
   PRESENT: 'Present',
@@ -568,8 +568,7 @@ export class StaffAttendanceService {
       this.prisma.employee_progression_periods.findMany({
         where: {
           employee_id: employee.id,
-          valid_from: { lte: periodEnd },
-          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+          ...progressionOverlapWhere(periodStart, periodEnd),
         },
         select: {
           employee_id: true,

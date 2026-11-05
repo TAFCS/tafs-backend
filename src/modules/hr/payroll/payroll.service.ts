@@ -14,7 +14,7 @@ import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } f
 import { computePayrollWindow, monthShareOfDay, partialMonthDivisor } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels, tenureLabel } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
-import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, totalWindowDays, TenureWindow } from './tenure-window.util';
+import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, progressionOverlapWhere, totalWindowDays, TenureWindow } from './tenure-window.util';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
 import { calculateMonthlyIncomeTax, calculateStatutoryContributions } from '../payroll-rules/payroll-tax-calculator.util';
@@ -1235,12 +1235,11 @@ export class PayrollService {
       }),
       // Progression periods that overlap the payroll cycle — the source of
       // truth for mid-cycle join/leave/rejoin windows (see tenure-window.util).
-      // Overlap condition: valid_from <= periodEnd AND (valid_to IS NULL OR valid_to > periodStart).
+      // Overlap: valid_from before the day after periodEnd AND (valid_to IS NULL OR valid_to > periodStart).
       this.prisma.employee_progression_periods.findMany({
         where: {
           employee_id: { in: employeeIds },
-          valid_from: { lte: periodEnd },
-          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+          ...progressionOverlapWhere(periodStart, periodEnd),
         },
         select: {
           employee_id: true,
@@ -2349,8 +2348,7 @@ export class PayrollService {
       this.prisma.employee_progression_periods.findMany({
         where: {
           employee_id: { in: employees.map((e) => e.id) },
-          valid_from: { lte: periodEnd },
-          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+          ...progressionOverlapWhere(periodStart, periodEnd),
         },
         select: { employee_id: true, employment_status: true, valid_from: true, valid_to: true },
       }),
@@ -2576,7 +2574,56 @@ export class PayrollService {
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${id} not found`);
     }
-    return this.attachDerivedFieldsToLines(run);
+    const withFields = this.attachDerivedFieldsToLines(run);
+    const tenure = await this.cycleTenureByEmployee(
+      run.payroll_run_lines.map((l) => l.employee_id),
+      run.period_start,
+      run.period_end,
+    );
+    return {
+      ...withFields,
+      payroll_run_lines: withFields.payroll_run_lines.map((line) => ({
+        ...line,
+        tenure: tenure.get(line.employee_id),
+      })),
+    };
+  }
+
+  /**
+   * TAFSD-476: each employee's tenure inside a cycle (joined on, left on,
+   * rejoined), from the same rows payroll prorates with, so the run can say
+   * "Joined 5 Oct" instead of a blanket "Left mid-cycle".
+   */
+  private async cycleTenureByEmployee(employeeIds: number[], periodStart: Date, periodEnd: Date) {
+    if (employeeIds.length === 0) return new Map<number, ReturnType<typeof describeCycleTenure>>();
+    const [employees, progressionRows] = await Promise.all([
+      this.prisma.employee_profiles.findMany({
+        where: { id: { in: employeeIds } },
+        select: { id: true, join_date: true, date_of_leaving: true },
+      }),
+      this.prisma.employee_progression_periods.findMany({
+        where: { employee_id: { in: employeeIds }, ...progressionOverlapWhere(periodStart, periodEnd) },
+        select: { employee_id: true, employment_status: true, valid_from: true, valid_to: true },
+      }),
+    ]);
+    const rowsByEmployee = new Map<number, typeof progressionRows>();
+    for (const row of progressionRows) {
+      const bucket = rowsByEmployee.get(row.employee_id);
+      if (bucket) bucket.push(row);
+      else rowsByEmployee.set(row.employee_id, [row]);
+    }
+    return new Map(
+      employees.map((e) => [
+        e.id,
+        describeCycleTenure({
+          periodStart,
+          periodEnd,
+          joinDate: e.join_date,
+          dateOfLeaving: e.date_of_leaving,
+          progression: rowsByEmployee.get(e.id),
+        }),
+      ]),
+    );
   }
 
   /**
