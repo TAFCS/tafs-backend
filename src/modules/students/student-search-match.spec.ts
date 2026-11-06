@@ -17,12 +17,48 @@ function capture() {
 
 describe('findStudentSearchHits', () => {
   it('a phone in any format searches phones by its core digits', async () => {
-    for (const q of ['0300-2920040', '+923002920040', '3002920040']) {
+    for (const q of [
+      '0300-2920040',
+      '03002920040',
+      '+923002920040',
+      '923002920040',
+      '3002920040',
+      '0300 2920040',
+      '+92 300 2920040',
+      '0300.2920040',
+      '0300/2920040',
+    ]) {
       const { prisma, calls } = capture();
       await findStudentSearchHits(prisma as any, q);
       expect(calls[0].sql).toMatch(/primary_phone/);
       expect(calls[0].values).toContain('%3002920040%');
     }
+  });
+
+  it('searches the last 7 digits of a phone number', async () => {
+    const { prisma, calls } = capture();
+    await findStudentSearchHits(prisma as any, '2920040');
+    expect(calls[0].sql).toMatch(/primary_phone/);
+    expect(calls[0].values).toContain('%2920040%');
+  });
+
+  it('preserves leading zero when searching 7-digit subscriber numbers starting with zero', async () => {
+    const { prisma, calls } = capture();
+    await findStudentSearchHits(prisma as any, '0133333');
+    expect(calls[0].sql).toMatch(/primary_phone/);
+    expect(calls[0].values).toContain('%0133333%');
+  });
+
+  it('searches partial phone numbers with country code or trunk prefix', async () => {
+    const { prisma: p1, calls: c1 } = capture();
+    await findStudentSearchHits(p1 as any, '+92 300 2920');
+    expect(c1[0].sql).toMatch(/primary_phone/);
+    expect(c1[0].values).toContain('%3002920%');
+
+    const { prisma: p2, calls: c2 } = capture();
+    await findStudentSearchHits(p2 as any, '0300 2920');
+    expect(c2[0].sql).toMatch(/primary_phone/);
+    expect(c2[0].values).toContain('%3002920%');
   });
 
   it('a CNIC with dashes searches CNICs by digits', async () => {

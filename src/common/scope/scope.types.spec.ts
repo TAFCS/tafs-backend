@@ -2,7 +2,9 @@ import { StaffRole } from '@prisma/client';
 import {
   EMPTY_SCOPE,
   effectiveScopeOf,
+  findSubordinates,
   isFullyUnrestricted,
+  NO_MATCH_ID,
   scopeAllows,
   scopeFromEntries,
   whereForEmployees,
@@ -68,6 +70,15 @@ describe('scope semantics', () => {
     it('never scopes employees by class or section', () => {
       const fragment = whereForEmployees(scope({ classes: [7], sections: [9] }));
       expect(fragment).toEqual({});
+    });
+
+    it('narrows by subordinate ids when reporting hierarchy is enforced', () => {
+      expect(whereForEmployees(scope({ subordinates: [10, 20] }))).toEqual({
+        id: { in: [10, 20] },
+      });
+      expect(whereForEmployees(scope({ subordinates: [NO_MATCH_ID] }))).toEqual({
+        id: { in: [NO_MATCH_ID] },
+      });
     });
   });
 
@@ -137,5 +148,60 @@ describe('effectiveScopeOf', () => {
 
   it('never restricts SUPER_ADMIN', () => {
     expect(effectiveScopeOf({ role: StaffRole.SUPER_ADMIN, campusId: 1, scope: { ...empty, campuses: [2] } })).toEqual(empty);
+  });
+});
+
+describe('findSubordinates', () => {
+  it('finds direct subordinates', () => {
+    const lines = [
+      { employee_id: 2, manager_id: 1 },
+      { employee_id: 3, manager_id: 1 },
+    ];
+    expect(findSubordinates(1, lines).sort()).toEqual([2, 3]);
+    expect(findSubordinates(2, lines)).toEqual([]);
+  });
+
+  it('traverses multi-level descendants', () => {
+    // 1 -> 2 -> 3 -> 4
+    const lines = [
+      { employee_id: 2, manager_id: 1 },
+      { employee_id: 3, manager_id: 2 },
+      { employee_id: 4, manager_id: 3 },
+    ];
+    expect(findSubordinates(1, lines).sort()).toEqual([2, 3, 4]);
+    expect(findSubordinates(2, lines).sort()).toEqual([3, 4]);
+    expect(findSubordinates(3, lines)).toEqual([4]);
+    expect(findSubordinates(4, lines)).toEqual([]);
+  });
+
+  it('excludes peers and superiors', () => {
+    // Manager 1 has reports 2 and 3 (peers)
+    const lines = [
+      { employee_id: 2, manager_id: 1 },
+      { employee_id: 3, manager_id: 1 },
+    ];
+    // Person 2 cannot act on person 3 (peer) or person 1 (superior)
+    expect(findSubordinates(2, lines)).toEqual([]);
+  });
+
+  it('safely breaks cycles and excludes caller and superiors', () => {
+    // 1 -> 2 -> 1 (cycle)
+    const lines = [
+      { employee_id: 2, manager_id: 1 },
+      { employee_id: 1, manager_id: 2 },
+    ];
+    expect(findSubordinates(1, lines)).toEqual([]);
+    expect(findSubordinates(2, lines)).toEqual([]);
+  });
+
+  it('supports multiple managers for a single employee', () => {
+    // 1 -> 3, 2 -> 3, 3 -> 4
+    const lines = [
+      { employee_id: 3, manager_id: 1 },
+      { employee_id: 3, manager_id: 2 },
+      { employee_id: 4, manager_id: 3 },
+    ];
+    expect(findSubordinates(1, lines).sort()).toEqual([3, 4]);
+    expect(findSubordinates(2, lines).sort()).toEqual([3, 4]);
   });
 });

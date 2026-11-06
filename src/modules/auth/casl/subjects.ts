@@ -13,6 +13,7 @@ export type AppSubjects =
   | 'Challan'
   | 'Class'
   | 'Section'
+  | 'House'
   | 'StudentFee'
   | 'Voucher'
   | 'Employee'

@@ -12,7 +12,7 @@ import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interfa
 import { createApiResponse } from '../../../utils/serializer.util';
 import { PayrollService } from './payroll.service';
 import { GenerateCustomPayrollRunDto, GeneratePayrollRunDto, ListPayrollRunsQueryDto } from './dto/payroll.dto';
-import { BulkStatutoryWaiversDto, DecidePayrollFlagDto, DisbursePayrollLineDto, ExcludePayrollLineDto, SetFullPayDto, SetStatutoryWaiversDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
+import { BulkStatutoryWaiversDto, DecidePayrollFlagDto, SetDeductionWaiversDto, DisbursePayrollLineDto, ExcludePayrollLineDto, SetFullPayDto, SetStatutoryWaiversDto, SettlePayrollLineDto } from './dto/payroll-self.dto';
 
 @ApiTags('HR Payroll')
 @ApiBearerAuth()
@@ -81,6 +81,23 @@ export class PayrollController {
   async unfinalize(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
     const data = await this.payrollService.unfinalizeRun(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Payroll run un-finalized successfully');
+  }
+
+  // TAFSD-478: finalizing no longer shows a run to staff; this does.
+  @Post(':id/release')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#finalize')
+  async release(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.payrollService.releaseRun(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll run released to the staff app');
+  }
+
+  @Post(':id/unrelease')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#finalize')
+  async unrelease(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+    const data = await this.payrollService.unreleaseRun(id, user);
+    return createApiResponse(data, HttpStatus.OK, 'Payroll run hidden from the staff app');
   }
 
   @Delete(':id')
@@ -201,6 +218,20 @@ export class PayrollController {
   ) {
     const data = await this.payrollService.setStatutoryWaivers(runId, employeeId, dto, user);
     return createApiResponse(data, HttpStatus.OK, 'Statutory deductions updated for this cycle');
+  }
+
+  // TAFSD-471/472: deductions off for the cycle by type, or on single days.
+  @Post(':runId/lines/:employeeId/deduction-waivers')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Payroll'))
+  @RequireAction('hr.payroll#line_manage')
+  async setDeductionWaivers(
+    @Param('runId', ParseIntPipe) runId: number,
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: SetDeductionWaiversDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.payrollService.setDeductionWaivers(runId, employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Deductions updated for this cycle');
   }
 
   @Post(':runId/lines/:employeeId/include')

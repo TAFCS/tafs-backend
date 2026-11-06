@@ -8,6 +8,32 @@ const INT4_MAX = 2_147_483_647;
 export type StudentSearchHit = { cc: number; rank: number; matched_on: string };
 
 /**
+ * Strips trunk or international dialing prefixes to get the core phone digits
+ * that match against any phone formatting in the database.
+ *
+ * Examples:
+ * - "03001234567" -> "3001234567"
+ * - "0300-1234567" -> "3001234567"
+ * - "+923001234567" -> "3001234567"
+ * - "923001234567" -> "3001234567"
+ * - "3001234567" -> "3001234567"
+ * - "1234567" -> "1234567" (last 7 digits)
+ * - "0133333" -> "0133333" (last 7 digits starting with 0 are preserved)
+ * - "+92 300 1234" -> "3001234" (partial)
+ * - "0300 1234" -> "3001234" (partial)
+ */
+export function extractPhoneCore(digits: string): string {
+  if (digits.length < 7) return '';
+  let d = digits;
+  if (d.startsWith('0092')) d = d.slice(4);
+  else if (d.startsWith('92') && d.length >= 9) d = d.slice(2);
+  // Strip leading trunk '0' when 8 or more digits (e.g. 0300..., 021..., 051...).
+  // Do NOT strip leading '0' when exactly 7 digits, as it is a local subscriber number.
+  if (d.startsWith('0') && d.length >= 8) d = d.slice(1);
+  return d;
+}
+
+/**
  * TAFSD-344: every student a search text could mean, best match first.
  *
  * Matches the student (CC exactly, name, GR, B-form / CNIC, own phones), their
@@ -30,10 +56,10 @@ export async function findStudentSearchHits(
   if (!q) return [];
   const like = `%${q}%`;
   const digits = q.replace(/\D/g, '');
-  const onlyDigits = /^[\d\s\-+()]+$/.test(q) && digits.length > 0;
+  const onlyDigits = /^[\d\s\-+()./]+$/.test(q) && digits.length > 0;
   const number = /^\d+$/.test(q) && Number(q) <= INT4_MAX ? Number(q) : null;
   // A phone fragment without its country / trunk prefix.
-  const phoneCore = normalizePkPhone(digits).replace(/^0/, '');
+  const phoneCore = extractPhoneCore(digits);
   const phoneLike = `%${phoneCore}%`;
   const digitsLike = `%${digits}%`;
   const D = (col: Prisma.Sql) => Prisma.sql`regexp_replace(coalesce(${col}::text, ''), '\\D', '', 'g')`;
@@ -58,24 +84,25 @@ export async function findStudentSearchHits(
   }
   if (!onlyDigits && q.length >= 3) {
     parts.push(Prisma.sql`
-      SELECT sg.student_id, 6, initcap(lower(coalesce(sg.relationship, 'Guardian'))) || ': ' || g.full_name
+      SELECT sg.student_id, 6, initcap(lower(coalesce(sg.relationship, 'Guardian'))) || ': ' || coalesce(nullif(trim(g.full_name), ''), 'Unknown')
       FROM public.student_guardians sg JOIN public.guardians g ON g.id = sg.guardian_id
       WHERE g.deleted_at IS NULL AND g.full_name ILIKE ${like}`);
   }
   if (onlyDigits && digits.length >= 5) {
     parts.push(Prisma.sql`
-      SELECT sg.student_id, 7, initcap(lower(coalesce(sg.relationship, 'Guardian'))) || ' CNIC: ' || g.full_name
+      SELECT sg.student_id, 7, initcap(lower(coalesce(sg.relationship, 'Guardian'))) || ' CNIC: ' || coalesce(nullif(trim(g.full_name), ''), 'Unknown')
       FROM public.student_guardians sg JOIN public.guardians g ON g.id = sg.guardian_id
       WHERE g.deleted_at IS NULL AND ${D(Prisma.sql`g.cnic`)} LIKE ${digitsLike}`);
   }
   if (onlyDigits && phoneCore.length >= 7) {
     parts.push(Prisma.sql`
-      SELECT sg.student_id, 8, initcap(lower(coalesce(sg.relationship, 'Guardian'))) || ' phone: ' || g.full_name
+      SELECT sg.student_id, 8, initcap(lower(coalesce(sg.relationship, 'Guardian'))) || ' phone: ' || coalesce(nullif(trim(g.full_name), ''), 'Unknown')
       FROM public.student_guardians sg JOIN public.guardians g ON g.id = sg.guardian_id
       WHERE g.deleted_at IS NULL AND (
             ${D(Prisma.sql`g.primary_phone`)} LIKE ${phoneLike}
          OR ${D(Prisma.sql`g.whatsapp_number`)} LIKE ${phoneLike}
          OR ${D(Prisma.sql`g.work_phone`)} LIKE ${phoneLike}
+         OR ${D(Prisma.sql`g.fax_number`)} LIKE ${phoneLike}
          OR ${D(Prisma.sql`g.additional_phones`)} LIKE ${phoneLike})`);
   }
   {
@@ -86,7 +113,7 @@ export async function findStudentSearchHits(
     if (onlyDigits && phoneCore.length >= 7) famConds.push(Prisma.sql`${D(Prisma.sql`f.home_phone`)} LIKE ${phoneLike}`);
     if (famConds.length) {
       parts.push(Prisma.sql`
-        SELECT s.cc, 9, 'Family: ' || f.household_name || ' (#' || f.id || ')'
+        SELECT s.cc, 9, 'Family: ' || coalesce(nullif(trim(f.household_name), ''), 'Family') || ' (#' || f.id || ')'
         FROM public.students s JOIN public.families f ON f.id = s.family_id
         WHERE f.deleted_at IS NULL AND (${Prisma.join(famConds, ' OR ')})`);
     }

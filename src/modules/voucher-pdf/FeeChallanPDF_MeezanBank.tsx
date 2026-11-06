@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { formatAcademicSessionLabel } from '../../common/utils/academic-labels';
 
+import { voucherStampLines, type VoucherStampLine } from './voucher-stamp';
 const LOGO_PATH = path.join(process.cwd(), 'src', 'assets', 'logo.png');
 const LOGO_BUFFER = fs.readFileSync(LOGO_PATH);
 
@@ -106,14 +107,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
-    payImmediateStamp: {
-        textAlign: 'center',
-        color: '#dc2626',
-        fontSize: 80,
-        fontWeight: 'bold',
-        opacity: 0.16,
+    // TAFSD-419/420: the lines stack, so the box rotates rather than each line.
+    voucherStamp: {
+        alignItems: 'center',
         transform: 'rotate(-35deg)',
-        letterSpacing: 6,
+    },
+    voucherStampLine: {
+        textAlign: 'center',
+        fontWeight: 'bold',
         fontFamily: 'Helvetica-Bold',
     },
     waivedStamp: {
@@ -516,6 +517,10 @@ interface FeeChallanPDFProps {
     paidStamp?: boolean;
     /** When true, a diagonal PAY IMMEDIATELY watermark is stamped across each challan copy */
     payImmediate?: boolean;
+    /** TAFSD-420: add the FINAL NOTICE line to the stamp */
+    payImmediateRepeat?: boolean;
+    /** TAFSD-419: add the REVISED line to the stamp */
+    revised?: boolean;
     /** When true, a diagonal WAIVED watermark is stamped across the page */
     waived?: boolean;
     siblings?: {
@@ -853,7 +858,31 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
         </View>
         );
 
-        export const FeeChallanPDF = ({student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, waived, arrearsHistory, installmentsHistory, paymentHistory, qrUrl}: FeeChallanPDFProps) => (
+/**
+ * The one diagonal stamp for the page (TAFSD-419/420). It must render after the
+ * challan content: react-pdf has no z-index, so document order decides what sits
+ * on top. Nested the same way as the WAIVED watermark so it can't force a blank
+ * second page. Not `fixed`: it belongs to page 1 only.
+ */
+const VoucherStamp = ({ lines }: { lines: VoucherStampLine[] }) =>
+    lines.length === 0 ? null : (
+        <View style={styles.payImmediateWatermark}>
+            <View style={styles.payImmediateWatermarkInner}>
+                <View style={styles.voucherStamp}>
+                    {lines.map((line) => (
+                        <Text
+                            key={line.text}
+                            style={[styles.voucherStampLine, { fontSize: line.fontSize, letterSpacing: line.letterSpacing, color: line.color, opacity: line.opacity }]}
+                        >
+                            {line.text}
+                        </Text>
+                    ))}
+                </View>
+            </View>
+        </View>
+    );
+
+        export const FeeChallanPDF = ({student, details, fees, totalAmount, siblings, showDiscount, paidStamp, payImmediate, payImmediateRepeat, revised, waived, arrearsHistory, installmentsHistory, paymentHistory, qrUrl}: FeeChallanPDFProps) => (
         <Document>
             <Page size={[841.89, 595.28]} wrap={false} style={styles.page}>
                 {/* Left 85% for the 3 Challan Copies */}
@@ -1041,13 +1070,7 @@ const ChallanCopy = ({ copyType, student, details, fees, totalAmount, siblings, 
                 {/* One PAY IMMEDIATELY watermark across the entire physical page (not per-copy).
                 Rendered LAST, so it paints on top of everything — react-pdf has no z-index and
                 stacks purely in document order. */}
-                {payImmediate && (
-                    <View style={styles.payImmediateWatermark}>
-                        <View style={styles.payImmediateWatermarkInner}>
-                            <Text style={styles.payImmediateStamp}>PAY IMMEDIATELY</Text>
-                        </View>
-                    </View>
-                )}
+                <VoucherStamp lines={voucherStampLines({ payImmediate, payImmediateRepeat, revised })} />
 
                 {waived && (
                     <View style={styles.payImmediateWatermark}>

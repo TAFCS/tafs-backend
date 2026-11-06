@@ -238,11 +238,40 @@ model deposits {
   bank_code           String?               @db.VarChar(20)
   bank_name           String?               @db.VarChar(100)
   date_of_return      DateTime?             @db.Date
+  /// TAFSD-421. Part of the cash in total_amount that went to family credit.
+  /// Applied to fees = total_amount - excess_amount.
+  excess_amount       Decimal               @default(0) @db.Decimal(12, 2)
+  /// TAFSD-421. Paid from family credit: brought in no new cash, so it must
+  /// never be counted as cash collected.
+  from_credit         Boolean               @default(false)
   deposit_allocations deposit_allocations[]
   students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([deposit_date], map: "idx_deposits_deposit_date")
   @@index([student_id], map: "idx_deposits_student_id")
+}
+
+/// TAFSD-421. Append-only: the balance is the sum of the rows, and undoing an
+/// entry adds an opposite row. student_id, voucher_id and deposit_id are plain
+/// ids rather than foreign keys, so the history outlives what it points at.
+model family_credit_ledger {
+  id         Int      @id @default(autoincrement())
+  family_id  Int
+  /// + credit in, - credit used.
+  amount     Decimal  @db.Decimal(12, 2)
+  /// EXCESS_DEPOSIT, APPLIED_TO_VOUCHER, EXCESS_REVERSED, APPLICATION_REVERSED.
+  kind       String   @db.VarChar(30)
+  student_id Int?
+  voucher_id Int?
+  deposit_id Int?
+  notes      String?
+  created_by String?  @db.VarChar(100)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  families   families @relation(fields: [family_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([family_id, id], map: "idx_family_credit_ledger_family")
+  @@index([deposit_id], map: "idx_family_credit_ledger_deposit")
+  @@index([student_id], map: "idx_family_credit_ledger_student")
 }
 
 model families {
@@ -267,6 +296,7 @@ model families {
   students                 students[]
   support_tickets          support_tickets[]
   voucher_notifications    voucher_notifications[]
+  family_credit_ledger     family_credit_ledger[]
 
   // TAFSD-399: parent login and signup look families up by exact email.
   @@index([email], map: "idx_families_email")
@@ -363,6 +393,7 @@ model houses {
   id                          Int                           @id @default(autoincrement())
   house_name                  String?                       @db.VarChar(100)
   house_color                 String?                       @db.VarChar(50)
+  is_active                   Boolean                       @default(true)
   student_progression_periods student_progression_periods[]
   students                    students[]
 }
@@ -734,91 +765,106 @@ model student_siblings {
 }
 
 model students {
-  cc                          Int                           @id @default(autoincrement())
-  family_id                   Int?
-  campus_id                   Int?
-  gr_number                   String?                       @db.VarChar(50)
-  dob                         DateTime?                     @db.Date
-  gender                      String?                       @db.VarChar(10)
-  nationality                 String?                       @db.VarChar(50)
-  religion                    String?                       @db.VarChar(50)
-  identification_marks        String?
-  medical_info                String?
-  interests                   String?
-  admission_age_years         Int?
-  status                      student_status
-  created_at                  DateTime?                     @default(now()) @db.Timestamp(6)
-  deleted_at                  DateTime?                     @db.Timestamp(6)
-  photograph_url              String?
-  country                     String?                       @db.VarChar(50)
-  province                    String?                       @db.VarChar(50)
-  city                        String?                       @db.VarChar(50)
-  physical_impairment         String?
-  consent_publicity           Boolean?                      @default(false)
-  school_leaving_cert_url     String?
-  achievements_cert_url       String?
-  photo_blue_bg_url           String?
-  whatsapp_number             String?                       @db.VarChar(20)
-  primary_phone               String?                       @db.VarChar(20)
-  email                       String?                       @db.VarChar(100)
-  class_id                    Int?
-  section_id                  Int?
-  house_id                    Int?
-  doa                         DateTime?                     @db.Date
-  full_name                   String                        @db.VarChar(100)
-  place_of_birth              String?                       @db.VarChar(100)
-  primary_phone_country_code  String?                       @default("+92") @db.VarChar(10)
-  whatsapp_country_code       String?                       @default("+92") @db.VarChar(10)
-  academic_year               String?                       @db.VarChar(10)
-  home_phone                  String?                       @db.VarChar(20)
-  is_complementary            Boolean                       @default(false)
-  is_fee_endowment            Boolean                       @default(false)
-  fee_start_term              String?                       @db.VarChar(10)
-  graduated_from_class_id     Int?
-  cnic                        String?                       @unique @db.VarChar(15)
-  not_pursuing                Boolean                       @default(false)
-  quick_admission_meta        Json?
-  graduated_at                DateTime?                     @db.Date
-  complementary_reason        String?                       @db.VarChar(500)
-  complementary_until         DateTime?                     @db.Date
-  fee_endowment_reason        String?                       @db.VarChar(500)
-  fee_endowment_until         DateTime?                     @db.Date
+  cc                            Int                           @id @default(autoincrement())
+  family_id                     Int?
+  campus_id                     Int?
+  gr_number                     String?                       @db.VarChar(50)
+  dob                           DateTime?                     @db.Date
+  gender                        String?                       @db.VarChar(10)
+  nationality                   String?                       @db.VarChar(50)
+  religion                      String?                       @db.VarChar(50)
+  identification_marks          String?
+  medical_info                  String?
+  interests                     String?
+  admission_age_years           Int?
+  status                        student_status
+  created_at                    DateTime?                     @default(now()) @db.Timestamp(6)
+  deleted_at                    DateTime?                     @db.Timestamp(6)
+  photograph_url                String?
+  country                       String?                       @db.VarChar(50)
+  province                      String?                       @db.VarChar(50)
+  city                          String?                       @db.VarChar(50)
+  physical_impairment           String?
+  consent_publicity             Boolean?                      @default(false)
+  school_leaving_cert_url       String?
+  achievements_cert_url         String?
+  photo_blue_bg_url             String?
+  whatsapp_number               String?                       @db.VarChar(20)
+  primary_phone                 String?                       @db.VarChar(20)
+  email                         String?                       @db.VarChar(100)
+  class_id                      Int?
+  section_id                    Int?
+  house_id                      Int?
+  doa                           DateTime?                     @db.Date
+  full_name                     String                        @db.VarChar(100)
+  place_of_birth                String?                       @db.VarChar(100)
+  primary_phone_country_code    String?                       @default("+92") @db.VarChar(10)
+  whatsapp_country_code         String?                       @default("+92") @db.VarChar(10)
+  academic_year                 String?                       @db.VarChar(10)
+  home_phone                    String?                       @db.VarChar(20)
+  is_complementary              Boolean                       @default(false)
+  is_fee_endowment              Boolean                       @default(false)
+  fee_start_term                String?                       @db.VarChar(10)
+  graduated_from_class_id       Int?
+  cnic                          String?                       @unique @db.VarChar(15)
+  not_pursuing                  Boolean                       @default(false)
+  quick_admission_meta          Json?
+  graduated_at                  DateTime?                     @db.Date
+  complementary_reason          String?                       @db.VarChar(500)
+  complementary_until           DateTime?                     @db.Date
+  fee_endowment_reason          String?                       @db.VarChar(500)
+  fee_endowment_until           DateTime?                     @db.Date
+  /// TAFSD-455: more benefit categories, and when the home reminder starts for each.
+  is_fee_endowment_mtf          Boolean                       @default(false)
+  fee_endowment_mtf_reason      String?                       @db.VarChar(500)
+  fee_endowment_mtf_until       DateTime?                     @db.Date
+  is_sehm_e_sadaat              Boolean                       @default(false)
+  sehm_e_sadaat_reason          String?                       @db.VarChar(500)
+  sehm_e_sadaat_until           DateTime?                     @db.Date
+  is_sehm_e_imam                Boolean                       @default(false)
+  sehm_e_imam_reason            String?                       @db.VarChar(500)
+  sehm_e_imam_until             DateTime?                     @db.Date
+  fee_endowment_remind_from     DateTime?                     @db.Date
+  complementary_remind_from     DateTime?                     @db.Date
+  fee_endowment_mtf_remind_from DateTime?                     @db.Date
+  sehm_e_sadaat_remind_from     DateTime?                     @db.Date
+  sehm_e_imam_remind_from       DateTime?                     @db.Date
   /// School Leaving Certificate serial — independent of CC / GR.
-  slc_number                  Int?                          @unique
-  graduated_academic_year     String?                       @db.VarChar(10)
-  attendance_notifications    attendance_notifications[]
-  attendance_roll_records     attendance_roll_records[]
-  attendance_student_daily    attendance_student_daily[]
-  audit_logs                  audit_logs[]
-  calendar_notifications      calendar_notifications[]
-  deposits                    deposits[]
-  device_user_mappings        device_user_mappings[]
-  postdated_cheques           postdated_cheques[]
-  relatives_attending_tafs    relatives_attending_tafs[]
-  student_academic_history    student_academic_history[]
-  student_activities          student_activities[]
-  student_admissions          student_admissions[]
-  student_alevel_details      student_alevel_details?
-  student_fee_bundles         student_fee_bundles[]
-  student_fee_installments    student_fee_installments[]
-  student_fees                student_fees[]
-  student_flags               student_flags[]
-  student_guardians           student_guardians[]
-  student_languages           student_languages[]
-  student_previous_schools    student_previous_schools[]
-  student_progression_periods student_progression_periods[]
-  student_subject_enrollments student_subject_enrollments[]
-  campuses                    campuses?                     @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes                     classes?                      @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  families                    families?                     @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  graduated_from_class        classes?                      @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
-  houses                      houses?                       @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections                    sections?                     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  student_photo_history       student_photo_history[]
-  support_tickets             support_tickets[]
-  voucher_notifications       voucher_notifications[]
-  vouchers                    vouchers[]
-  zk_attendance_scans         zk_attendance_scans[]
+  slc_number                    Int?                          @unique
+  graduated_academic_year       String?                       @db.VarChar(10)
+  attendance_notifications      attendance_notifications[]
+  attendance_roll_records       attendance_roll_records[]
+  attendance_student_daily      attendance_student_daily[]
+  audit_logs                    audit_logs[]
+  calendar_notifications        calendar_notifications[]
+  deposits                      deposits[]
+  device_user_mappings          device_user_mappings[]
+  postdated_cheques             postdated_cheques[]
+  relatives_attending_tafs      relatives_attending_tafs[]
+  student_academic_history      student_academic_history[]
+  student_activities            student_activities[]
+  student_admissions            student_admissions[]
+  student_alevel_details        student_alevel_details?
+  student_fee_bundles           student_fee_bundles[]
+  student_fee_installments      student_fee_installments[]
+  student_fees                  student_fees[]
+  student_flags                 student_flags[]
+  student_guardians             student_guardians[]
+  student_languages             student_languages[]
+  student_previous_schools      student_previous_schools[]
+  student_progression_periods   student_progression_periods[]
+  student_subject_enrollments   student_subject_enrollments[]
+  campuses                      campuses?                     @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                       classes?                      @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  families                      families?                     @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  graduated_from_class          classes?                      @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
+  houses                        houses?                       @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                      sections?                     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  student_photo_history         student_photo_history[]
+  support_tickets               support_tickets[]
+  voucher_notifications         voucher_notifications[]
+  vouchers                      vouchers[]
+  zk_attendance_scans           zk_attendance_scans[]
 
   @@index([campus_id], map: "idx_students_campus_id")
   @@index([class_id], map: "idx_students_class_id")
@@ -1045,6 +1091,13 @@ model vouchers {
   /// issue_date+4 due/validity dates and the PDF's "PAY IMMEDIATELY" watermark.
   /// Never recomputed on reprint — see VouchersService.create() / splitPartiallyPaid().
   pay_immediately           Boolean                     @default(false)
+  /// TAFSD-420. Frozen at creation: a PAY IMMEDIATELY voucher whose previous
+  /// voucher was also PAY IMMEDIATELY and still unpaid. Adds the FINAL NOTICE
+  /// line to the stamp. Never recomputed on reprint.
+  pay_immediately_repeat    Boolean                     @default(false)
+  /// TAFSD-419. The voucher replaces an earlier one, so every reprint carries
+  /// the REVISED stamp. Set at issuance, on a split's balance, or on regenerate.
+  is_revised                Boolean                     @default(false)
   deposit_allocations       deposit_allocations[]
   voucher_arrear_surcharges voucher_arrear_surcharges[]
   voucher_heads             voucher_heads[]
@@ -1706,6 +1759,8 @@ model leave_requests {
   attachment_url    String?            @db.VarChar(500)
   attachment_type   String?            @db.VarChar(20)
   status            LeaveRequestStatus @default(PENDING)
+  /// TAFSD-462: paid or unpaid, set on approval. Sick leave: the approver's choice; others: leave_types.is_paid.
+  is_paid           Boolean?
   reviewed_by       String?            @db.VarChar(255)
   review_reason     String?            @db.VarChar(500)
   reviewed_at       DateTime?          @db.Timestamp(6)
@@ -1764,6 +1819,10 @@ model payroll_runs {
   /// hand-picked employees over any date range. An employee is never on two
   /// non-test runs whose dates overlap.
   kind                   PayrollRunKind           @default(REGULAR)
+  /// TAFSD-478: when the run was released to the staff app. Finalizing no
+  /// longer shows a run to employees; null = staff can't see it yet.
+  released_to_staff_at   DateTime?                @db.Timestamp(6)
+  released_by            String?                  @db.VarChar(255)
   payroll_flags          payroll_flags[]
   payroll_run_exclusions payroll_run_exclusions[]
   payroll_run_lines      payroll_run_lines[]
@@ -1847,6 +1906,9 @@ model payroll_run_lines {
   loan_deduction                Decimal                                  @default(0) @db.Decimal(12, 2)
   after_leaving_deduction       Decimal                                  @default(0) @db.Decimal(12, 2)
   full_pay_override             Boolean                                  @default(false)
+  /// TAFSD-471/472: attendance deductions switched off on this run only — by
+  /// type for the whole cycle, or on single days. See deduction-waivers.util.
+  deduction_waivers             Json                                     @default("{}")
   // TAFSD-437: the profile's always_full_pay as it stood when this line was computed.
   always_full_pay               Boolean                                  @default(false)
   // TAFSD-383: waived for this line (this cycle) only, on top of the
@@ -1964,6 +2026,8 @@ model attendance_objections {
   attendance_date DateTime                  @db.Date
   scan_id         Int?
   claimed_time    DateTime                  @db.Timestamp(6)
+  /// TAFSD-474: the objected punch's time when the objection was raised — accepting rewrites the scan itself.
+  original_scan_time DateTime?              @db.Timestamp(6)
   reason          String                    @db.VarChar(500)
   status          AttendanceObjectionStatus @default(PENDING)
   reviewed_by     String?

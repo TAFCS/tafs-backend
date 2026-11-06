@@ -235,6 +235,14 @@ const SECTIONS_ACTIONS: TileAction[] = [
   { id: 'delete', label: 'Delete a section', implies: ['view'] },
 ];
 
+const HOUSES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View houses', default: true },
+
+  { id: 'create', label: 'Add a house', implies: ['view'] },
+  { id: 'edit', label: 'Edit houses (rename, color, active state)', implies: ['view'] },
+  { id: 'delete', label: 'Delete a house', implies: ['view'] },
+];
+
 // `edit` covers renaming a segment AND the campus-map (which segments run at
 // which campus — scoped: a campus-scoped admin may only map their own campus).
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
@@ -440,14 +448,23 @@ const PEOPLE_ACCESS_ACTIONS: TileAction[] = [
 // helpers now AND the universal scope fragment on top, same pattern as
 // students.service.ts.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+// TAFSD-482: one view per report tab. All four are default so the split took
+// nothing away from anyone who already held the tile; an admin narrows a user
+// by unticking a tab. `export` stays one action, and each export route also
+// requires its own tab's view.
 const FINANCIAL_REPORTS_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'View reports', default: true },
+  { id: 'view', label: 'Open Financial Reports', description: 'The page and its filters; each tab is its own permission below', default: true },
 
-  { id: 'export', label: 'Export a report to Excel', implies: ['view'] },
-  { id: 'snapshot.manage', label: 'Create or delete a fee-heads snapshot', implies: ['view'] },
-  { id: 'snapshot.finalize', label: 'Finalize a snapshot', implies: ['view'] },
+  { id: 'fee_heads.view', label: 'Fee Heads tab', description: 'Fee heads (accrual) report and its snapshots', default: true, implies: ['view'] },
+  { id: 'deposits.view', label: 'Deposits tab', description: 'Deposits (cash) report', default: true, implies: ['view'] },
+  { id: 'fee_matrix.view', label: 'Fee Matrix tab', description: 'Student x month fee matrix', default: true, implies: ['view'] },
+  { id: 'defaulters.view', label: 'Defaulters tab', description: 'Defaulters list', default: true, implies: ['view'] },
+
+  { id: 'export', label: 'Export a report to Excel', description: 'Only from the tabs they can open', implies: ['view'] },
+  { id: 'snapshot.manage', label: 'Create or delete a fee-heads snapshot', implies: ['fee_heads.view'] },
+  { id: 'snapshot.finalize', label: 'Finalize a snapshot', implies: ['fee_heads.view'] },
   // TAFSD-384: posts a notice-board notice to one defaulting student's family.
-  { id: 'defaulters.notify', label: 'Notify a defaulter through the app', implies: ['view'] },
+  { id: 'defaulters.notify', label: 'Notify a defaulter through the app', implies: ['defaulters.view'] },
 ];
 
 // GET /by-class is shared with Student Overrides (default-fee suggestions)
@@ -565,6 +582,8 @@ const RECEIVE_DEPOSIT_ACTIONS: TileAction[] = [
   { id: 'split', label: 'Split a partially paid voucher', implies: ['view'] },
   { id: 'print', label: 'Print or regenerate a voucher PDF', implies: ['view'] },
   { id: 'main_receipt', label: 'Print the main-column receipt', description: 'Special admin workflow', implies: ['view'] },
+  { id: 'record_excess', label: 'Record excess payments as family credit', description: 'When a family pays more than the voucher, keep the extra as credit', implies: ['record'] },
+  { id: 'pay_from_credit', label: 'Pay a voucher from family credit', description: 'Use money the family already paid, with no new cash', implies: ['record'] },
 ];
 
 // Transfers had NO guard of any kind: TransferController carried no
@@ -1008,6 +1027,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'school-setup.campuses', module: 'school-setup', label: 'Campuses', description: 'Branch locations and details', href: '/campuses', capabilities: ['academic.campuses.view'], actions: CAMPUSES_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.classes', module: 'school-setup', label: 'Classes', description: 'Grade and year configuration', href: '/classes', capabilities: ['academic.classes.view'], actions: CLASSES_ACTIONS, legacyFullAccessCapabilities: ['academic.classes.edit'] },
   { id: 'school-setup.sections', module: 'school-setup', label: 'Sections', description: 'Class subdivisions', href: '/sections', capabilities: ['academic.sections.view'], actions: SECTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.sections.edit'] },
+  { id: 'school-setup.houses', module: 'school-setup', label: 'Houses', description: 'Student house configuration', href: '/houses', capabilities: ['academic.campuses.view'], actions: HOUSES_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.segments', module: 'school-setup', label: 'Segments', description: 'Wings that group classes and staff', href: '/segments', capabilities: ['academic.classes.view'], actions: SEGMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
   { id: 'school-setup.section_allocation', module: 'school-setup', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'], actions: SECTION_ALLOCATION_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },

@@ -36,7 +36,7 @@ export class LeaveAttendanceSyncService {
       throw new BadRequestException('Leave type is not configured');
     }
 
-    const status = this.leaveCodeToStatus(leaveCode);
+    const status = this.leaveCodeToStatus(leaveCode, request.is_paid);
     const notes = this.leaveNote(requestId);
     const campusId = request.employee_profiles.campus_id;
     let synced = 0;
@@ -91,9 +91,10 @@ export class LeaveAttendanceSyncService {
     return deleted.count;
   }
 
-  private leaveCodeToStatus(code: string): StaffAttendanceStatus {
+  /** TAFSD-462: sick leave approved as unpaid is marked UNPAID_LEAVE, which payroll deducts. */
+  private leaveCodeToStatus(code: string, isPaid: boolean | null): StaffAttendanceStatus {
     switch (code) {
-      case 'SICK':    return StaffAttendanceStatus.SICK_LEAVE;
+      case 'SICK':    return isPaid === false ? StaffAttendanceStatus.UNPAID_LEAVE : StaffAttendanceStatus.SICK_LEAVE;
       case 'CASUAL':  return StaffAttendanceStatus.CASUAL_LEAVE;
       case 'ANNUAL':  return StaffAttendanceStatus.ANNUAL_LEAVE;
       case 'UNPAID':  return StaffAttendanceStatus.UNPAID_LEAVE;

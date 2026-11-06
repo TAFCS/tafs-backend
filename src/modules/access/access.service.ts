@@ -11,7 +11,7 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { computeEffectiveAccess } from './access.effective';
 import { CreateAccessPackDto, SetUserAccessDto, UpdateAccessPackDto } from './dto/access.dto';
 import { ScopeService } from '../../common/scope/scope.service';
-import { EMPTY_SCOPE, type UserScope } from '../../common/scope/scope.types';
+import { EMPTY_SCOPE, SCOPE_DIMENSION_FIELDS, type UserScope } from '../../common/scope/scope.types';
 import { isSuperAdmin } from '../../common/auth/super-admin';
 import {
   actionKey,
@@ -56,6 +56,11 @@ export type ProposedAccess = {
   actionGrants?: { tileId: string; actionId: string; allow: boolean }[];
   userPerms?: { key: string; granted: boolean }[];
 };
+
+/** A pack's tile ids, minus tiles retired from the manifest. */
+function liveTileIds(tiles: { tile_id: string }[]) {
+  return tiles.map((t) => t.tile_id).filter((id) => MANIFEST_TILE_IDS.has(id));
+}
 
 /** Pack action rows grouped by pack, minus actions retired from the manifest. */
 function groupLiveActions(rows: { pack_id: string; tile_id: string; action_id: string }[]) {
@@ -474,13 +479,13 @@ export class AccessService {
   assertGrantableScope(actor: IJwtStaffPayload, granted: Partial<UserScope>, prefix = 'You may not grant scope wider than your own') {
     if (isSuperAdmin(actor)) return;
     const mine = this.scopeService.scopeOf(actor);
-    for (const field of Object.keys(EMPTY_SCOPE) as (keyof UserScope)[]) {
-      if (mine[field].length === 0) continue;
+    for (const field of SCOPE_DIMENSION_FIELDS) {
+      if ((mine[field]?.length ?? 0) === 0) continue;
       const requested = granted[field] ?? [];
       if (requested.length === 0) {
         throw new ForbiddenException(`${prefix}: ${field} would be unrestricted.`);
       }
-      const outside = requested.filter((id) => !mine[field].includes(id));
+      const outside = requested.filter((id) => !mine[field]?.includes(id));
       if (outside.length > 0) {
         throw new ForbiddenException(`${prefix}: ${field} ${outside.join(', ')}.`);
       }
@@ -630,10 +635,13 @@ export class AccessService {
         name: p.name,
         description: p.description,
         is_system: p.is_system,
-        tileIds: p.tiles.map((t) => t.tile_id),
+        tileIds: liveTileIds(p.tiles),
         tileActions: actionsByPack.get(p.id) ?? [],
       })),
-      grants: grants.map((g) => ({
+      // Retired tiles (no longer in the manifest) are left out for the same
+      // reason as retired actions below: the editor resends what it reads, and
+      // assertTilesExist rejects a retired id (TAFSD-480).
+      grants: grants.filter((g) => MANIFEST_TILE_IDS.has(g.tile_id)).map((g) => ({
         tileId: g.tile_id,
         allow: g.allow,
         note: g.note,
@@ -694,10 +702,14 @@ export class AccessService {
       where: { user_id: userId },
       select: { pack_id: true },
     });
-    const existingGrants = await this.prisma.user_tile_grants.findMany({
-      where: { user_id: userId },
-      select: { tile_id: true, allow: true },
-    });
+    // Retired tiles are dropped so a save that omits them (the editor never
+    // sees them) doesn't count as a grant change.
+    const existingGrants = (
+      await this.prisma.user_tile_grants.findMany({
+        where: { user_id: userId },
+        select: { tile_id: true, allow: true },
+      })
+    ).filter((g) => MANIFEST_TILE_IDS.has(g.tile_id));
     this.assertUserAccessFieldsEditable(actingUser, dto, packIds, grants, existingPacks, existingGrants);
     const existingActionGrants = await readUntilMigrated(
       () =>
@@ -813,8 +825,8 @@ export class AccessService {
       const previous = await this.scopeService.resolve(userId);
       const next = await this.scopeService.setScope(userId, dto.scope);
       const summarise = (sc: UserScope) =>
-        (Object.keys(EMPTY_SCOPE) as (keyof UserScope)[])
-          .map((k) => `${k}=[${[...sc[k]].sort((a, b) => a - b).join(',')}]`)
+        SCOPE_DIMENSION_FIELDS
+          .map((k) => `${k}=[${[...(sc[k] ?? [])].sort((a, b) => a - b).join(',')}]`)
           .join(' ');
       const before = summarise(previous);
       const after = summarise(next);
@@ -943,7 +955,11 @@ export class AccessService {
       ),
     ]);
     const actionsByPack = groupLiveActions(actionRows);
-    return packs.map((p) => ({ ...p, tileActions: actionsByPack.get(p.id) ?? [] }));
+    return packs.map((p) => ({
+      ...p,
+      tiles: p.tiles.filter((t) => MANIFEST_TILE_IDS.has(t.tile_id)),
+      tileActions: actionsByPack.get(p.id) ?? [],
+    }));
   }
 
   async createPack(dto: CreateAccessPackDto, actorLabel?: string, actingUser?: IJwtStaffPayload) {

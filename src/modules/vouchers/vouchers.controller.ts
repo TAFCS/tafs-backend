@@ -317,7 +317,7 @@ export class VouchersController {
         @Req() req: any,
         @CurrentUser() user: IJwtStaffPayload,
     ) {
-        // Download and Regenerate are separate grants. Hold/notify only take
+        // Download and Regenerate are separate grants. Hold/notify/REVISED only take
         // effect on a regenerate (opts.force), so a downloader cannot set them.
         if (dto.regenerate === true && !holdsAny(user, PDF_REGENERATE_ACTIONS)) {
             throw new ForbiddenException('Missing permission: Regenerate voucher PDF.');
@@ -333,6 +333,8 @@ export class VouchersController {
                 force: dto.regenerate === true,
                 send_notification: dto.send_notification,
                 requires_release: dto.requires_release,
+                is_revised: dto.is_revised,
+                changedBy: String(req?.user?.username || req?.user?.id || generatedByName || 'system'),
                 releasedBy: req?.user?.username || req?.user?.id || generatedByName,
             },
         );
@@ -373,6 +375,40 @@ export class VouchersController {
         };
     }
 
+    /** TAFSD-421: the voucher's family and credit balance, for the deposit screen. */
+    @Get(':id/family-credit')
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAnyAction('finance.receive_deposit#view', 'finance.vouchers#view')
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'Challan') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async getFamilyCreditForVoucher(
+        @Param('id', ParseIntPipe) id: number,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        return { success: true, data: await this.vouchersService.getFamilyCreditForVoucher(id, user) };
+    }
+
+    /** TAFSD-421: a family's credit balance and ledger, newest first. */
+    @Get('family-credit/:familyId')
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAnyAction('finance.receive_deposit#view', 'finance.vouchers#view')
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'Challan') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async getFamilyCreditLedger(
+        @Param('familyId', ParseIntPipe) familyId: number,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        return { success: true, data: await this.vouchersService.getFamilyCreditLedger(familyId, user) };
+    }
+
     @Post(':id/deposit')
     @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @RequireAction('finance.receive_deposit#record')
@@ -388,6 +424,13 @@ export class VouchersController {
         @Req() req: any,
         @CurrentUser() user: IJwtStaffPayload,
     ) {
+        // TAFSD-421: both are separate grants that can be revoked on their own.
+        if (dto.excess_amount != null && !holdsAny(user, ['finance.receive_deposit#record_excess'])) {
+            throw new ForbiddenException('Missing permission: Record excess payments as family credit.');
+        }
+        if (dto.pay_from_credit === true && !holdsAny(user, ['finance.receive_deposit#pay_from_credit'])) {
+            throw new ForbiddenException('Missing permission: Pay a voucher from family credit.');
+        }
         const changedBy = req.user?.username || req.user?.id || 'system';
         const voucher = await this.vouchersService.recordDeposit(id, dto, changedBy, user);
         return {

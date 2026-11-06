@@ -492,24 +492,44 @@ export class AuthService {
           };
         }),
       },
-      students: students.map((student) => ({
-        cc: student.cc,
-        fullName: student.full_name,
-        grNumber: student.gr_number,
-        photographUrl: student.photograph_url,
-        campus: student.campuses?.campus_name ?? null,
-        campusCode: student.campuses?.campus_code ?? null,
-        className: student.classes?.description ?? null,
-        classCode: student.classes?.class_code ?? null,
-        section: student.sections?.description ?? null,
-        academicYear: student.academic_year,
-        campusId: student.campus_id,
-        classId: student.class_id,
-        sectionId: student.section_id,
-        enrollmentStatus: student.status,
-        graduatedFromClass: student.graduated_from_class?.description ?? null,
-        graduatedAt: student.graduated_at,
-      })),
+      students: students.map((student) => {
+        const studentPendingRequests = pendingRequests.filter(
+          (r) =>
+            (r.requested_data as any)?.request_type === 'STUDENT_UPDATE' &&
+            Number((r.requested_data as any)?.student_cc) === student.cc,
+        );
+        const studentPendingFields: string[] = [];
+        for (const req of studentPendingRequests) {
+          const data = req.requested_data as Record<string, any>;
+          if (data?.changes && typeof data.changes === 'object') {
+            Object.keys(data.changes).forEach((key) => {
+              if (!studentPendingFields.includes(key)) {
+                studentPendingFields.push(key);
+              }
+            });
+          }
+        }
+
+        return {
+          cc: student.cc,
+          fullName: student.full_name,
+          grNumber: student.gr_number,
+          photographUrl: student.photograph_url,
+          campus: student.campuses?.campus_name ?? null,
+          campusCode: student.campuses?.campus_code ?? null,
+          className: student.classes?.description ?? null,
+          classCode: student.classes?.class_code ?? null,
+          section: student.sections?.description ?? null,
+          academicYear: student.academic_year,
+          campusId: student.campus_id,
+          classId: student.class_id,
+          sectionId: student.section_id,
+          enrollmentStatus: student.status,
+          graduatedFromClass: student.graduated_from_class?.description ?? null,
+          graduatedAt: student.graduated_at,
+          pendingFields: studentPendingFields,
+        };
+      }),
     };
   }
 

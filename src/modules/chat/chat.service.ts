@@ -453,9 +453,28 @@ export class ChatService {
     return { acknowledged: true };
   }
 
-  async getAcknowledgments(messageId: string) {
+  async getAcknowledgments(messageId: string, user: IJwtStaffPayload) {
+    const message = await this.prisma.chat_messages.findUnique({
+      where: { id: messageId },
+      include: {
+        conversation: { select: { family_id: true } },
+      },
+    });
+
+    if (!message) {
+      throw new NotFoundException(`Message #${messageId} not found`);
+    }
+
+    if (message.conversation?.family_id) {
+      await this.assertFamilyVisible(user, message.conversation.family_id);
+    }
+
+    const scoped = this.familyScope(user);
     const acks = await this.prisma.message_acknowledgments.findMany({
-      where: { message_id: messageId },
+      where: {
+        message_id: messageId,
+        ...(scoped ? { families: scoped } : {}),
+      },
       include: {
         families: { select: { id: true, household_name: true } },
       },

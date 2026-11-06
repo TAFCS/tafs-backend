@@ -4,7 +4,7 @@ jest.mock('../voucher-pdf/voucher-pdf.service', () => ({
   VoucherPdfService: class {},
 }));
 
-import { isPayImmediate, payImmediateDueDate } from './vouchers.service';
+import { isPayImmediate, isRepeatPayImmediate, payImmediateDueDate } from './vouchers.service';
 
 /**
  * PAY IMMEDIATELY rule under test (spec: src/modules/vouchers/CLAUDE.md).
@@ -127,5 +127,52 @@ describe('payImmediateDueDate', () => {
     const issue = new Date('2026-09-08');
     payImmediateDueDate(issue);
     expect(issue.toISOString().slice(0, 10)).toBe('2026-09-08');
+  });
+});
+
+describe('isRepeatPayImmediate (TAFSD-420)', () => {
+  const OCT = new Date('2026-10-05T00:00:00Z');
+  const NOV = new Date('2026-11-05T00:00:00Z');
+  const prev = (over: Partial<Parameters<typeof isRepeatPayImmediate>[0] & object> = {}) => ({
+    pay_immediately: true,
+    pay_immediately_repeat: false,
+    status: 'UNPAID',
+    fee_date: OCT,
+    ...over,
+  });
+
+  it('no previous voucher: first PAY IMMEDIATELY, no warning', () => {
+    expect(isRepeatPayImmediate(null, NOV)).toBe(false);
+  });
+
+  it('the previous one was not PAY IMMEDIATELY: no warning', () => {
+    expect(isRepeatPayImmediate(prev({ pay_immediately: false }), NOV)).toBe(false);
+  });
+
+  it.each(['UNPAID', 'OVERDUE', 'EXPIRED', 'PARTIALLY_PAID'])(
+    'the previous PAY IMMEDIATELY is still %s: warning',
+    (status) => {
+      expect(isRepeatPayImmediate(prev({ status }), NOV)).toBe(true);
+    },
+  );
+
+  it('the previous PAY IMMEDIATELY was paid: no warning', () => {
+    expect(isRepeatPayImmediate(prev({ status: 'PAID' }), NOV)).toBe(false);
+  });
+
+  it('applies to every later consecutive one, not just the second', () => {
+    expect(isRepeatPayImmediate(prev({ pay_immediately_repeat: true }), NOV)).toBe(true);
+  });
+
+  it('re-issuing the same fee_date is not an escalation', () => {
+    expect(isRepeatPayImmediate(prev({ fee_date: NOV }), NOV)).toBe(false);
+  });
+
+  it('re-issuing the same fee_date keeps a warning already on that bill', () => {
+    expect(isRepeatPayImmediate(prev({ fee_date: NOV, pay_immediately_repeat: true }), NOV)).toBe(true);
+  });
+
+  it('a previous voucher with no fee_date cannot be compared: no warning', () => {
+    expect(isRepeatPayImmediate(prev({ fee_date: null }), NOV)).toBe(false);
   });
 });

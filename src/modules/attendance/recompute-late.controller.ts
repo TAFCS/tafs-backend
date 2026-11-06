@@ -116,7 +116,7 @@ export class RecomputeLateController {
     if (dto.employee_id != null) {
       const employee = await this.prisma.employee_profiles.findUnique({
         where: { id: dto.employee_id },
-        select: { campus_id: true, segment_id: true, department_id: true, staff_category_id: true },
+        select: { id: true, campus_id: true, segment_id: true, department_id: true, staff_category_id: true },
       });
       if (!employee) throw new BadRequestException('Employee not found');
       this.scope.assertEmployee(user, employee);
@@ -169,6 +169,8 @@ export class RecomputeLateController {
         skipStudents: !includeStudents,
         skipStaff: !includeStaff,
         employeeWhere,
+        // Steps 1–2 below rebuild every punched day in the range anyway.
+        rebuildFromScans: false,
       });
       staleDayOffCleared += synced.cleared_staff + synced.cleared_students;
     }

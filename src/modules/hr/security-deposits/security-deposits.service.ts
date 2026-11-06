@@ -43,6 +43,39 @@ function nextCycleStart(periodStart: Date): Date {
   return new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 26));
 }
 
+export type CycleTxn = {
+  id?: number;
+  type: SecurityDepositTransactionType;
+  created_at?: Date;
+  payroll_run_line?: { payroll_runs: { period_start: Date } } | null;
+};
+
+/**
+ * TAFSD-459: the cycle (its 26th) each installment covered. A payroll
+ * deduction covers its run's cycle; one recorded by hand (taken outside
+ * payroll, e.g. the Aug / Sep 2026 NPD) covers the cycle after the previous
+ * installment, or the plan's first. Refunds and forfeits cover none.
+ */
+export function coveredCycles(startPeriodStart: Date, transactions: CycleTxn[]): Map<CycleTxn, Date> {
+  const out = new Map<CycleTxn, Date>();
+  let prev: Date | null = null;
+  const ordered = [...transactions].sort(
+    (a, b) => (a.created_at?.getTime() ?? 0) - (b.created_at?.getTime() ?? 0) || (a.id ?? 0) - (b.id ?? 0),
+  );
+  for (const txn of ordered) {
+    if (txn.type !== SecurityDepositTransactionType.DEDUCTION) continue;
+    const start: Date = txn.payroll_run_line?.payroll_runs.period_start ?? (prev ? nextCycleStart(prev) : startPeriodStart);
+    out.set(txn, start);
+    if (!prev || start > prev) prev = start;
+  }
+  return out;
+}
+
+/** The 25th that ends the cycle starting on `periodStart`. */
+function cycleEnd(periodStart: Date): Date {
+  return new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 25));
+}
+
 /** Snaps any date to the start of the 26th-25th cycle that contains it. */
 function snapToCycleStart(date: Date): Date {
   const y = date.getUTCFullYear();
@@ -148,8 +181,13 @@ export class SecurityDepositsService {
           },
         },
         transactions: {
-          where: { type: SecurityDepositTransactionType.DEDUCTION, payroll_run_line_id: { not: null } },
-          select: { payroll_run_line: { select: { payroll_runs: { select: { period_start: true } } } } },
+          where: { type: SecurityDepositTransactionType.DEDUCTION },
+          select: {
+            id: true,
+            type: true,
+            created_at: true,
+            payroll_run_line: { select: { payroll_runs: { select: { period_start: true } } } },
+          },
         },
       },
       orderBy: [{ status: 'asc' }, { start_period_start: 'desc' }, { id: 'desc' }],
@@ -662,16 +700,13 @@ export class SecurityDepositsService {
     return out.map((n) => Number(n.toFixed(2)));
   }
 
-  private lastDeductedPeriodStart(
-    transactions: { payroll_run_line?: { payroll_runs: { period_start: Date } } | null }[],
-  ): Date | null {
+  private lastDeductedPeriodStart(startPeriodStart: Date, transactions: CycleTxn[]): Date | null {
     let last: Date | null = null;
-    for (const txn of transactions) {
-      const start = txn.payroll_run_line?.payroll_runs.period_start;
-      if (start && (!last || start > last)) last = start;
-    }
+    for (const start of coveredCycles(startPeriodStart, transactions).values())
+      if (!last || start > last) last = start;
     return last;
   }
+
 
   private cycleDue(plan: employee_security_deposits): Prisma.Decimal {
     const remaining = money(plan.total_amount).minus(plan.recovered_amount);
@@ -745,7 +780,7 @@ export class SecurityDepositsService {
       employee_code: string | null;
       campuses: { campus_name: string } | null;
     };
-    transactions: { payroll_run_line: { payroll_runs: { period_start: Date } } | null }[];
+    transactions: CycleTxn[];
   }) {
     const recovered = Number(plan.recovered_amount);
     const refunded = Number(plan.refunded_amount);
@@ -767,7 +802,7 @@ export class SecurityDepositsService {
       installment_schedule: this.effectiveSchedule(plan),
       start_period_start: dateOnly(plan.start_period_start),
       next_collection_period_start: dateOnly(
-        nextCollectionPeriodStart(plan.start_period_start, this.lastDeductedPeriodStart(plan.transactions)),
+        nextCollectionPeriodStart(plan.start_period_start, this.lastDeductedPeriodStart(plan.start_period_start, plan.transactions)),
       ),
       next_due_amount: plan.status === SecurityDepositStatus.ACTIVE ? Number(this.cycleDue(plan)) : 0,
       status: plan.status,
@@ -796,6 +831,7 @@ export class SecurityDepositsService {
     const forfeited = Number(plan.forfeited_amount);
     const total = Number(plan.total_amount);
     const held = Math.max(0, recovered - refunded - forfeited);
+    const cycles = coveredCycles(plan.start_period_start, plan.transactions);
     return {
       id: plan.id,
       employee_id: plan.employee_id,
@@ -805,7 +841,7 @@ export class SecurityDepositsService {
       installment_schedule: this.effectiveSchedule(plan),
       start_period_start: dateOnly(plan.start_period_start),
       next_collection_period_start: dateOnly(
-        nextCollectionPeriodStart(plan.start_period_start, this.lastDeductedPeriodStart(plan.transactions)),
+        nextCollectionPeriodStart(plan.start_period_start, this.lastDeductedPeriodStart(plan.start_period_start, plan.transactions)),
       ),
       next_due_amount: plan.status === SecurityDepositStatus.ACTIVE ? Number(this.cycleDue(plan)) : 0,
       recovered_amount: recovered,
@@ -829,8 +865,14 @@ export class SecurityDepositsService {
         reason: txn.reason,
         created_by: txn.created_by,
         created_at: txn.created_at.toISOString(),
-        period_start: txn.payroll_run_line ? dateOnly(txn.payroll_run_line.payroll_runs.period_start) : null,
-        period_end: txn.payroll_run_line ? dateOnly(txn.payroll_run_line.payroll_runs.period_end) : null,
+        period_start: txn.payroll_run_line
+          ? dateOnly(txn.payroll_run_line.payroll_runs.period_start)
+          : cycles.has(txn) ? dateOnly(cycles.get(txn)!) : null,
+        period_end: txn.payroll_run_line
+          ? dateOnly(txn.payroll_run_line.payroll_runs.period_end)
+          : cycles.has(txn) ? dateOnly(cycleEnd(cycles.get(txn)!)) : null,
+        /** TAFSD-459: taken outside payroll and recorded by hand. */
+        recorded_manually: txn.type === SecurityDepositTransactionType.DEDUCTION && !txn.payroll_run_line_id,
       })),
     };
   }

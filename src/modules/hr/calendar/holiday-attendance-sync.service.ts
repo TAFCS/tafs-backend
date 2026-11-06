@@ -1,9 +1,11 @@
 import { PERIOD_TIMINGS_SELECT, scheduleFromSnapshot, timingsOnDate } from '../employees/timings-history.util';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { AttendanceSource, CheckInSource, Prisma, RollRecordStatus, StaffAttendanceStatus, student_status } from '@prisma/client';
+import { ModuleRef } from '@nestjs/core';
+import { AttendanceSource, CheckInSource, DevicePersonType, Prisma, RollRecordStatus, StaffAttendanceStatus, student_status } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { CalendarDayResolverService } from './calendar-day-resolver.service';
 import { CalendarNotificationService } from './calendar-notification.service';
+import { ZkAttendanceProcessorService } from '../../attendance/zk-attendance-processor.service';
 
 export interface HolidaySyncResult {
   students: number;
@@ -11,6 +13,9 @@ export interface HolidaySyncResult {
   cleared_students: number;
   cleared_staff: number;
   skipped_manual: number;
+  /** TAFSD-463: people whose day became working and was rebuilt from that day's punches. */
+  rebuilt_students: number;
+  rebuilt_staff: number;
 }
 
 @Injectable()
@@ -21,7 +26,20 @@ export class HolidayAttendanceSyncService {
     private readonly prisma: PrismaService,
     private readonly calendarResolver: CalendarDayResolverService,
     private readonly notificationService: CalendarNotificationService,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * Looked up at call time, not injected: AttendanceModule imports HrModule,
+   * so constructor-injecting the processor here would be a module cycle.
+   */
+  private dayRebuilder(): ZkAttendanceProcessorService | null {
+    try {
+      return this.moduleRef.get(ZkAttendanceProcessorService, { strict: false });
+    } catch {
+      return null;
+    }
+  }
 
   parseDateKey(dateStr: string): Date {
     const d = new Date(dateStr);
@@ -54,6 +72,13 @@ export class HolidayAttendanceSyncService {
       skipStaff?: boolean;
       /** Narrow the staff half, e.g. to one department or staff category. */
       employeeWhere?: Prisma.employee_profilesWhereInput;
+      /**
+       * TAFSD-463: rebuild, from that day's punches, every person whose day
+       * now resolves as working but has no attendance row (or only the
+       * day-off row this sync just cleared). Default true. Recompute Status
+       * passes false because it rebuilds the whole range itself.
+       */
+      rebuildFromScans?: boolean;
     },
   ): Promise<HolidaySyncResult> {
     let students = 0;
@@ -62,6 +87,13 @@ export class HolidayAttendanceSyncService {
     let clearedStaff = 0;
     let skippedManual = 0;
     const force = options?.force ?? false;
+    // A day that just became working (a past Saturday opened, a holiday
+    // removed) is left with no row: the day-off row is deleted above and the
+    // punches that came in while it was off were never turned into one. The
+    // staff app and the attendance modal read that row, so without a rebuild
+    // the day showed wrong until someone ran Recompute Status by hand.
+    const staffToRebuild: number[] = [];
+    const studentsToRebuild: number[] = [];
 
     // ── Students ──────────────────────────────────────────────────────────
     // Batched: one query for the calendar rows and one for existing attendance
@@ -98,6 +130,7 @@ export class HolidayAttendanceSyncService {
         const existing = existingByStudent.get(student.cc);
 
         if (resolved.isWorkingDay) {
+          if (!existing || existing.source === AttendanceSource.SYSTEM) studentsToRebuild.push(student.cc);
           if (existing?.source === AttendanceSource.SYSTEM) {
             clearedStudents++;
             studentWrites.push(() =>
@@ -219,6 +252,7 @@ export class HolidayAttendanceSyncService {
         const existing = existingByEmployee.get(employee.id);
 
         if (resolved.isWorkingDay) {
+          if (!existing || existing.source === AttendanceSource.SYSTEM) staffToRebuild.push(employee.id);
           if (existing?.source === AttendanceSource.SYSTEM) {
             clearedStaff++;
             staffWrites.push(() =>
@@ -269,6 +303,16 @@ export class HolidayAttendanceSyncService {
       await this.runInBatches(staffWrites);
     }
 
+    let rebuiltStudents = 0;
+    let rebuiltStaff = 0;
+    if (
+      (options?.rebuildFromScans ?? true) &&
+      date.getTime() <= this.todayUtcDate().getTime() &&
+      (staffToRebuild.length > 0 || studentsToRebuild.length > 0)
+    ) {
+      ({ rebuiltStaff, rebuiltStudents } = await this.rebuildFromScans(date, staffToRebuild, studentsToRebuild));
+    }
+
     // Day-off alerts are for today and upcoming days only. Re-syncing a past
     // date (Recompute Status over a range, opening an old register day) must
     // never push "school is closed on <a date weeks ago>" to parents — and
@@ -285,7 +329,79 @@ export class HolidayAttendanceSyncService {
       cleared_students: clearedStudents,
       cleared_staff: clearedStaff,
       skipped_manual: skippedManual,
+      rebuilt_students: rebuiltStudents,
+      rebuilt_staff: rebuiltStaff,
     };
+  }
+
+  /** Only the candidates who actually punched that day are rebuilt. */
+  private async rebuildFromScans(
+    date: Date,
+    employeeIds: number[],
+    studentCcs: number[],
+  ): Promise<{ rebuiltStaff: number; rebuiltStudents: number }> {
+    const rebuilder = this.dayRebuilder();
+    if (!rebuilder) {
+      this.logger.warn(`Attendance processor unavailable — ${date.toISOString().slice(0, 10)} not rebuilt from scans`);
+      return { rebuiltStaff: 0, rebuiltStudents: 0 };
+    }
+
+    const [staffScans, studentScans] = await Promise.all([
+      employeeIds.length
+        ? this.prisma.zk_attendance_scans.findMany({
+            where: {
+              person_type: DevicePersonType.STAFF,
+              employee_id: { in: employeeIds },
+              attendance_date: date,
+              is_duplicate: false,
+            },
+            select: { employee_id: true },
+            distinct: ['employee_id'],
+          })
+        : Promise.resolve([]),
+      studentCcs.length
+        ? this.prisma.zk_attendance_scans.findMany({
+            where: {
+              person_type: DevicePersonType.STUDENT,
+              student_cc: { in: studentCcs },
+              attendance_date: date,
+              is_duplicate: false,
+            },
+            select: { student_cc: true },
+            distinct: ['student_cc'],
+          })
+        : Promise.resolve([]),
+    ]);
+
+    let rebuiltStaff = 0;
+    let rebuiltStudents = 0;
+    const writes: (() => Promise<unknown>)[] = [];
+    for (const { employee_id } of staffScans) {
+      if (employee_id == null) continue;
+      writes.push(async () => {
+        try {
+          const seg = await rebuilder.recomputeDaySequence(DevicePersonType.STAFF, employee_id, null, date);
+          await rebuilder.upsertStaffDaily(employee_id, date, seg);
+          rebuiltStaff++;
+        } catch (err) {
+          this.logger.error(`Rebuild failed for employee ${employee_id} on ${date.toISOString().slice(0, 10)}: ${(err as Error).message}`);
+        }
+      });
+    }
+    for (const { student_cc } of studentScans) {
+      if (student_cc == null) continue;
+      writes.push(async () => {
+        try {
+          const seg = await rebuilder.recomputeDaySequence(DevicePersonType.STUDENT, null, student_cc, date);
+          await rebuilder.upsertStudentDaily(student_cc, date, seg, 'calendar-change');
+          rebuiltStudents++;
+        } catch (err) {
+          this.logger.error(`Rebuild failed for student ${student_cc} on ${date.toISOString().slice(0, 10)}: ${(err as Error).message}`);
+        }
+      });
+    }
+    await this.runInBatches(writes, 10);
+    return { rebuiltStaff, rebuiltStudents };
   }
 
   async syncAllCampusesForDate(
@@ -299,6 +415,8 @@ export class HolidayAttendanceSyncService {
       cleared_students: 0,
       cleared_staff: 0,
       skipped_manual: 0,
+      rebuilt_students: 0,
+      rebuilt_staff: 0,
     };
 
     for (const campus of campuses) {
@@ -309,6 +427,8 @@ export class HolidayAttendanceSyncService {
         totals.cleared_students += result.cleared_students;
         totals.cleared_staff += result.cleared_staff;
         totals.skipped_manual += result.skipped_manual;
+        totals.rebuilt_students += result.rebuilt_students;
+        totals.rebuilt_staff += result.rebuilt_staff;
         if (result.students > 0 || result.staff > 0) {
           this.logger.log(
             `Campus ${campus.id}: auto-EXCUSED ${result.students} students, ${result.staff} staff for ${date.toISOString().slice(0, 10)}`,
@@ -338,10 +458,12 @@ export class HolidayAttendanceSyncService {
         result.students > 0 ||
         result.staff > 0 ||
         result.cleared_students > 0 ||
-        result.cleared_staff > 0
+        result.cleared_staff > 0 ||
+        result.rebuilt_students > 0 ||
+        result.rebuilt_staff > 0
       ) {
         this.logger.log(
-          `Calendar change → campus ${campusId} ${dateStr}: EXCUSED ${result.students} students, ${result.staff} staff; cleared ${result.cleared_students} students, ${result.cleared_staff} staff`,
+          `Calendar change → campus ${campusId} ${dateStr}: EXCUSED ${result.students} students, ${result.staff} staff; cleared ${result.cleared_students} students, ${result.cleared_staff} staff; rebuilt ${result.rebuilt_students} students, ${result.rebuilt_staff} staff`,
         );
       }
       return result;

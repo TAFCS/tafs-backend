@@ -39,6 +39,8 @@ export interface SchoolSheetGroup {
   /** "CLASS VII" — the row count is appended. */
   label: string;
   rows: Array<Record<string, string | number>>;
+  /** The count in the heading, when not every row is one of `rowNoun` (TAFSD-456). */
+  count?: number;
 }
 
 export interface SchoolSheet {
@@ -46,6 +48,10 @@ export interface SchoolSheet {
   tab: string;
   /** The campus line as printed: "GULISTAN-E-JAUHAR CAMPUS", or "ALL CAMPUSES". */
   campus: string;
+  /**
+   * TAFSD-456: a row may carry `__bold` (truthy: the whole row in bold) and
+   * `__sno` (the S# to print, '' for none; otherwise its place in the run).
+   */
   rows: Array<Record<string, string | number>>;
   /** Overrides opts.columns for this sheet (head columns differ by campus). */
   columns?: SchoolSheetColumn[];
@@ -196,14 +202,15 @@ export function writeSchoolSheets(
       const row = sheet.getRow(rowIdx++);
       columns.forEach((col, c) => {
         const cell = row.getCell(c + 1);
-        const value = col.key === '__sno' ? i + 1 : data[col.key];
+        const value =
+          col.key === '__sno' ? (data.__sno ?? i + 1) : data[col.key];
         cell.value = value === undefined || value === null ? '' : value;
         if (col.money && typeof value === 'number')
           cell.numFmt = moneyFmt.get(col.key)!;
         cell.border = box;
         cell.font = col.money
           ? { name: SERIF, bold: true, size: col.group ? 11 : 12 }
-          : { name: SERIF, size: 11 };
+          : { name: SERIF, size: 11, bold: Boolean(data.__bold) };
         // Text wraps (and the row grows) rather than being cut off at the column edge (TAFSD-425).
         cell.alignment = {
           horizontal: 'center',
@@ -268,7 +275,8 @@ export function writeSchoolSheets(
       for (const group of sheetData.groups) {
         if (lastCol > 1) sheet.mergeCells(rowIdx, 1, rowIdx, lastCol);
         const heading = sheet.getCell(rowIdx, 1);
-        heading.value = `${group.label} · ${group.rows.length} ${group.rows.length === 1 ? one : many}`;
+        const n = group.count ?? group.rows.length;
+        heading.value = `${group.label} · ${n} ${n === 1 ? one : many}`;
         heading.font = { name: SERIF, bold: true, size: 12 };
         heading.alignment = {
           horizontal: 'left',

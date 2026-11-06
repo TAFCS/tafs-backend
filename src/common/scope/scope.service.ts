@@ -1,10 +1,12 @@
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
-import { ScopeDimension, StaffRole } from '@prisma/client';
+import { EmployeeStatus, ScopeDimension, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../../modules/auth/interfaces/jwt-payload.interface';
 import { readUntilMigrated } from '../../utils/pending-migration.util';
+import { HierarchyService } from '../hierarchy/hierarchy.service';
 import {
   effectiveScopeOf,
+  findSubordinates,
   isFullyUnrestricted,
   NO_MATCH_ID,
   SCOPE_DIMENSION_LABEL,
@@ -14,8 +16,11 @@ import {
   whereForEmployees,
   whereForStudents,
   whereForVouchers,
+  type ScopeDimensionField,
   type UserScope,
 } from './scope.types';
+
+export const ENFORCE_REPORTING_HIERARCHY_KEY = 'enforce_reporting_hierarchy';
 
 /**
  * The single place scope is resolved and enforced.
@@ -29,8 +34,14 @@ import {
 export class ScopeService {
   private readonly logger = new Logger(ScopeService.name);
   private warnedPendingMigration = false;
+  private readonly hierarchy: HierarchyService;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    hierarchy?: HierarchyService,
+  ) {
+    this.hierarchy = hierarchy ?? new HierarchyService(this.prisma);
+  }
 
   /**
    * Reads a user's scope from the database. Called on every login and token
@@ -89,20 +100,51 @@ export class ScopeService {
    * A short-lived (30s) in-memory cache absorbs concurrent request bursts
    * on page loads without repeatedly hammering Postgres.
    */
+  private enforceHierarchyCache: { value: boolean; expires: number } | null = null;
+
+  async isHierarchyEnforced(): Promise<boolean> {
+    const mode = await this.hierarchy.mode('attendance');
+    return mode === 'enforce';
+  }
+
+  async setHierarchyEnforced(enforced: boolean, updatedBy?: string): Promise<boolean> {
+    await this.hierarchy.setMode('attendance', enforced ? 'enforce' : 'off', updatedBy);
+    this.invalidateScopeCache();
+    return enforced;
+  }
+
+  /**
+   * Enriches scope with subordinate employee IDs if reporting hierarchy is enforced.
+   * If not enforced, returns scope unchanged.
+   */
+  async withReportingHierarchy(userId: string, scope: UserScope): Promise<UserScope> {
+    const enforced = await this.isHierarchyEnforced();
+    if (!enforced) return scope;
+
+    const subs = await this.hierarchy.below(userId);
+    return {
+      ...scope,
+      subordinates: subs.length > 0 ? subs : [NO_MATCH_ID],
+    };
+  }
+
   async resolveEffective(userId: string): Promise<UserScope> {
     const cached = this.effectiveScopeCache.get(userId);
     const now = Date.now();
     if (cached && cached.expires > now) {
       return cached.scope;
     }
-    const resolved = await this.withCategoryDepartments(
+    let resolved = await this.withCategoryDepartments(
       await this.withSegmentClasses(await this.resolve(userId)),
     );
+    resolved = await this.withReportingHierarchy(userId, resolved);
     this.effectiveScopeCache.set(userId, { scope: resolved, expires: now + 30_000 });
     return resolved;
   }
 
   invalidateScopeCache(userId?: string) {
+    this.hierarchy.invalidateCache();
+    this.enforceHierarchyCache = null;
     if (userId) {
       this.effectiveScopeCache.delete(userId);
     } else {
@@ -153,7 +195,7 @@ export class ScopeService {
     const rows: { user_id: string; dimension: ScopeDimension; ref_id: number }[] = [];
     for (const [dimension, field] of Object.entries(SCOPE_FIELD_BY_DIMENSION) as [
       ScopeDimension,
-      keyof UserScope,
+      ScopeDimensionField,
     ][]) {
       for (const ref_id of new Set(scope[field] ?? [])) {
         rows.push({ user_id: userId, dimension, ref_id });
@@ -255,13 +297,29 @@ export class ScopeService {
     this.assertDimension(user, ScopeDimension.STAFF_CATEGORY, id);
   }
 
+  assertHierarchy(
+    user: Parameters<ScopeService['assertDimension']>[0],
+    employeeId?: number | null,
+  ) {
+    if (this.isExempt(user)) return;
+    const scope = this.scopeOf(user);
+    if (!scope.subordinates) return;
+    const id = employeeId != null ? Number(employeeId) : null;
+    if (id == null || !scope.subordinates.includes(id)) {
+      throw new ForbiddenException(
+        'Outside your reporting hierarchy. You can only act on staff who report to you.',
+      );
+    }
+  }
+
   /**
-   * Asserts every dimension an employee record carries. Use on any `:id` route
-   * in the employee directory before acting on the record.
+   * Asserts every dimension an employee record carries, including reporting hierarchy
+   * when active. Use on any `:id` route in the employee directory before acting on the record.
    */
   assertEmployee(
     user: Parameters<ScopeService['assertDimension']>[0],
     employee: {
+      id?: number | null;
       campus_id?: number | null;
       segment_id?: number | null;
       department_id?: number | null;
@@ -273,12 +331,14 @@ export class ScopeService {
     this.assertSegment(user, employee.segment_id);
     this.assertDepartment(user, employee.department_id);
     this.assertStaffCategory(user, employee.staff_category_id);
+    this.assertHierarchy(user, employee.id);
   }
 
   /** Non-throwing counterpart, for turning a 403 into a 404 on lookups. */
   canSeeEmployee(
     user: Parameters<ScopeService['assertDimension']>[0],
     employee: {
+      id?: number | null;
       campus_id?: number | null;
       segment_id?: number | null;
       department_id?: number | null;

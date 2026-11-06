@@ -40,6 +40,19 @@ const DEV_ALLOW_VOID_DEPOSITS = false;
 
 
 
+import {
+    FAMILY_CREDIT_KIND,
+    FAMILY_CREDIT_METHOD,
+    type FamilyCreditKind,
+    assertCreditCovers,
+    assertExcessClearsVoucher,
+    assertHasFamily,
+    creditReversalEntry,
+    lockFamilyCreditBalance,
+    rs,
+    sumLedger,
+} from './family-credit';
+
 const VOUCHER_INCLUDE = {
     students: {
         select: {
@@ -167,6 +180,37 @@ export function payImmediateDueDate(issueDate: Date): Date {
     d.setUTCDate(d.getUTCDate() + PAY_IMMEDIATE_DUE_DAYS);
     if (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + 1); // Sunday -> Monday
     return d;
+}
+
+/** Statuses that mean a voucher still has money owing on it (TAFSD-420). */
+const STILL_UNPAID_VOUCHER_STATUSES = ['UNPAID', 'OVERDUE', 'EXPIRED', 'PARTIALLY_PAID'];
+
+/**
+ * TAFSD-420: should a new PAY IMMEDIATELY voucher carry the FINAL NOTICE line?
+ *
+ * `previous` is the student's most recent live voucher on or before the new one's
+ * fee_date (see findPreviousVoucherForRepeat). It must be read BEFORE supersession
+ * voids it, or it would never look unpaid. Yes when it was PAY IMMEDIATELY too and
+ * still owes money, so the second and every later consecutive one carries the line.
+ *
+ * Re-issuing the SAME fee_date is the same bill again, not an escalation, so it
+ * keeps whatever level the bill it replaces had.
+ */
+export function isRepeatPayImmediate(
+    previous: {
+        pay_immediately: boolean;
+        pay_immediately_repeat: boolean;
+        status: string | null;
+        fee_date: Date | null;
+    } | null,
+    feeDate: Date,
+): boolean {
+    if (!previous?.pay_immediately || !previous.fee_date) return false;
+    if (!STILL_UNPAID_VOUCHER_STATUSES.includes(previous.status ?? '')) return false;
+    if (new Date(previous.fee_date).getTime() >= new Date(feeDate).getTime()) {
+        return previous.pay_immediately_repeat;
+    }
+    return true;
 }
 
 /**
@@ -657,6 +701,23 @@ export class VouchersService {
     }
 
     /**
+     * TAFSD-420: the voucher isRepeatPayImmediate() compares against. VOID is left
+     * out because something newer stands in its place, and WAIVED because a
+     * write-off is not an unpaid bill.
+     */
+    private findPreviousVoucherForRepeat(tx: Prisma.TransactionClient, studentId: number, feeDate: Date) {
+        return tx.vouchers.findFirst({
+            where: {
+                student_id: studentId,
+                fee_date: { lte: feeDate },
+                status: { notIn: ['VOID', 'WAIVED'] },
+            },
+            orderBy: [{ fee_date: 'desc' }, { id: 'desc' }],
+            select: { pay_immediately: true, pay_immediately_repeat: true, status: true, fee_date: true },
+        });
+    }
+
+    /**
      * Deposit page prefill: would splitting this voucher now issue a PAY
      * IMMEDIATELY balance voucher, and with what due/validity date for the given
      * issue date? Same decision (splitPayImmediate) and date rule
@@ -780,6 +841,13 @@ export class VouchersService {
                 arrearsInfo !== null &&
                 isPayImmediate(arrearsInfo) &&
                 (await this.isPayImmediateEnabled(tx));
+            // TAFSD-420. Read here, before step 6 voids the voucher it looks at.
+            const payImmediateRepeat =
+                payImmediate &&
+                isRepeatPayImmediate(
+                    await this.findPreviousVoucherForRepeat(tx, dto.student_id, feeDate!),
+                    feeDate!,
+                );
             // The issuer may keep their own dates (pay_immediately_custom_dates);
             // otherwise the default is forced. The watermark applies either way.
             if (payImmediate && !dto.pay_immediately_custom_dates) {
@@ -895,6 +963,8 @@ export class VouchersService {
                     surcharge_waived: dto.waive_surcharge || false,
                     surcharge_waived_by: dto.waived_by || null,
                     pay_immediately: payImmediate,
+                    pay_immediately_repeat: payImmediateRepeat,
+                    is_revised: dto.is_revised === true,
                     generated_by_name: generatorName ?? null,
                     generated_at: new Date(),
                     bulk_voucher_job_id: bulkVoucherJobId ?? null,
@@ -1800,6 +1870,10 @@ export class VouchersService {
         // means every render path (single, bulk, split, regenerate) gets the same
         // answer. A PAID receipt or WAIVED challan never carries it.
         const payImmediate = voucher.pay_immediately === true && !paidStamp && !waived;
+        // TAFSD-419/420: same reasoning, and the same exceptions. A receipt or a
+        // write-off is the final word on the bill, so neither says REVISED.
+        const payImmediateRepeat = payImmediate && voucher.pay_immediately_repeat === true;
+        const revised = voucher.is_revised === true && !paidStamp && !waived && voucher.status !== 'WAIVED';
 
         // Is EVERY head on this voucher written off, or only some of them? The two
         // read completely differently on the challan and must not be conflated:
@@ -2472,6 +2546,8 @@ export class VouchersService {
                 qrUrl,
                 paidStamp,
                 payImmediate,
+                payImmediateRepeat,
+                revised,
                 waived,
                 generatedByName: voucher.generated_by_name ?? undefined,
                 generatedAt: voucher.generated_at ?? undefined,
@@ -2647,7 +2723,8 @@ export class VouchersService {
         let paymentRunningTotal = 0;
         const paymentHistory: any[] = [];
         for (const dep of orderedDeposits as any[]) {
-            const cash = Number(dep.total_amount ?? 0);
+            // TAFSD-421: an excess went to family credit, not to this bill.
+            const cash = Number(dep.total_amount ?? 0) - Number(dep.excess_amount ?? 0);
             paymentRunningTotal += cash;
 
             const headParts = new Set<string>();
@@ -3027,9 +3104,20 @@ export class VouchersService {
         );
         const distributedTotal = headsTotal.add(lateFeeAmount).add(surchargesTotal);
 
-        if (!distributedTotal.eq(depositAmount)) {
+        // TAFSD-421: family credit. An excess is cash beyond the voucher; a credit
+        // payment is no cash at all. One deposit is never both.
+        const excessAmount = new Prisma.Decimal(dto.excess_amount ?? 0);
+        const payFromCredit = dto.pay_from_credit === true;
+        if (excessAmount.gt(0) && payFromCredit) {
+            throw new BadRequestException('A deposit paid from family credit cannot also have an excess.');
+        }
+        if (!payFromCredit && dto.payment_method === FAMILY_CREDIT_METHOD) {
+            throw new BadRequestException('Family credit can only be used with "Pay from credit".');
+        }
+
+        if (!distributedTotal.add(excessAmount).eq(depositAmount)) {
             throw new BadRequestException(
-                'Deposit amount must equal the sum of distributions, surcharge allocations, and late fee.',
+                'Deposit amount must equal the sum of distributions, surcharge allocations, late fee, and any excess.',
             );
         }
 
@@ -3133,10 +3221,25 @@ export class VouchersService {
 
         let createdDepositId: number | undefined;
         let discountApplied = new Prisma.Decimal(0);
+        const creditEvents: VoucherAuditEvent[] = [];
 
         // 2. LEAN TRANSACTION
         await this.prisma.$transaction(
             async (tx) => {
+                // TAFSD-421: credit lives on the family. Lock it before reading the
+                // balance, so two staff can't spend the same credit at once.
+                let creditFamilyId: number | null = null;
+                if (excessAmount.gt(0) || payFromCredit) {
+                    const student = await tx.students.findUnique({
+                        where: { cc: voucher.student_id },
+                        select: { family_id: true },
+                    });
+                    assertHasFamily(student?.family_id);
+                    creditFamilyId = student!.family_id;
+                    const balance = await lockFamilyCreditBalance(tx, creditFamilyId!);
+                    if (payFromCredit) assertCreditCovers(balance, depositAmount);
+                }
+
                 const distributionHeadIds = parsedDistributions.map((d) => d.headId);
                 const txHeads = await tx.voucher_heads.findMany({
                     where: {
@@ -3239,11 +3342,26 @@ export class VouchersService {
                     data: {
                         student_id: voucher.student_id,
                         total_amount: depositAmount,
-                        payment_method: dto.payment_method ?? null,
+                        payment_method: payFromCredit ? FAMILY_CREDIT_METHOD : dto.payment_method ?? null,
                         reference_number: dto.reference_number ?? null,
+                        excess_amount: excessAmount,
+                        from_credit: payFromCredit,
                     },
                 });
                 createdDepositId = depositRecord.id;
+
+                if (payFromCredit) {
+                    await this.writeFamilyCreditEntryInTx(tx, creditEvents, {
+                        familyId: creditFamilyId!,
+                        amount: depositAmount.negated(),
+                        kind: FAMILY_CREDIT_KIND.APPLIED_TO_VOUCHER,
+                        studentId: voucher.student_id,
+                        voucherId,
+                        depositId: depositRecord.id,
+                        changedBy,
+                        notes: `Paid voucher #${voucherId} from family credit.`,
+                    });
+                }
 
                 // One allocation per non-zero head distribution
                 const allocationData: {
@@ -3462,6 +3580,22 @@ export class VouchersService {
                         data: { status: nextVoucherStatus },
                     });
                 }
+
+                // TAFSD-421: what's left once the voucher is cleared becomes credit.
+                // Checked last, against the status this deposit really produced.
+                if (excessAmount.gt(0)) {
+                    assertExcessClearsVoucher(nextVoucherStatus, isOverdue ? remainingLS : 0);
+                    await this.writeFamilyCreditEntryInTx(tx, creditEvents, {
+                        familyId: creditFamilyId!,
+                        amount: excessAmount,
+                        kind: FAMILY_CREDIT_KIND.EXCESS_DEPOSIT,
+                        studentId: voucher.student_id,
+                        voucherId,
+                        depositId: createdDepositId!,
+                        changedBy,
+                        notes: `Excess on voucher #${voucherId}, kept as family credit.`,
+                    });
+                }
             },
             { timeout: 30000 },
         );
@@ -3476,12 +3610,145 @@ export class VouchersService {
                 action: 'CREATED',
                 changed_by: changedBy,
                 student_id: voucher.student_id,
-                note: `Deposit of Rs. ${depositAmount.toFixed(2)} registered (Ref: ${dto.reference_number || 'N/A'}, Method: ${dto.payment_method || 'N/A'}) against Voucher #${voucherId}.${discountNote}`,
+                note: `${payFromCredit ? 'Family credit payment' : 'Deposit'} of Rs. ${depositAmount.toFixed(2)} registered (Ref: ${dto.reference_number || 'N/A'}, Method: ${dto.payment_method || 'N/A'}) against Voucher #${voucherId}.${discountNote}`,
             });
         }
 
+        await this.flushAuditEvents(creditEvents, changedBy);
+
         // 3. FINAL FULL FETCH
         return this.findOne(voucherId);
+    }
+
+    /** TAFSD-421: one ledger row, with its audit event sent after the transaction commits. */
+    private async writeFamilyCreditEntryInTx(
+        tx: Prisma.TransactionClient,
+        events: VoucherAuditEvent[],
+        entry: {
+            familyId: number;
+            amount: Prisma.Decimal;
+            kind: FamilyCreditKind;
+            studentId: number | null;
+            voucherId: number | null;
+            depositId: number;
+            changedBy: string;
+            notes: string;
+        },
+    ) {
+        await tx.family_credit_ledger.create({
+            data: {
+                family_id: entry.familyId,
+                amount: entry.amount,
+                kind: entry.kind,
+                student_id: entry.studentId,
+                voucher_id: entry.voucherId,
+                deposit_id: entry.depositId,
+                notes: entry.notes,
+                created_by: String(entry.changedBy).slice(0, 100),
+            },
+        });
+        events.push({
+            entity_type: 'FAMILY_CREDIT',
+            entity_id: String(entry.familyId),
+            action: 'CREATED',
+            field: entry.kind,
+            new_value: entry.amount.toFixed(2),
+            student_id: entry.studentId,
+            note: `${entry.notes} (${rs(entry.amount)}, deposit #${entry.depositId})`,
+        });
+    }
+
+    /**
+     * TAFSD-421: undo a deposit's credit entries with opposite rows, just before
+     * the deposit is deleted. Refused if the credit has already been spent, which
+     * rolls back the whole reversal.
+     */
+    private async reverseFamilyCreditForDepositInTx(
+        tx: Prisma.TransactionClient,
+        depositId: number,
+        changedBy: string,
+        events: VoucherAuditEvent[],
+    ) {
+        const rows = await tx.family_credit_ledger.findMany({ where: { deposit_id: depositId } });
+        if (rows.length === 0) return;
+        const balance = await lockFamilyCreditBalance(tx, rows[0].family_id);
+        const entry = creditReversalEntry(sumLedger(rows), balance);
+        if (!entry) return;
+        await this.writeFamilyCreditEntryInTx(tx, events, {
+            familyId: rows[0].family_id,
+            amount: entry.amount,
+            kind: entry.kind,
+            studentId: rows[0].student_id,
+            voucherId: rows[0].voucher_id,
+            depositId,
+            changedBy,
+            notes: `Deposit #${depositId} reversed.`,
+        });
+    }
+
+    /** TAFSD-421: deposit screen. Whether this voucher's family can hold credit, and how much it has. */
+    async getFamilyCreditForVoucher(voucherId: number, user?: IJwtStaffPayload) {
+        const voucher = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            include: { students: { select: { family_id: true } } },
+        });
+        if (!voucher || !(await this.canSeeVoucher(user, voucher))) {
+            throw new NotFoundException(`Voucher with ID ${voucherId} not found`);
+        }
+        const familyId = voucher.students?.family_id ?? null;
+        if (familyId == null) return { family_id: null, can_hold_credit: false, balance: 0 };
+        const agg = await this.prisma.family_credit_ledger.aggregate({
+            where: { family_id: familyId },
+            _sum: { amount: true },
+        });
+        return { family_id: familyId, can_hold_credit: true, balance: Number(agg._sum.amount ?? 0) };
+    }
+
+    /** TAFSD-421: family and student screens. Visible if the caller can see any student in the family. */
+    async getFamilyCreditLedger(familyId: number, user?: IJwtStaffPayload) {
+        const students = await this.prisma.students.findMany({
+            where: { family_id: familyId, deleted_at: null },
+            select: {
+                cc: true, full_name: true, campus_id: true, class_id: true, section_id: true,
+                classes: { select: { segment_id: true } },
+            },
+        });
+        const visible = !user || students.some((s) => this.scope.canSeeStudent(user, {
+            campus_id: s.campus_id,
+            class_id: s.class_id,
+            section_id: s.section_id,
+            segment_id: s.classes?.segment_id ?? null,
+        }));
+        if (!visible) throw new NotFoundException(`Family ${familyId} not found`);
+
+        const [rows, agg] = await Promise.all([
+            this.prisma.family_credit_ledger.findMany({
+                where: { family_id: familyId },
+                orderBy: { id: 'desc' },
+                take: 200,
+            }),
+            this.prisma.family_credit_ledger.aggregate({
+                where: { family_id: familyId },
+                _sum: { amount: true },
+            }),
+        ]);
+        const names = new Map(students.map((s) => [s.cc, s.full_name]));
+        return {
+            family_id: familyId,
+            balance: Number(agg._sum.amount ?? 0),
+            entries: rows.map((r) => ({
+                id: r.id,
+                amount: Number(r.amount),
+                kind: r.kind,
+                student_id: r.student_id,
+                student_name: r.student_id != null ? names.get(r.student_id) ?? null : null,
+                voucher_id: r.voucher_id,
+                deposit_id: r.deposit_id,
+                notes: r.notes,
+                created_by: r.created_by,
+                created_at: r.created_at,
+            })),
+        };
     }
 
     /**
@@ -3738,6 +4005,8 @@ export class VouchersService {
         await this.assertDepositIsLatest(deposit.student_id, depositId);
         await this.assertDepositNotOnWaivedVoucher(depositId);
 
+        const creditEvents: VoucherAuditEvent[] = [];
+
         await this.prisma.$transaction(async (tx) => {
             const allocations = deposit.deposit_allocations;
 
@@ -3753,6 +4022,7 @@ export class VouchersService {
 
             // Delete the deposit first — cascades to its own deposit_allocations,
             // so every "remaining" aggregate below only sees other deposits' rows.
+            await this.reverseFamilyCreditForDepositInTx(tx, depositId, changedBy, creditEvents);
             await tx.deposits.delete({ where: { id: depositId } });
 
             // Recompute amount_paid for every affected student_fee from what's left.
@@ -3884,6 +4154,8 @@ export class VouchersService {
             }
         }, { timeout: 15000 });
 
+        await this.flushAuditEvents(creditEvents, changedBy);
+
         await this.auditLogs.log({
             entity_type: 'DEPOSIT',
             entity_id: String(depositId),
@@ -3952,7 +4224,7 @@ export class VouchersService {
             //    entirely — reactivate the original (VOID) voucher with its fees ISSUED + unpaid
             //    and delete both split children. Otherwise fall through to the existing flow.
             if ((voucher as any).split_parent_id != null) {
-                const handled = await this._reverseSplitFamilyInTx(voucher as any, depositId, tx, auditEvents);
+                const handled = await this._reverseSplitFamilyInTx(voucher as any, depositId, tx, auditEvents, changedBy);
                 if (handled) {
                     fullUndoHandled = true;
                     return;
@@ -3985,6 +4257,7 @@ export class VouchersService {
                 where: { deposit_id: depositId },
             });
             if (remainingOnDeposit === 0) {
+                await this.reverseFamilyCreditForDepositInTx(tx, depositId, changedBy, auditEvents);
                 await tx.deposits.delete({ where: { id: depositId } });
             }
 
@@ -4208,7 +4481,7 @@ export class VouchersService {
      * remotely complex (multi-level splits, children with independent deposits,
      * re-split children) bails safely to the proven existing behavior.
      */
-    private async _reverseSplitFamilyInTx(child: any, depositId: number, tx: any, auditEvents?: VoucherAuditEvent[]): Promise<boolean> {
+    private async _reverseSplitFamilyInTx(child: any, depositId: number, tx: any, auditEvents?: VoucherAuditEvent[], changedBy: string = 'system'): Promise<boolean> {
         const parentId = child.split_parent_id;
         if (parentId == null) return false;
 
@@ -4417,6 +4690,7 @@ export class VouchersService {
         // 8. Delete the deposit if it is now fully orphaned.
         const remaining = await tx.deposit_allocations.count({ where: { deposit_id: depositId } });
         if (remaining === 0) {
+            await this.reverseFamilyCreditForDepositInTx(tx, depositId, changedBy, auditEvents ?? []);
             await tx.deposits.delete({ where: { id: depositId } });
         }
 
@@ -4682,6 +4956,8 @@ export class VouchersService {
             send_notification?: boolean;
             requires_release?: boolean;
             releasedBy?: string;
+            is_revised?: boolean;
+            changedBy?: string;
         },
     ) {
         const voucher = await this.prisma.vouchers.findUnique({
@@ -4740,6 +5016,12 @@ export class VouchersService {
             };
         }
 
+        // TAFSD-419: an explicit regenerate may turn the REVISED stamp on or off.
+        // Written before the render below, which reads the stamp from the row.
+        if (opts?.force && opts.is_revised !== undefined && !finalPaidStamp && !finalWaived) {
+            await this.setVoucherRevised(voucherId, opts.is_revised, opts.changedBy ?? generatedByName ?? 'system');
+        }
+
         const full = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
             include: VOUCHER_INCLUDE,
@@ -4781,6 +5063,27 @@ export class VouchersService {
         }
 
         return { pdf_url: pdfUrl, filename, frozen: false };
+    }
+
+    /** TAFSD-419: change the REVISED flag, leaving an audit entry when it really changes. */
+    private async setVoucherRevised(voucherId: number, isRevised: boolean, changedBy: string) {
+        const current = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            select: { is_revised: true, student_id: true },
+        });
+        if (!current || current.is_revised === isRevised) return;
+        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { is_revised: isRevised } });
+        await this.auditLogs.log({
+            entity_type: 'VOUCHER',
+            entity_id: String(voucherId),
+            action: 'UPDATED',
+            field: 'is_revised',
+            old_value: String(current.is_revised),
+            new_value: String(isRevised),
+            changed_by: changedBy,
+            student_id: current.student_id,
+            note: isRevised ? 'Voucher marked REVISED on regenerate.' : 'REVISED stamp removed on regenerate.',
+        });
     }
 
     /** Hold/release writes that apply only on an explicit regenerate. */
@@ -5373,6 +5676,9 @@ export class VouchersService {
             //    re-dates anything. See splitPayImmediate(); the deposit page's
             //    prefill (previewSplitPayImmediate) asks the very same question.
             const payImmediate = await this.splitPayImmediate(tx, original, allHeads);
+            // TAFSD-420: the balance is the same bill again, so it keeps the level
+            // of the voucher being split rather than escalating it.
+            const payImmediateRepeat = payImmediate && (original as any).pay_immediately_repeat === true;
             if (payImmediate && !dto.pay_immediately_custom_dates) {
                 dueDate = payImmediateDueDate(issueDate);
                 validityDate = dueDate;
@@ -5656,6 +5962,10 @@ export class VouchersService {
                     reprint_fee_charge: balanceReprintCharge,
                     reprint_fee_amount: balanceReprintCharge ? balanceReprintAmount : null,
                     pay_immediately: payImmediate,
+                    pay_immediately_repeat: payImmediateRepeat,
+                    // TAFSD-419: a PAY IMMEDIATELY balance is always REVISED; any other
+                    // balance only when the issuer asks for it.
+                    is_revised: payImmediate || dto.is_revised === true,
                     // A new voucher of its own — it inherits none of the original's
                     // issuance traits (see CLAUDE.md). It wasn't produced by the
                     // original's bulk job, and it is released now (or held) exactly
@@ -6749,6 +7059,19 @@ export class VouchersService {
         if (voucher.status === 'WAIVED') {
             throw new BadRequestException(
                 `Voucher #${id} is waived. Un-waive it before deleting it.`,
+            );
+        }
+
+        // TAFSD-421: force-delete keeps the deposit but drops what it paid for. For
+        // cash that is an old quirk; for a credit payment it would strand the
+        // family's credit as spent on nothing. Reverse the deposit first.
+        const creditPayment = await this.prisma.deposit_allocations.findFirst({
+            where: { voucher_id: id, deposits: { from_credit: true } },
+            select: { deposit_id: true },
+        });
+        if (creditPayment) {
+            throw new BadRequestException(
+                `Voucher #${id} was paid from family credit (deposit #${creditPayment.deposit_id}). Reverse that deposit before deleting the voucher.`,
             );
         }
 

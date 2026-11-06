@@ -256,7 +256,9 @@ export class EnrollmentService {
       }
     }
 
-    const all_houses = await this.prisma.houses.findMany();
+    const all_houses = await this.prisma.houses.findMany({
+      where: { is_active: true },
+    });
 
     let available_sections: any[] = [];
     if (student.campus_id && resolvedClassId) {
@@ -830,6 +832,7 @@ export class EnrollmentService {
     campusId?: number | null,
   ): Promise<{ suggested_house: number | null; house_counts: Record<number, number> }> {
     const allHouses = await this.prisma.houses.findMany({
+      where: { is_active: true },
       orderBy: { id: 'asc' },
     });
     if (allHouses.length === 0) return { suggested_house: null, house_counts: {} };
@@ -1236,6 +1239,7 @@ export class EnrollmentService {
 
   async getAllHouses() {
     return this.prisma.houses.findMany({
+      where: { is_active: true },
       orderBy: { house_name: 'asc' },
     });
   }

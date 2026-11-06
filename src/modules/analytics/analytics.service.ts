@@ -88,10 +88,12 @@ export class AnalyticsService {
         },
         _sum: { amount: true, amount_paid: true },
       }),
+      // TAFSD-421: a family-credit payment brought in no new cash.
       this.prisma.deposits.aggregate({
         where: {
           deposit_date: { gte: yearStart, lte: yearEnd },
           students: studentFilter,
+          from_credit: false,
         },
         _sum: { total_amount: true },
       }),
@@ -508,10 +510,12 @@ export class AnalyticsService {
         },
         _sum: { amount: true, amount_paid: true },
       }),
+      // TAFSD-421: a family-credit payment brought in no new cash.
       this.prisma.deposits.aggregate({
         where: {
           deposit_date: { gte: yearStart, lte: yearEnd },
           students: studentFilter,
+          from_credit: false,
         },
         _sum: { total_amount: true },
       }),

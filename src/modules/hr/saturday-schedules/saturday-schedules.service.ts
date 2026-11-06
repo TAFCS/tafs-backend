@@ -2,8 +2,10 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Prisma, StaffRole } from '@prisma/client';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { FcmService } from '../../../common/fcm/fcm.service';
@@ -26,6 +28,7 @@ import {
   currentPayrollPeriodLabel,
 } from '../payroll/payroll-period.util';
 import { peerGroupKey, suggestSaturdays } from './saturday-suggestions.util';
+import { HolidayAttendanceSyncService } from '../calendar/holiday-attendance-sync.service';
 
 const PEER_SELECT = {
   id: true,
@@ -86,13 +89,62 @@ const scheduleInclude = {
 
 @Injectable()
 export class SaturdaySchedulesService {
+  private readonly logger = new Logger(SaturdaySchedulesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly noticeBoard: EmployeeNoticeBoardService,
     private readonly fcmService: FcmService,
     private readonly auditLogs: AuditLogsService,
     private readonly scope: ScopeService,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  /**
+   * TAFSD-463: assigning or removing a Saturday that has already happened
+   * changes whether that day was a working day, so its attendance is synced
+   * at once — punches turned into a Present/Late row, or the day marked off
+   * — instead of waiting for someone to run Recompute Status. Today and
+   * future Saturdays are left to the normal punch and daily-sync paths.
+   *
+   * The sync service is looked up at call time: HrModule imports this
+   * module, so injecting it would be a module cycle.
+   */
+  private async resyncPastSaturdays(
+    rows: { employee_id: number; campus_id: number | null; date: Date }[],
+  ): Promise<void> {
+    const now = new Date();
+    const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const groups = new Map<string, { campusId: number; date: Date; employeeIds: number[] }>();
+    for (const row of rows) {
+      if (row.campus_id == null || row.date.getTime() > todayUtc) continue;
+      const key = `${row.campus_id}:${this.dateKey(row.date)}`;
+      const group = groups.get(key) ?? { campusId: row.campus_id, date: row.date, employeeIds: [] };
+      group.employeeIds.push(row.employee_id);
+      groups.set(key, group);
+    }
+    if (groups.size === 0) return;
+
+    let sync: HolidayAttendanceSyncService;
+    try {
+      sync = this.moduleRef.get(HolidayAttendanceSyncService, { strict: false });
+    } catch {
+      this.logger.warn('Attendance sync unavailable — past Saturdays not re-synced');
+      return;
+    }
+    for (const group of groups.values()) {
+      try {
+        await sync.syncCampusForDate(group.campusId, group.date, {
+          skipStudents: true,
+          employeeWhere: { id: { in: group.employeeIds } },
+        });
+      } catch (err) {
+        this.logger.error(
+          `Attendance re-sync failed for campus ${group.campusId} on ${this.dateKey(group.date)}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
 
   async create(dto: CreateSaturdayScheduleDto, user: IJwtStaffPayload) {
     this.assertCanManage(user);
@@ -219,6 +271,14 @@ export class SaturdaySchedulesService {
         }
       }
     }
+
+    await this.resyncPastSaturdays(
+      created.map((row) => ({
+        employee_id: row.employee_id,
+        campus_id: row.employee_profiles.campus_id,
+        date: row.date,
+      })),
+    );
 
     // A mandatory Saturday always overrides an employee-scoped STAFF HOLIDAY
     // calendar entry for the same date (see CalendarDayResolverService) — flag
@@ -447,6 +507,9 @@ export class SaturdaySchedulesService {
     // Covers segment/department/category, which the legacy campus-only check never did.
     this.scope.assertEmployee(user, existing.employee_profiles);
     await this.prisma.teacher_saturday_schedules.delete({ where: { id } });
+    await this.resyncPastSaturdays([
+      { employee_id: existing.employee_id, campus_id: existing.employee_profiles.campus_id, date: existing.date },
+    ]);
 
     void this.auditLogs.log({
       entity_type: 'SATURDAY_SCHEDULE',

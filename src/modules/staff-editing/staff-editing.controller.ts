@@ -26,7 +26,7 @@ import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
-import { RequireAction, RequireAnyAction } from '../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction, RequireAnyTile } from '../../decorators/require-action.decorator';
 
 // TileActionGuard is what enforces @RequireAction. Without it every decorator
 // below was inert and any staff login could edit — or hard-delete — any
@@ -227,7 +227,7 @@ export class StaffEditingController {
   @Get('guardians/:id')
   async getGuardian(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
     await this.staffEditingService.assertGuardianVisible(user, id);
-    const guardian = await this.staffEditingService.getGuardian(id);
+    const guardian = await this.staffEditingService.getGuardian(id, user);
     return createApiResponse(
       guardian,
       HttpStatus.OK,
@@ -252,8 +252,9 @@ export class StaffEditingController {
   }
 
   @Get('guardians/by-nic/:nic')
+  @RequireAnyTile('student.directory', 'student.families')
   async getGuardianByNic(@Param('nic') nic: string, @CurrentUser() user: IJwtStaffPayload) {
-    const guardian = await this.staffEditingService.getGuardianByNic(nic);
+    const guardian = await this.staffEditingService.getGuardianByNic(nic, user);
     return createApiResponse(
       guardian,
       HttpStatus.OK,

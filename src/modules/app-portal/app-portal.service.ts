@@ -25,6 +25,7 @@ export class AppPortalService {
       where: { cc: studentCc },
       select: {
         cc: true,
+        family_id: true,
         full_name: true,
         gr_number: true,
         photograph_url: true,
@@ -149,6 +150,31 @@ export class AppPortalService {
       .filter(fee => fee.academic_year === student.academic_year)
       .reduce((sum, fee) => sum.add(new Prisma.Decimal(fee.amount_paid ?? 0)), new Prisma.Decimal(0));
 
+    let pendingFields: string[] = [];
+    if (student.family_id) {
+      const pendingReqs = await this.prisma.parent_change_requests.findMany({
+        where: {
+          family_id: student.family_id,
+          status: 'PENDING',
+        },
+      });
+      for (const req of pendingReqs) {
+        const data = req.requested_data as Record<string, any>;
+        if (
+          data?.request_type === 'STUDENT_UPDATE' &&
+          Number(data.student_cc) === student.cc &&
+          data.changes &&
+          typeof data.changes === 'object'
+        ) {
+          for (const key of Object.keys(data.changes)) {
+            if (!pendingFields.includes(key)) {
+              pendingFields.push(key);
+            }
+          }
+        }
+      }
+    }
+
     return {
       student: {
         cc: student.cc,
@@ -165,6 +191,8 @@ export class AppPortalService {
         enrollment_status: student.status,
         graduated_from_class: student.graduated_from_class?.description ?? null,
         graduated_at: student.graduated_at,
+        pending_fields: pendingFields,
+        pendingFields: pendingFields,
         guardians: student.student_guardians.map(sg => ({
           name: sg.guardians.full_name,
           relationship: sg.relationship,

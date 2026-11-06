@@ -24,7 +24,8 @@ import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import { effectiveManualStatus } from './manual-late.util';
 import { ZK_DEVICES } from './zk-device-health.util';
-import { describeCycleTenure, offRollReason } from '../hr/payroll/tenure-window.util';
+import { describeCycleTenure, offRollReason, progressionOverlapWhere } from '../hr/payroll/tenure-window.util';
+import { STAFF_VISIBLE_RUN } from '../hr/payroll/staff-visibility.util';
 
 const STATUS_LABELS: Partial<Record<StaffAttendanceStatus, string>> = {
   PRESENT: 'Present',
@@ -542,7 +543,8 @@ export class StaffAttendanceService {
       this.prisma.payroll_run_lines.findFirst({
         where: {
           employee_id: employee.id,
-          payroll_runs: { period_start: periodStart, period_end: periodEnd },
+          // TAFSD-478: only a run released to staff, never a draft or test run.
+          payroll_runs: { period_start: periodStart, period_end: periodEnd, ...STAFF_VISIBLE_RUN },
         },
         include: { payroll_runs: { select: { status: true } } },
       }),
@@ -568,8 +570,7 @@ export class StaffAttendanceService {
       this.prisma.employee_progression_periods.findMany({
         where: {
           employee_id: employee.id,
-          valid_from: { lte: periodEnd },
-          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+          ...progressionOverlapWhere(periodStart, periodEnd),
         },
         select: {
           employee_id: true,

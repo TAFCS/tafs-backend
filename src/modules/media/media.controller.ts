@@ -7,6 +7,8 @@ import {
   Query,
   Res,
   UploadedFile,
+  UploadedFiles,
+  Body,
   UseInterceptors,
   ParseIntPipe,
   BadRequestException,
@@ -14,7 +16,7 @@ import {
   UseGuards,
   ForbiddenException,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { MediaService } from './media.service';
 import { ApiTags, ApiOperation, ApiConsumes, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
@@ -47,6 +49,9 @@ const GUARDIAN_PHOTO_WRITERS = [
   'student.registration#admission_form',
   'student.quick_registration#create',
 ];
+const BULK_PHOTO_PREVIEW_LIMIT = 3000;
+const BULK_PHOTO_CHUNK_LIMIT = 20;
+
 const EMPLOYEE_PHOTO_WRITERS = [
   'hr.employee_directory#profile.edit',
   'hr.employee_directory#create',
@@ -149,6 +154,49 @@ export class MediaController {
       isTemp,
       uploader,
     );
+  }
+
+  // ─── Bulk student photos (TAFSD-483) ────────────────────────────────────
+  // Files are named by CC ("1234.jpg"). Each one becomes the student's current
+  // photo and is appended to their photo history; nothing is overwritten.
+  // Staff only, same write permission as a single photo upload, and limited to
+  // the caller's data scope (an out-of-scope CC reports as not found).
+
+  @Post('students/photos/bulk/preview')
+  @ApiBearerAuth()
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Check a batch of CC-named photo filenames before uploading' })
+  @ApiBody({ schema: { type: 'object', properties: { filenames: { type: 'array', items: { type: 'string' } } } } })
+  async previewBulkStudentPhotos(
+    @Body() body: { filenames?: unknown },
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    this.assertStaffMayWrite(user, STUDENT_PHOTO_WRITERS);
+    const names = Array.isArray(body?.filenames) ? body.filenames.map(String) : null;
+    if (!names?.length) throw new BadRequestException('filenames must be a non-empty array');
+    if (names.length > BULK_PHOTO_PREVIEW_LIMIT) {
+      throw new BadRequestException(`At most ${BULK_PHOTO_PREVIEW_LIMIT} files per batch`);
+    }
+    return this.mediaService.previewBulkStudentPhotos(names, this.scope.whereForStudents(user));
+  }
+
+  @Post('students/photos/bulk')
+  @ApiBearerAuth()
+  @UseGuards(JwtStaffGuard)
+  @ApiOperation({ summary: 'Upload a chunk of CC-named student photos' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ schema: { type: 'object', properties: { files: { type: 'array', items: { type: 'string', format: 'binary' } } } } })
+  @UseInterceptors(
+    FilesInterceptor('files', BULK_PHOTO_CHUNK_LIMIT, { limits: { fileSize: 10 * 1024 * 1024 } }),
+  )
+  async bulkUploadStudentPhotos(
+    @UploadedFiles() files: Express.Multer.File[],
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    this.assertStaffMayWrite(user, STUDENT_PHOTO_WRITERS);
+    if (!files?.length) throw new BadRequestException('No files uploaded');
+    const uploader = user?.username || String(user?.sub ?? 'system');
+    return this.mediaService.bulkUploadStudentPhotos(files, this.scope.whereForStudents(user), uploader);
   }
 
   @Get('student/:cc/photo-history')
