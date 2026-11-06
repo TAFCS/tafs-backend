@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
     IsArray,
+    IsBoolean,
     IsInt,
     IsNumber,
     IsObject,
@@ -49,4 +50,18 @@ export class RecordVoucherDepositDto {
     @Type(() => SurchargeAllocationDto)
     @IsOptional()
     surcharge_allocations?: SurchargeAllocationDto[];
+
+    // TAFSD-421: part of `amount` left over after the voucher is cleared, kept as
+    // family credit. Needs finance.receive_deposit#record_excess.
+    @Type(() => Number)
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0.01)
+    @IsOptional()
+    excess_amount?: number;
+
+    // TAFSD-421: pay this deposit from the family's credit, with no new cash.
+    // Needs finance.receive_deposit#pay_from_credit.
+    @IsBoolean()
+    @IsOptional()
+    pay_from_credit?: boolean;
 }

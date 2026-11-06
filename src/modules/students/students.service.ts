@@ -195,7 +195,7 @@ export class StudentsService {
       }),
       this.prisma.deposits.findMany({
         where: { student_id: studentId },
-        select: { total_amount: true }
+        select: { total_amount: true, excess_amount: true }
       }),
       this.prisma.deposit_allocations.findMany({
         where: { deposits: { student_id: studentId } },
@@ -203,7 +203,8 @@ export class StudentsService {
       })
     ]);
 
-    const totalDeposits = deposits.reduce((sum, d) => sum.add(d.total_amount || 0), new Prisma.Decimal(0));
+    // TAFSD-421: an excess is family credit with its own ledger, so it isn't advance credit too.
+    const totalDeposits = deposits.reduce((sum, d) => sum.add(d.total_amount || 0).sub(d.excess_amount || 0), new Prisma.Decimal(0));
     const totalAllocations = allocations.reduce((sum, a) => sum.add(a.amount || 0), new Prisma.Decimal(0));
     const advance = totalDeposits.sub(totalAllocations);
 
@@ -3773,6 +3774,7 @@ export class StudentsService {
       ...d,
       is_latest: idx === 0,
       total_amount: Number(d.total_amount),
+      excess_amount: Number(d.excess_amount ?? 0),
       allocations: d.deposit_allocations.map((a) => {
         const sf = a.student_fees as any;
         let feeTypeDescription: string;
@@ -3825,10 +3827,11 @@ export class StudentsService {
       vouchers: formattedVouchers,
       fee_heads: Array.from(monthMap.values()).sort((a, b) => a.target_month - b.target_month),
       deposits: formattedDeposits,
-      total_deposited_all_time: allDeposits.reduce((s, d) => s + Number(d.total_amount), 0),
+      // TAFSD-421: what reached this student's fees; an excess went to family credit.
+      total_deposited_all_time: allDeposits.reduce((s, d) => s + Number(d.total_amount) - Number(d.excess_amount ?? 0), 0),
       total_deposited_current_year: allDeposits
         .filter(d => d.deposit_allocations.some(a => a.student_fees?.academic_year === academicYear || a.vouchers?.academic_year === academicYear))
-        .reduce((s, d) => s + Number(d.total_amount), 0)
+        .reduce((s, d) => s + Number(d.total_amount) - Number(d.excess_amount ?? 0), 0)
     };
   }
 

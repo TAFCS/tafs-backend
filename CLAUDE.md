@@ -108,7 +108,11 @@ change makes one false, the change is wrong, not the rule.
     `GET /api/v1/bulk-voucher-jobs/active` before any DO operations. CI/CD
     (`backend.yml`) automatically polls this endpoint and aborts after 300s.
     Protect `main` with GitHub branch protection requiring PR reviews.
-13. `npx tsc --noEmit -p tsconfig.build.json` is clean.
+13. **Family credit** — a deposit's cash is `total_amount` where `from_credit` is
+    false, and what reached fees is `total_amount - excess_amount`. Never sum
+    `total_amount` as money without choosing one. See **Rule E**.
+    `npm test -- family-credit`.
+14. `npx tsc --noEmit -p tsconfig.build.json` is clean.
 
 ---
 
@@ -336,6 +340,52 @@ that derives a balance from it must skip the head explicitly:
 
 ---
 
+## Rule E — family credit is a ledger, and a credit payment is not cash
+
+**Invariant (TAFSD-421).** Money a family pays beyond its vouchers lives in the
+append-only `family_credit_ledger`, held on the family so a sibling can use it.
+The balance is the sum of the rows. Rows are never edited or deleted: undoing one
+adds an opposite row. Rules live in `src/modules/vouchers/family-credit.ts`.
+
+| Deposit | `total_amount` | `excess_amount` | `from_credit` | Ledger row |
+|---|---|---|---|---|
+| 80,000 against a 45,000 voucher | 80,000 | 35,000 | false | +35,000 `EXCESS_DEPOSIT` |
+| Sibling's 20,000 voucher paid from credit | 20,000 | 0 | true | -20,000 `APPLIED_TO_VOUCHER` |
+
+**Which figure to use.** Choose deliberately every time you read a deposit:
+
+| The site is asking | Use |
+|---|---|
+| How much cash came in? (Deposits report, analytics, daily digest) | `total_amount`, filtered to `from_credit: false` |
+| How much reached this student's fees? (receipts, payment history, defaulters) | `total_amount - excess_amount`, credit payments included |
+| How much is the family holding? | The ledger sum, never derived from deposits |
+
+Do not filter with `payment_method: { not: 'family_credit' }`: the column is
+nullable, so that also drops cash with no method. Use `from_credit`.
+
+**Rules.**
+- An excess is only allowed when the deposit clears the whole voucher, including
+  an overdue late fee. A student with no family cannot record or use credit.
+- `family_credit` is not a method staff can choose; only `pay_from_credit` sets it.
+- Both actions are separate grants: `finance.receive_deposit#record_excess` and
+  `#pay_from_credit`. Lock with `lockFamilyCreditBalance()` before reading a balance
+  to act on it, or two staff can spend the same credit.
+- Reversing a deposit adds the opposite row just before the deposit is deleted, in
+  all three places one is deleted (`reverseDeposit`, `clearDeposit`, the split
+  undo). Reversing an excess is **refused** if the credit has been spent; reverse the
+  deposits that used it first. Any new path that deletes a deposit must do the same.
+- `forceRemove` refuses a voucher paid from credit, and fee reset and student delete
+  refuse a student with standing entries.
+- **Automated bank flows never create credit.** UBL rejects any amount that doesn't
+  match. Meezan writes deposits itself and doesn't compare the amount; no case has
+  occurred, but see its follow-up ticket before relying on that.
+
+**Check after any change here:** `npm test -- family-credit`, then
+`scripts/verify-family-credit-flows.ts` against a local throwaway database (its
+header says how, and why never to set that up from this repo).
+
+---
+
 ## Status vocabularies (do not invent new values silently)
 
 - `vouchers.status` (free-form VARCHAR): `UNPAID`, `OVERDUE`, `EXPIRED`,
@@ -343,6 +393,8 @@ that derives a balance from it must skip the head explicitly:
 - `fee_status_enum` (`student_fees.status`): `NOT_ISSUED`, `ISSUED`,
   `PARTIALLY_PAID`, `PAID`, `DISCOUNT`, `WAIVED`.
 - `deposit_allocations.type`: `FEE_HEAD`, `LATE_FEE`, `SURCHARGE`, `DISCOUNT`.
+- `family_credit_ledger.kind`: `EXCESS_DEPOSIT`, `APPLIED_TO_VOUCHER`,
+  `EXCESS_REVERSED`, `APPLICATION_REVERSED`.
 
 Adding a value means auditing every `status IN (...)` / `notIn` / switch in
 `vouchers.service.ts`, `financial-reports.service.ts`, `analytics.service.ts`,

@@ -28,6 +28,7 @@ import { invalidateUnpaidVoucherPdfs, isFatherRelationship } from '../vouchers/i
 import { StorageService } from '../../common/storage/storage.service';
 import { schoolHeadingForClass } from '../../common/utils/school-heading.util';
 
+import { hasOpenCreditEntries } from '../vouchers/family-credit';
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
 @Injectable()
@@ -2343,6 +2344,18 @@ export class StaffEditingService {
     ]
       .filter(Boolean)
       .join(' · ');
+
+    // TAFSD-421: this wipes the student's deposits, which would strand any family
+    // credit they created or used. Reverse those deposits first.
+    const creditRows = await this.prisma.family_credit_ledger.findMany({
+      where: { student_id: cc },
+      select: { deposit_id: true, amount: true },
+    });
+    if (hasOpenCreditEntries(creditRows)) {
+      throw new BadRequestException(
+        'This student has family credit entries. Reverse those deposits before deleting the student.',
+      );
+    }
 
     // 2. Comprehensive Transactional Wipe
     const result = await this.prisma.$transaction(async (tx) => {

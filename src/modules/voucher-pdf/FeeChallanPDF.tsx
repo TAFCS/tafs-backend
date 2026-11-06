@@ -19,6 +19,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
     pos: 'POS',
     pay_order: 'PAY ORDER',
     meezan: 'MEEZAN BANK',
+    family_credit: 'FAMILY CREDIT', // TAFSD-421: no new cash
 };
 
 function formatPaymentMethod(value?: string | null): string {
