@@ -238,11 +238,40 @@ model deposits {
   bank_code           String?               @db.VarChar(20)
   bank_name           String?               @db.VarChar(100)
   date_of_return      DateTime?             @db.Date
+  /// TAFSD-421. Part of the cash in total_amount that went to family credit.
+  /// Applied to fees = total_amount - excess_amount.
+  excess_amount       Decimal               @default(0) @db.Decimal(12, 2)
+  /// TAFSD-421. Paid from family credit: brought in no new cash, so it must
+  /// never be counted as cash collected.
+  from_credit         Boolean               @default(false)
   deposit_allocations deposit_allocations[]
   students            students              @relation(fields: [student_id], references: [cc], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([deposit_date], map: "idx_deposits_deposit_date")
   @@index([student_id], map: "idx_deposits_student_id")
+}
+
+/// TAFSD-421. Append-only: the balance is the sum of the rows, and undoing an
+/// entry adds an opposite row. student_id, voucher_id and deposit_id are plain
+/// ids rather than foreign keys, so the history outlives what it points at.
+model family_credit_ledger {
+  id         Int      @id @default(autoincrement())
+  family_id  Int
+  /// + credit in, - credit used.
+  amount     Decimal  @db.Decimal(12, 2)
+  /// EXCESS_DEPOSIT, APPLIED_TO_VOUCHER, EXCESS_REVERSED, APPLICATION_REVERSED.
+  kind       String   @db.VarChar(30)
+  student_id Int?
+  voucher_id Int?
+  deposit_id Int?
+  notes      String?
+  created_by String?  @db.VarChar(100)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  families   families @relation(fields: [family_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([family_id, id], map: "idx_family_credit_ledger_family")
+  @@index([deposit_id], map: "idx_family_credit_ledger_deposit")
+  @@index([student_id], map: "idx_family_credit_ledger_student")
 }
 
 model families {
@@ -267,6 +296,7 @@ model families {
   students                 students[]
   support_tickets          support_tickets[]
   voucher_notifications    voucher_notifications[]
+  family_credit_ledger     family_credit_ledger[]
 
   // TAFSD-399: parent login and signup look families up by exact email.
   @@index([email], map: "idx_families_email")

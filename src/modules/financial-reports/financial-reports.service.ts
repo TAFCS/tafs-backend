@@ -94,7 +94,7 @@ const DEFAULTER_CAMPUS_LABELS: Record<string, string> = {
 /** Fee Heads / Deposits export columns that get a TOTAL on the school-format sheet (TAFSD-268). */
 const SCHOOL_SHEET_TOTAL_KEYS = new Set([
   'amount', 'amount_paid', 'waived', 'waived_amount', 'outstanding', 'billed', 'discount',
-  'total_amount', 'fee_heads', 'late_fee', 'surcharge', 'lps_total',
+  'total_amount', 'to_family_credit', 'paid_from_credit', 'fee_heads', 'late_fee', 'surcharge', 'lps_total',
   'head_count', 'student_count', 'discount_count',
 ]);
 /** Of those, the counts (no thousands format). */
@@ -252,6 +252,8 @@ const DEPOSIT_SELECT = {
   bank_name: true,
   reference_number: true,
   total_amount: true,
+  excess_amount: true,
+  from_credit: true,
   deposit_allocations: {
     select: { type: true, amount: true },
   },
@@ -1125,7 +1127,7 @@ export class FinancialReportsService {
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 50, 200);
 
-    const [rows, cash, byType, discounts, appliedDiscounts] = await Promise.all([
+    const [rows, cash, byType, discounts, appliedDiscounts, creditUsed] = await Promise.all([
       this.prisma.deposits.findMany({
         where,
         select: DEPOSIT_SELECT,
@@ -1133,25 +1135,34 @@ export class FinancialReportsService {
         skip: (page - 1) * limit,
         take: limit,
       }),
+      // TAFSD-421: this report is cash banked. A family-credit payment stays in
+      // the list but brought in no cash, so it has its own total.
       this.prisma.deposits.aggregate({
-        where,
-        _sum: { total_amount: true },
+        where: { ...where, from_credit: false },
+        _sum: { total_amount: true, excess_amount: true },
         _count: true,
       }),
       this.prisma.deposit_allocations.groupBy({
         by: ['type'],
-        where: { deposits: where },
+        where: { deposits: { ...where, from_credit: false } },
         _sum: { amount: true },
       }),
       this.depositsDiscountTotal(query, user),
       this.depositsAppliedDiscountTotal(query, user),
+      this.prisma.deposits.aggregate({
+        where: { ...where, from_credit: true },
+        _sum: { total_amount: true },
+        _count: true,
+      }),
     ]);
 
     return {
       items: rows.map((row) => this.mapDeposit(row)),
-      pagination: createPaginationMeta(page, limit, cash._count),
+      pagination: createPaginationMeta(page, limit, cash._count + creditUsed._count),
       totals: {
         ...this.buildDepositTotals(cash, byType),
+        credit_used: this.toMoney(creditUsed._sum.total_amount),
+        credit_used_count: creditUsed._count,
         discounts_total: discounts.amount,
         discounts_count: discounts.count,
         discounts_applied_total: appliedDiscounts.amount,
@@ -2038,6 +2049,8 @@ export class FinancialReportsService {
       { header: 'Bank', key: 'bank_name', width: 20 },
       { header: 'Reference', key: 'reference_number', width: 18 },
       { header: 'Total amount', key: 'total_amount', width: 14 },
+      { header: 'To family credit', key: 'to_family_credit', width: 14 },
+      { header: 'Paid from credit', key: 'paid_from_credit', width: 14 },
       { header: 'Fee heads', key: 'fee_heads', width: 14 },
       { header: 'Late fee', key: 'late_fee', width: 14 },
       { header: 'Arrear surcharge', key: 'surcharge', width: 16 },
@@ -2056,6 +2069,8 @@ export class FinancialReportsService {
       bank_name: item.bank_name ?? '',
       reference_number: item.reference_number ?? '',
       total_amount: item.total_amount,
+      to_family_credit: item.to_family_credit,
+      paid_from_credit: item.paid_from_credit,
       fee_heads: item.fee_heads,
       late_fee: item.late_fee,
       surcharge: item.surcharge,
@@ -3024,13 +3039,13 @@ export class FinancialReportsService {
         by: ['student_id'],
         where: window(6),
         _count: { _all: true },
-        _sum: { total_amount: true },
+        _sum: { total_amount: true, excess_amount: true },
       }),
       this.prisma.deposits.groupBy({
         by: ['student_id'],
         where: window(12),
         _count: { _all: true },
-        _sum: { total_amount: true },
+        _sum: { total_amount: true, excess_amount: true },
       }),
     ]);
 
@@ -3045,12 +3060,13 @@ export class FinancialReportsService {
     for (const row of last6) {
       const e = entry(row.student_id);
       e.payments_last_6m = row._count._all;
-      e.paid_last_6m = this.toMoney(row._sum.total_amount);
+      // TAFSD-421: what reached this student's fees; an excess went to family credit.
+      e.paid_last_6m = this.roundMoney(this.toMoney(row._sum.total_amount) - this.toMoney(row._sum.excess_amount));
     }
     for (const row of last12) {
       const e = entry(row.student_id);
       e.payments_last_12m = row._count._all;
-      e.paid_last_12m = this.toMoney(row._sum.total_amount);
+      e.paid_last_12m = this.roundMoney(this.toMoney(row._sum.total_amount) - this.toMoney(row._sum.excess_amount));
     }
     return result;
   }
@@ -5453,7 +5469,10 @@ export class FinancialReportsService {
       payment_method: row.payment_method,
       bank_name: row.bank_name,
       reference_number: row.reference_number,
-      total_amount: this.toMoney(row.total_amount),
+      // TAFSD-421: total_amount here means cash, so a credit payment is 0 of it.
+      total_amount: row.from_credit ? 0 : this.toMoney(row.total_amount),
+      to_family_credit: this.toMoney(row.excess_amount),
+      paid_from_credit: row.from_credit ? this.toMoney(row.total_amount) : 0,
       allocations: row.deposit_allocations.map((a) => ({
         type: a.type,
         amount: this.toMoney(a.amount),
@@ -5466,7 +5485,7 @@ export class FinancialReportsService {
   }
 
   private buildDepositTotals(
-    cash: { _count: number; _sum: { total_amount: Prisma.Decimal | null } },
+    cash: { _count: number; _sum: { total_amount: Prisma.Decimal | null; excess_amount: Prisma.Decimal | null } },
     byType: Array<{
       type: string;
       _sum: { amount: Prisma.Decimal | null };
@@ -5497,7 +5516,9 @@ export class FinancialReportsService {
       },
       lps_total: this.roundMoney(lateFee + surcharge),
       allocations_total: allocationsTotal,
-      reconciles: cashDecimal.eq(allocDecimal),
+      // TAFSD-421: cash that became family credit is accounted for, not missing.
+      credit_received: this.toMoney(cash._sum.excess_amount),
+      reconciles: cashDecimal.eq(allocDecimal.plus(cash._sum.excess_amount ?? 0)),
     };
   }
 

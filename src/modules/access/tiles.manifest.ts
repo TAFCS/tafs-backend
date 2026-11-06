@@ -582,6 +582,8 @@ const RECEIVE_DEPOSIT_ACTIONS: TileAction[] = [
   { id: 'split', label: 'Split a partially paid voucher', implies: ['view'] },
   { id: 'print', label: 'Print or regenerate a voucher PDF', implies: ['view'] },
   { id: 'main_receipt', label: 'Print the main-column receipt', description: 'Special admin workflow', implies: ['view'] },
+  { id: 'record_excess', label: 'Record excess payments as family credit', description: 'When a family pays more than the voucher, keep the extra as credit', implies: ['record'] },
+  { id: 'pay_from_credit', label: 'Pay a voucher from family credit', description: 'Use money the family already paid, with no new cash', implies: ['record'] },
 ];
 
 // Transfers had NO guard of any kind: TransferController carried no
