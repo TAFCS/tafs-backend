@@ -27,6 +27,7 @@ import { ChatService } from '../chat/chat.service';
 import { SupportTicketsService } from './support-tickets.service';
 import { parsePagination } from './support-tickets-pagination';
 import { CreateTicketDto } from './dto/create-ticket.dto';
+import { CreateFlowTicketDto } from './flow/dto/ticket-flow.dto';
 import { CreateTicketMessageDto } from './dto/create-ticket-message.dto';
 import { ReviewTicketMessageDto } from './dto/review-ticket-message.dto';
 import { EditTicketMessageDto } from './dto/edit-ticket-message.dto';
@@ -57,6 +58,29 @@ export class SupportTicketsController {
     return this.supportTicketsService.getOriginationOptions();
   }
 
+  @Get('flow')
+  @UseGuards(JwtParentGuard)
+  @ApiOperation({ summary: 'Published ticket flow (lanes and steps) for this family' })
+  getFlow(@CurrentUser() parent: any) {
+    return this.supportTicketsService.getParentFlow(parent);
+  }
+
+  @Post('flow')
+  @UseGuards(JwtParentGuard)
+  @ApiOperation({ summary: 'Create a ticket by walking the published flow' })
+  createFlowTicket(@CurrentUser() parent: any, @Body() dto: CreateFlowTicketDto) {
+    return this.supportTicketsService.createFlowTicket(parent, dto);
+  }
+
+  @Get('lanes')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#view')
+  @ApiOperation({ summary: 'Ticket lanes, for filters and chips' })
+  lanes() {
+    return this.supportTicketsService.listLanes();
+  }
+
   @Get('mine')
   @UseGuards(JwtParentGuard)
   @ApiOperation({ summary: 'List tickets for the current parent family' })
@@ -65,6 +89,7 @@ export class SupportTicketsController {
     @Query('status') status?: 'open' | 'closed',
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('lane') lane?: string,
   ) {
     const pagination = parsePagination(take, skip);
     return this.supportTicketsService.listParentTickets(
@@ -72,6 +97,7 @@ export class SupportTicketsController {
       status,
       pagination.take,
       pagination.skip,
+      lane,
     );
   }
 
@@ -100,12 +126,14 @@ export class SupportTicketsController {
     @CurrentUser() staff: any,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('lane') lane?: string,
   ) {
     const pagination = parsePagination(take, skip);
     return this.supportTicketsService.listMyQueue(
       staff,
       pagination.take,
       pagination.skip,
+      lane,
     );
   }
 
@@ -127,12 +155,14 @@ export class SupportTicketsController {
     @CurrentUser() staff: any,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('lane') lane?: string,
   ) {
     const pagination = parsePagination(take, skip);
     return this.supportTicketsService.listFinanceQueue(
       staff,
       pagination.take,
       pagination.skip,
+      lane,
     );
   }
 
@@ -145,12 +175,14 @@ export class SupportTicketsController {
     @CurrentUser() staff: any,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('lane') lane?: string,
   ) {
     const pagination = parsePagination(take, skip);
     return this.supportTicketsService.listOversightQueue(
       staff,
       pagination.take,
       pagination.skip,
+      lane,
     );
   }
 
@@ -163,12 +195,14 @@ export class SupportTicketsController {
     @CurrentUser() staff: any,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('lane') lane?: string,
   ) {
     const pagination = parsePagination(take, skip);
     return this.supportTicketsService.listClosedTickets(
       staff,
       pagination.take,
       pagination.skip,
+      lane,
     );
   }
 
