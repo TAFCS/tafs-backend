@@ -163,6 +163,25 @@ export class AttendanceObjectionsService {
     return objections.map((o) => ({ ...o, day_scans: byDay.get(dayKey(o.employee_id, o.attendance_date)) ?? [] }));
   }
 
+  /**
+   * When the day is missing its clock-out, its arrival; else null. Matches the
+   * staff app, which offers "Missing clock-out" for an odd number of punches,
+   * or an overridden day with a check-in and no check-out.
+   */
+  private async missingClockOutArrival(employeeId: number, date: Date): Promise<Date | null> {
+    const scans = await this.prisma.zk_attendance_scans.findMany({
+      where: { person_type: 'STAFF', is_duplicate: false, employee_id: employeeId, attendance_date: date },
+      orderBy: { scan_time: 'asc' },
+      select: { scan_time: true },
+    });
+    if (scans.length) return scans.length % 2 === 1 ? scans[0].scan_time : null;
+    const day = await this.prisma.attendance_staff_daily.findUnique({
+      where: { employee_id_date: { employee_id: employeeId, date } },
+      select: { check_in_at: true, check_out_at: true },
+    });
+    return day?.check_in_at && !day.check_out_at ? day.check_in_at : null;
+  }
+
   async review(id: number, dto: ReviewAttendanceObjectionDto, user: IJwtStaffPayload) {
     if (dto.status === AttendanceObjectionStatus.PENDING) {
       throw new BadRequestException('Status must be ACCEPTED or REJECTED');
@@ -260,28 +279,37 @@ export class AttendanceObjectionsService {
           checkInAt = existing.claimed_time;
         }
       } else {
-        // Day-level objection (zero biometric scans recorded for the day):
-        // Record claimed arrival as check_in_at, and derive check_out_at from employee leaving_time if configured
-        checkInAt = existing.claimed_time;
-        // That weekday's leaving time (TAFSD-363: Friday may differ).
-        const leavingTime = timingsForDate(
-          existing.employee,
-          existing.employee.employee_day_timings,
-          new Date(existing.attendance_date),
-        ).leaving_time;
-        if (leavingTime) {
-          const lt = new Date(leavingTime);
-          const d = new Date(existing.attendance_date);
-          checkOutAt = new Date(
-            Date.UTC(
-              d.getUTCFullYear(),
-              d.getUTCMonth(),
-              d.getUTCDate(),
-              lt.getUTCHours(),
-              lt.getUTCMinutes(),
-              0,
-            ),
-          );
+        // TAFSD-479: the staff app sends "Missing clock-out" with no scan.
+        // Keep the day's arrival and record the claimed time as the leaving
+        // time, instead of overwriting the arrival with it.
+        const arrival = await this.missingClockOutArrival(existing.employee_id, existing.attendance_date);
+        if (arrival && existing.claimed_time > arrival) {
+          checkInAt = arrival;
+          checkOutAt = existing.claimed_time;
+        } else {
+          // Day-level objection (zero biometric scans recorded for the day):
+          // Record claimed arrival as check_in_at, and derive check_out_at from employee leaving_time if configured
+          checkInAt = existing.claimed_time;
+          // That weekday's leaving time (TAFSD-363: Friday may differ).
+          const leavingTime = timingsForDate(
+            existing.employee,
+            existing.employee.employee_day_timings,
+            new Date(existing.attendance_date),
+          ).leaving_time;
+          if (leavingTime) {
+            const lt = new Date(leavingTime);
+            const d = new Date(existing.attendance_date);
+            checkOutAt = new Date(
+              Date.UTC(
+                d.getUTCFullYear(),
+                d.getUTCMonth(),
+                d.getUTCDate(),
+                lt.getUTCHours(),
+                lt.getUTCMinutes(),
+                0,
+              ),
+            );
+          }
         }
       }
 
