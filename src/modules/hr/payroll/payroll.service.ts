@@ -33,7 +33,7 @@ import { SecurityDepositsService } from '../security-deposits/security-deposits.
 import { EmployeeLoansService } from '../employee-loans/employee-loans.service';
 import { ScopeService } from '../../../common/scope/scope.service';
 import { ZK_DEVICES } from '../../attendance/zk-device-health.util';
-import { effectiveManualStatus } from '../../attendance/manual-late.util';
+import { effectiveManualStatus, isLateCheckIn } from '../../attendance/manual-late.util';
 import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
@@ -642,7 +642,15 @@ export class PayrollService {
         classification = 'ABSENT';
       } else if (dayScans.length % 2 !== 0) {
         classification = 'UNRESOLVED';
-      } else if (record?.status === StaffAttendanceStatus.LATE) {
+      } else if (
+        record?.status === StaffAttendanceStatus.LATE ||
+        // TAFSD-485: judge lateness from the first punch, the way early leave
+        // is judged from the last one. The stored status can be a stale
+        // PRESENT (a back-dated day, or a timing changed after the row was
+        // written), which hid the late arrival while the early leave was cut.
+        (expected.expectedCheckIn &&
+          isLateCheckIn(dayScans[0].scan_time, expected.expectedCheckIn, expected.graceMinutes))
+      ) {
         classification = 'LATE';
       } else {
         classification = 'PRESENT';
