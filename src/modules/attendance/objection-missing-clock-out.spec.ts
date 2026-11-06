@@ -1,4 +1,5 @@
-import { AttendanceObjectionStatus } from '@prisma/client';
+import { AttendanceObjectionStatus, StaffAttendanceStatus } from '@prisma/client';
+import { ConflictException } from '@nestjs/common';
 import { AttendanceObjectionsService } from './attendance-objections.service';
 
 jest.mock('../../common/auth/super-admin', () => ({
@@ -6,22 +7,37 @@ jest.mock('../../common/auth/super-admin', () => ({
   assertMayChangeEmployee: jest.fn(async () => undefined),
 }));
 
-// TAFSD-479: the staff app sends "Missing clock-out" with no scan. Accepting it
-// used to record the claimed leaving time as the check-in.
+// TAFSD-479 and TAFSD-489: what accepting an objection writes to the day.
 
 const DAY = new Date('2026-11-05T00:00:00Z');
 const at = (hhmm: string) => new Date(`2026-11-05T${hhmm}:00Z`);
 
-function setup(opts: { scans: string[]; claimed: string; daily?: { check_in_at: Date | null; check_out_at: Date | null } }) {
+type Opts = {
+  scans: string[];
+  claimed: string;
+  /** Index into `scans` of the punch objected to; none = a day objection. */
+  objectTo?: number;
+  direction?: 'IN' | 'OUT' | null;
+  daily?: { check_in_at: Date | null; check_out_at: Date | null };
+  status?: AttendanceObjectionStatus;
+  raceLost?: boolean;
+};
+
+function setup(opts: Opts) {
+  const scans = opts.scans.map((t, i) => ({ id: 100 + i, scan_time: at(t) }));
+  const scan = opts.objectTo != null
+    ? { id: 100 + opts.objectTo, scan_time: at(opts.scans[opts.objectTo]), direction: opts.direction ?? null }
+    : null;
   const existing = {
     id: 1,
     employee_id: 9,
     attendance_date: DAY,
-    scan_id: null,
-    scan: null,
+    status: opts.status ?? AttendanceObjectionStatus.PENDING,
+    scan_id: scan?.id ?? null,
+    scan,
     claimed_time: at(opts.claimed),
     original_scan_time: null,
-    reason: 'Forgot to punch out',
+    reason: 'Punch was wrong',
     created_at: at('18:00'),
     employee: {
       id: 9, campus_id: 2, user_id: 'u9', full_name: 'Test Teacher', employee_code: 'T1',
@@ -33,10 +49,11 @@ function setup(opts: { scans: string[]; claimed: string; daily?: { check_in_at: 
   const prisma: any = {
     attendance_objections: {
       findUnique: jest.fn(async () => existing),
-      update: jest.fn(async () => ({ ...existing, employee: existing.employee, scan: null })),
+      updateMany: jest.fn(async () => ({ count: opts.raceLost ? 0 : 1 })),
+      findUniqueOrThrow: jest.fn(async () => ({ ...existing, scan })),
     },
     zk_attendance_scans: {
-      findMany: jest.fn(async () => opts.scans.map((t) => ({ scan_time: at(t) }))),
+      findMany: jest.fn(async () => scans),
       update: jest.fn(),
     },
     attendance_staff_daily: {
@@ -51,11 +68,18 @@ function setup(opts: { scans: string[]; claimed: string; daily?: { check_in_at: 
     { sendToUsers: jest.fn(async () => undefined) } as any,
     { log: jest.fn() } as any,
     { assertEmployee: jest.fn(), assertCampus: jest.fn() } as any,
+    {
+      resolveExpectedTimes: jest.fn(async () => ({
+        expectedCheckIn: new Date('1970-01-01T08:00:00Z'),
+        expectedCheckOut: new Date('1970-01-01T16:00:00Z'),
+        graceMinutes: 10,
+      })),
+    } as any,
   );
   const user = { sub: 'hr1', role: 'HR', campusId: 2 } as any;
   const accept = () => svc.review(1, { status: AttendanceObjectionStatus.ACCEPTED, admin_notes: 'ok' } as any, user);
   const saved = () => (upsert.mock.calls[0] as any)[0].update;
-  return { accept, saved };
+  return { accept, saved, upsert };
 }
 
 describe('TAFSD-479: accepting a missing clock-out', () => {
@@ -73,16 +97,75 @@ describe('TAFSD-479: accepting a missing clock-out', () => {
     expect(t.saved().check_out_at).toEqual(at('15:45'));
   });
 
-  it('a whole-day objection with no punches still records the claimed arrival', async () => {
-    const t = setup({ scans: [], claimed: '08:20' });
+  it('a whole-day objection with no punches records the claimed arrival and the schedule leaving time', async () => {
+    const t = setup({ scans: [], claimed: '08:05' });
     await t.accept();
-    expect(t.saved().check_in_at).toEqual(at('08:20'));
+    expect(t.saved().check_in_at).toEqual(at('08:05'));
     expect(t.saved().check_out_at).toEqual(at('16:00'));
   });
+});
 
-  it('a whole-day objection on a day with a full punch pair is unchanged', async () => {
-    const t = setup({ scans: ['09:10', '16:00'], claimed: '08:00' });
+describe('TAFSD-489 (57): accepting keeps lateness', () => {
+  it('a corrected check-in that is still late is saved as LATE', async () => {
+    const t = setup({ scans: ['08:40', '16:00'], objectTo: 0, direction: 'IN', claimed: '08:20' });
+    await t.accept();
+    expect(t.saved().check_in_at).toEqual(at('08:20'));
+    expect(t.saved().status).toBe(StaffAttendanceStatus.LATE);
+  });
+
+  it('a corrected check-in inside the grace window is PRESENT', async () => {
+    const t = setup({ scans: ['08:40', '16:00'], objectTo: 0, direction: 'IN', claimed: '08:05' });
+    await t.accept();
+    expect(t.saved().status).toBe(StaffAttendanceStatus.PRESENT);
+  });
+
+  it('a missing clock-out keeps the late arrival LATE', async () => {
+    const t = setup({ scans: ['08:30'], claimed: '16:00' });
+    await t.accept();
+    expect(t.saved().status).toBe(StaffAttendanceStatus.LATE);
+  });
+});
+
+describe('TAFSD-489 (58): a whole-day objection keeps the real clock-out', () => {
+  it('keeps the last punch of a complete day', async () => {
+    const t = setup({ scans: ['09:10', '15:30'], claimed: '08:00' });
     await t.accept();
     expect(t.saved().check_in_at).toEqual(at('08:00'));
+    expect(t.saved().check_out_at).toEqual(at('15:30'));
+  });
+
+  it("keeps an override's check-out", async () => {
+    const t = setup({ scans: [], claimed: '08:00', daily: { check_in_at: at('09:00'), check_out_at: at('14:00') } });
+    await t.accept();
+    expect(t.saved().check_out_at).toEqual(at('14:00'));
+  });
+});
+
+describe('TAFSD-489 (59): a punch with no direction is read by position', () => {
+  it('the second punch of the day is the clock-out', async () => {
+    const t = setup({ scans: ['08:00', '15:00'], objectTo: 1, direction: null, claimed: '16:00' });
+    await t.accept();
+    expect(t.saved().check_out_at).toEqual(at('16:00'));
+    expect(t.saved().check_in_at).toBeUndefined();
+  });
+
+  it('the first punch of the day is the clock-in', async () => {
+    const t = setup({ scans: ['08:30', '16:00'], objectTo: 0, direction: null, claimed: '08:00' });
+    await t.accept();
+    expect(t.saved().check_in_at).toEqual(at('08:00'));
+  });
+});
+
+describe('TAFSD-489 (60): an objection is decided once', () => {
+  it('refuses an objection that was already decided', async () => {
+    const t = setup({ scans: ['08:00'], claimed: '16:00', status: AttendanceObjectionStatus.REJECTED });
+    await expect(t.accept()).rejects.toBeInstanceOf(ConflictException);
+    expect(t.upsert).not.toHaveBeenCalled();
+  });
+
+  it('refuses when another reviewer decided it a moment earlier', async () => {
+    const t = setup({ scans: ['08:00'], claimed: '16:00', raceLost: true });
+    await expect(t.accept()).rejects.toBeInstanceOf(ConflictException);
+    expect(t.upsert).not.toHaveBeenCalled();
   });
 });
