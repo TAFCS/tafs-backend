@@ -1,6 +1,7 @@
 import { timingsForDate } from '../hr/employees/employee-day-timings.util';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -24,6 +25,8 @@ import {
   ReviewAttendanceObjectionDto,
 } from './dto/attendance-objections.dto';
 import { assertMayChangeEmployee } from '../../common/auth/super-admin';
+import { EmployeeExpectedTimesService } from '../timetables/employee-expected-times.service';
+import { isLateCheckIn } from './manual-late.util';
 
 @Injectable()
 export class AttendanceObjectionsService {
@@ -33,6 +36,7 @@ export class AttendanceObjectionsService {
     private readonly fcmService: FcmService,
     private readonly auditLogs: AuditLogsService,
     private readonly scope: ScopeService,
+    private readonly expectedTimes: EmployeeExpectedTimesService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -163,23 +167,20 @@ export class AttendanceObjectionsService {
     return objections.map((o) => ({ ...o, day_scans: byDay.get(dayKey(o.employee_id, o.attendance_date)) ?? [] }));
   }
 
-  /**
-   * When the day is missing its clock-out, its arrival; else null. Matches the
-   * staff app, which offers "Missing clock-out" for an odd number of punches,
-   * or an overridden day with a check-in and no check-out.
-   */
-  private async missingClockOutArrival(employeeId: number, date: Date): Promise<Date | null> {
-    const scans = await this.prisma.zk_attendance_scans.findMany({
-      where: { person_type: 'STAFF', is_duplicate: false, employee_id: employeeId, attendance_date: date },
-      orderBy: { scan_time: 'asc' },
-      select: { scan_time: true },
-    });
-    if (scans.length) return scans.length % 2 === 1 ? scans[0].scan_time : null;
-    const day = await this.prisma.attendance_staff_daily.findUnique({
-      where: { employee_id_date: { employee_id: employeeId, date } },
-      select: { check_in_at: true, check_out_at: true },
-    });
-    return day?.check_in_at && !day.check_out_at ? day.check_in_at : null;
+  /** The day's real punches (oldest first) and its attendance row. */
+  private async dayState(employeeId: number, date: Date) {
+    const [scans, record] = await Promise.all([
+      this.prisma.zk_attendance_scans.findMany({
+        where: { person_type: 'STAFF', is_duplicate: false, employee_id: employeeId, attendance_date: date },
+        orderBy: { scan_time: 'asc' },
+        select: { id: true, scan_time: true },
+      }),
+      this.prisma.attendance_staff_daily.findUnique({
+        where: { employee_id_date: { employee_id: employeeId, date } },
+        select: { check_in_at: true, check_out_at: true },
+      }),
+    ]);
+    return { scans, record };
   }
 
   async review(id: number, dto: ReviewAttendanceObjectionDto, user: IJwtStaffPayload) {
@@ -212,6 +213,11 @@ export class AttendanceObjectionsService {
       },
     });
     if (!existing) throw new NotFoundException('Objection not found');
+    // (60) An objection is decided once; a second decision would leave the
+    // day rewritten under a different status.
+    if (existing.status !== AttendanceObjectionStatus.PENDING) {
+      throw new ConflictException(`This objection was already ${existing.status.toLowerCase()}.`);
+    }
     if (existing.employee.campus_id) {
       this.assertCampusAccess(user, existing.employee.campus_id);
     }
@@ -224,8 +230,9 @@ export class AttendanceObjectionsService {
     }
     await assertMayChangeEmployee(this.prisma, user, existing.employee.id, 'attendance objection');
 
-    const updated = await this.prisma.attendance_objections.update({
-      where: { id },
+    // Claim it atomically, so two reviewers acting at once can't both decide.
+    const claimed = await this.prisma.attendance_objections.updateMany({
+      where: { id, status: AttendanceObjectionStatus.PENDING },
       data: {
         status: dto.status,
         admin_notes: dto.admin_notes ?? null,
@@ -237,6 +244,12 @@ export class AttendanceObjectionsService {
           ? { original_scan_time: existing.scan.scan_time }
           : {}),
       },
+    });
+    if (claimed.count === 0) {
+      throw new ConflictException('This objection was just decided by someone else.');
+    }
+    const updated = await this.prisma.attendance_objections.findUniqueOrThrow({
+      where: { id },
       include: {
         employee: { select: { id: true, full_name: true, employee_code: true } },
         scan: { select: { id: true, scan_time: true, direction: true } },
@@ -245,6 +258,9 @@ export class AttendanceObjectionsService {
     });
 
     if (dto.status === AttendanceObjectionStatus.ACCEPTED) {
+      // The day as it was, before step 1 moves the objected punch.
+      const { scans: dayScans, record } = await this.dayState(existing.employee_id, existing.attendance_date);
+
       // 1. Tag the biometric scan and update its time if possible
       if (existing.scan_id) {
         try {
@@ -263,8 +279,7 @@ export class AttendanceObjectionsService {
         }
       }
 
-      // 2. Correct the daily attendance record (status -> PRESENT, check_in_at/check_out_at -> claimed_time)
-      const isCheckOut = existing.scan?.direction === 'OUT';
+      // 2. Correct the daily attendance record.
       const noteText = dto.admin_notes?.trim()
         ? `Objection accepted: ${dto.admin_notes.trim()}`
         : `Objection accepted: ${existing.reason}`;
@@ -273,48 +288,78 @@ export class AttendanceObjectionsService {
       let checkOutAt: Date | undefined = undefined;
 
       if (existing.scan_id) {
+        // (59) A punch with no direction is read by position, as payroll
+        // does: punches alternate in, out, in, out.
+        const index = dayScans.findIndex((s) => s.id === existing.scan_id);
+        const isCheckOut =
+          existing.scan?.direction === 'OUT' ||
+          (existing.scan?.direction == null && index >= 0 && index % 2 === 1);
         if (isCheckOut) {
           checkOutAt = existing.claimed_time;
         } else {
           checkInAt = existing.claimed_time;
         }
       } else {
-        // TAFSD-479: the staff app sends "Missing clock-out" with no scan.
-        // Keep the day's arrival and record the claimed time as the leaving
-        // time, instead of overwriting the arrival with it.
-        const arrival = await this.missingClockOutArrival(existing.employee_id, existing.attendance_date);
+        // TAFSD-479: the staff app sends "Missing clock-out" with no scan — the
+        // day has an odd number of punches, or an override with a check-in and
+        // no check-out. Keep the arrival; the claimed time is the leaving time.
+        const arrival = dayScans.length
+          ? dayScans.length % 2 === 1
+            ? dayScans[0].scan_time
+            : null
+          : record?.check_in_at && !record.check_out_at
+            ? record.check_in_at
+            : null;
         if (arrival && existing.claimed_time > arrival) {
           checkInAt = arrival;
           checkOutAt = existing.claimed_time;
         } else {
-          // Day-level objection (zero biometric scans recorded for the day):
-          // Record claimed arrival as check_in_at, and derive check_out_at from employee leaving_time if configured
+          // Whole-day objection: the claimed time is the arrival.
           checkInAt = existing.claimed_time;
-          // That weekday's leaving time (TAFSD-363: Friday may differ).
-          const leavingTime = timingsForDate(
-            existing.employee,
-            existing.employee.employee_day_timings,
-            new Date(existing.attendance_date),
-          ).leaving_time;
-          if (leavingTime) {
-            const lt = new Date(leavingTime);
-            const d = new Date(existing.attendance_date);
-            checkOutAt = new Date(
-              Date.UTC(
-                d.getUTCFullYear(),
-                d.getUTCMonth(),
-                d.getUTCDate(),
-                lt.getUTCHours(),
-                lt.getUTCMinutes(),
-                0,
-              ),
-            );
+          // (58) Keep a real leaving time — the last punch of a complete day,
+          // else an override's check-out — and fall back to the schedule's
+          // leaving time only when the day has none.
+          const realLeaving =
+            dayScans.length >= 2 && dayScans.length % 2 === 0
+              ? dayScans[dayScans.length - 1].scan_time
+              : (record?.check_out_at ?? null);
+          if (realLeaving && realLeaving > existing.claimed_time) {
+            checkOutAt = realLeaving;
+          } else {
+            // That weekday's leaving time (TAFSD-363: Friday may differ).
+            const leavingTime = timingsForDate(
+              existing.employee,
+              existing.employee.employee_day_timings,
+              new Date(existing.attendance_date),
+            ).leaving_time;
+            if (leavingTime) {
+              const lt = new Date(leavingTime);
+              const d = new Date(existing.attendance_date);
+              checkOutAt = new Date(
+                Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), lt.getUTCHours(), lt.getUTCMinutes(), 0),
+              );
+            }
           }
         }
       }
 
       const targetCampusId = existing.employee.campus_id ?? user.campusId;
       if (targetCampusId) {
+        // (57) Accepting corrects the times; it doesn't forgive lateness. A
+        // manual PRESENT reads as forgiven in payroll, so a corrected check-in
+        // that is still late is saved as LATE.
+        const finalCheckIn = checkInAt ?? record?.check_in_at ?? null;
+        const expected = await this.expectedTimes.resolveExpectedTimes(
+          existing.employee_id,
+          targetCampusId,
+          existing.attendance_date,
+        );
+        const status =
+          finalCheckIn &&
+          expected.expectedCheckIn &&
+          isLateCheckIn(finalCheckIn, expected.expectedCheckIn, expected.graceMinutes)
+            ? StaffAttendanceStatus.LATE
+            : StaffAttendanceStatus.PRESENT;
         await this.prisma.attendance_staff_daily.upsert({
           where: {
             employee_id_date: {
@@ -326,7 +371,7 @@ export class AttendanceObjectionsService {
             employee_id: existing.employee_id,
             campus_id: targetCampusId,
             date: existing.attendance_date,
-            status: StaffAttendanceStatus.PRESENT,
+            status,
             source: AttendanceSource.MANUAL,
             check_in_at: checkInAt,
             check_out_at: checkOutAt,
@@ -334,7 +379,7 @@ export class AttendanceObjectionsService {
             marked_by: user.sub,
           },
           update: {
-            status: StaffAttendanceStatus.PRESENT,
+            status,
             source: AttendanceSource.MANUAL,
             ...(checkInAt !== undefined ? { check_in_at: checkInAt } : {}),
             ...(checkOutAt !== undefined ? { check_out_at: checkOutAt } : {}),
