@@ -171,6 +171,33 @@ Both in `FeeChallanPDF.tsx` (mirrored in `FeeChallanPDF_MeezanBank.tsx`):
    inner box carries the full page size for coverage — the same nesting the challan block uses.
    It is not `fixed`, so it stays on page 1 when a long history column overflows to page 2.
 
+### The repeat warning and the REVISED stamp (TAFSD-419, TAFSD-420)
+
+The stamp is one mark with up to three lines, built only by `voucherStampLines()`
+(`voucher-pdf/voucher-stamp.ts`), in this order: **PAY IMMEDIATELY**, **FINAL NOTICE: SERVICES
+MAY BE SUSPENDED**, **REVISED**. Like `pay_immediately`, both flags below are frozen on the row
+and read in `prepareVoucherPdfData()`, and a PAID receipt or WAIVED challan prints neither.
+
+**`vouchers.pay_immediately_repeat` (the warning).** Decided by `isRepeatPayImmediate()` when the
+new voucher is itself PAY IMMEDIATELY and the student's previous live voucher was too and still
+owes money. So it applies to the second and every later consecutive one.
+
+- It must be read **before** `create()` step 6, because supersession voids the very voucher it
+  looks at.
+- Re-issuing the **same fee_date** is the same bill, not an escalation: it keeps the level of the
+  voucher it replaces. A split's balance voucher keeps the level of the voucher being split for
+  the same reason.
+- It follows the `pay_immediately_enabled` toggle automatically, because it requires
+  `pay_immediately`.
+
+**`vouchers.is_revised` (REVISED).** Set three ways, and it stays through every reprint:
+
+| Source | How |
+|---|---|
+| `/fee-challan` single, bulk job | `is_revised` on `CreateVoucherDto` / `StartBulkJobDto` (bulk: job-wide) |
+| Split balance voucher | `is_revised` on `SplitPartiallyPaidDto`; **always true when the balance is PAY IMMEDIATELY** |
+| Regenerate | `is_revised` on `GenerateVoucherPdfDto`, on or off; ignored without `regenerate: true`. Audited |
+
 ### Check after touching any of this
 
 1. `npm test -- pay-immediately` — the Rule 1 table and the Rule 2 dates (every issue weekday,

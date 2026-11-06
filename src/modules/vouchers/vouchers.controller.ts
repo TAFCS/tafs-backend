@@ -317,7 +317,7 @@ export class VouchersController {
         @Req() req: any,
         @CurrentUser() user: IJwtStaffPayload,
     ) {
-        // Download and Regenerate are separate grants. Hold/notify only take
+        // Download and Regenerate are separate grants. Hold/notify/REVISED only take
         // effect on a regenerate (opts.force), so a downloader cannot set them.
         if (dto.regenerate === true && !holdsAny(user, PDF_REGENERATE_ACTIONS)) {
             throw new ForbiddenException('Missing permission: Regenerate voucher PDF.');
@@ -333,6 +333,8 @@ export class VouchersController {
                 force: dto.regenerate === true,
                 send_notification: dto.send_notification,
                 requires_release: dto.requires_release,
+                is_revised: dto.is_revised,
+                changedBy: String(req?.user?.username || req?.user?.id || generatedByName || 'system'),
                 releasedBy: req?.user?.username || req?.user?.id || generatedByName,
             },
         );

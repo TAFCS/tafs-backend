@@ -169,6 +169,37 @@ export function payImmediateDueDate(issueDate: Date): Date {
     return d;
 }
 
+/** Statuses that mean a voucher still has money owing on it (TAFSD-420). */
+const STILL_UNPAID_VOUCHER_STATUSES = ['UNPAID', 'OVERDUE', 'EXPIRED', 'PARTIALLY_PAID'];
+
+/**
+ * TAFSD-420: should a new PAY IMMEDIATELY voucher carry the FINAL NOTICE line?
+ *
+ * `previous` is the student's most recent live voucher on or before the new one's
+ * fee_date (see findPreviousVoucherForRepeat). It must be read BEFORE supersession
+ * voids it, or it would never look unpaid. Yes when it was PAY IMMEDIATELY too and
+ * still owes money, so the second and every later consecutive one carries the line.
+ *
+ * Re-issuing the SAME fee_date is the same bill again, not an escalation, so it
+ * keeps whatever level the bill it replaces had.
+ */
+export function isRepeatPayImmediate(
+    previous: {
+        pay_immediately: boolean;
+        pay_immediately_repeat: boolean;
+        status: string | null;
+        fee_date: Date | null;
+    } | null,
+    feeDate: Date,
+): boolean {
+    if (!previous?.pay_immediately || !previous.fee_date) return false;
+    if (!STILL_UNPAID_VOUCHER_STATUSES.includes(previous.status ?? '')) return false;
+    if (new Date(previous.fee_date).getTime() >= new Date(feeDate).getTime()) {
+        return previous.pay_immediately_repeat;
+    }
+    return true;
+}
+
 /**
  * Arrear surcharges for a split's BALANCE voucher (splitPartiallyPaid, Step 8).
  *
@@ -657,6 +688,23 @@ export class VouchersService {
     }
 
     /**
+     * TAFSD-420: the voucher isRepeatPayImmediate() compares against. VOID is left
+     * out because something newer stands in its place, and WAIVED because a
+     * write-off is not an unpaid bill.
+     */
+    private findPreviousVoucherForRepeat(tx: Prisma.TransactionClient, studentId: number, feeDate: Date) {
+        return tx.vouchers.findFirst({
+            where: {
+                student_id: studentId,
+                fee_date: { lte: feeDate },
+                status: { notIn: ['VOID', 'WAIVED'] },
+            },
+            orderBy: [{ fee_date: 'desc' }, { id: 'desc' }],
+            select: { pay_immediately: true, pay_immediately_repeat: true, status: true, fee_date: true },
+        });
+    }
+
+    /**
      * Deposit page prefill: would splitting this voucher now issue a PAY
      * IMMEDIATELY balance voucher, and with what due/validity date for the given
      * issue date? Same decision (splitPayImmediate) and date rule
@@ -780,6 +828,13 @@ export class VouchersService {
                 arrearsInfo !== null &&
                 isPayImmediate(arrearsInfo) &&
                 (await this.isPayImmediateEnabled(tx));
+            // TAFSD-420. Read here, before step 6 voids the voucher it looks at.
+            const payImmediateRepeat =
+                payImmediate &&
+                isRepeatPayImmediate(
+                    await this.findPreviousVoucherForRepeat(tx, dto.student_id, feeDate!),
+                    feeDate!,
+                );
             // The issuer may keep their own dates (pay_immediately_custom_dates);
             // otherwise the default is forced. The watermark applies either way.
             if (payImmediate && !dto.pay_immediately_custom_dates) {
@@ -895,6 +950,8 @@ export class VouchersService {
                     surcharge_waived: dto.waive_surcharge || false,
                     surcharge_waived_by: dto.waived_by || null,
                     pay_immediately: payImmediate,
+                    pay_immediately_repeat: payImmediateRepeat,
+                    is_revised: dto.is_revised === true,
                     generated_by_name: generatorName ?? null,
                     generated_at: new Date(),
                     bulk_voucher_job_id: bulkVoucherJobId ?? null,
@@ -1800,6 +1857,10 @@ export class VouchersService {
         // means every render path (single, bulk, split, regenerate) gets the same
         // answer. A PAID receipt or WAIVED challan never carries it.
         const payImmediate = voucher.pay_immediately === true && !paidStamp && !waived;
+        // TAFSD-419/420: same reasoning, and the same exceptions. A receipt or a
+        // write-off is the final word on the bill, so neither says REVISED.
+        const payImmediateRepeat = payImmediate && voucher.pay_immediately_repeat === true;
+        const revised = voucher.is_revised === true && !paidStamp && !waived && voucher.status !== 'WAIVED';
 
         // Is EVERY head on this voucher written off, or only some of them? The two
         // read completely differently on the challan and must not be conflated:
@@ -2472,6 +2533,8 @@ export class VouchersService {
                 qrUrl,
                 paidStamp,
                 payImmediate,
+                payImmediateRepeat,
+                revised,
                 waived,
                 generatedByName: voucher.generated_by_name ?? undefined,
                 generatedAt: voucher.generated_at ?? undefined,
@@ -4682,6 +4745,8 @@ export class VouchersService {
             send_notification?: boolean;
             requires_release?: boolean;
             releasedBy?: string;
+            is_revised?: boolean;
+            changedBy?: string;
         },
     ) {
         const voucher = await this.prisma.vouchers.findUnique({
@@ -4740,6 +4805,12 @@ export class VouchersService {
             };
         }
 
+        // TAFSD-419: an explicit regenerate may turn the REVISED stamp on or off.
+        // Written before the render below, which reads the stamp from the row.
+        if (opts?.force && opts.is_revised !== undefined && !finalPaidStamp && !finalWaived) {
+            await this.setVoucherRevised(voucherId, opts.is_revised, opts.changedBy ?? generatedByName ?? 'system');
+        }
+
         const full = await this.prisma.vouchers.findUnique({
             where: { id: voucherId },
             include: VOUCHER_INCLUDE,
@@ -4781,6 +4852,27 @@ export class VouchersService {
         }
 
         return { pdf_url: pdfUrl, filename, frozen: false };
+    }
+
+    /** TAFSD-419: change the REVISED flag, leaving an audit entry when it really changes. */
+    private async setVoucherRevised(voucherId: number, isRevised: boolean, changedBy: string) {
+        const current = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            select: { is_revised: true, student_id: true },
+        });
+        if (!current || current.is_revised === isRevised) return;
+        await this.prisma.vouchers.update({ where: { id: voucherId }, data: { is_revised: isRevised } });
+        await this.auditLogs.log({
+            entity_type: 'VOUCHER',
+            entity_id: String(voucherId),
+            action: 'UPDATED',
+            field: 'is_revised',
+            old_value: String(current.is_revised),
+            new_value: String(isRevised),
+            changed_by: changedBy,
+            student_id: current.student_id,
+            note: isRevised ? 'Voucher marked REVISED on regenerate.' : 'REVISED stamp removed on regenerate.',
+        });
     }
 
     /** Hold/release writes that apply only on an explicit regenerate. */
@@ -5373,6 +5465,9 @@ export class VouchersService {
             //    re-dates anything. See splitPayImmediate(); the deposit page's
             //    prefill (previewSplitPayImmediate) asks the very same question.
             const payImmediate = await this.splitPayImmediate(tx, original, allHeads);
+            // TAFSD-420: the balance is the same bill again, so it keeps the level
+            // of the voucher being split rather than escalating it.
+            const payImmediateRepeat = payImmediate && (original as any).pay_immediately_repeat === true;
             if (payImmediate && !dto.pay_immediately_custom_dates) {
                 dueDate = payImmediateDueDate(issueDate);
                 validityDate = dueDate;
@@ -5656,6 +5751,10 @@ export class VouchersService {
                     reprint_fee_charge: balanceReprintCharge,
                     reprint_fee_amount: balanceReprintCharge ? balanceReprintAmount : null,
                     pay_immediately: payImmediate,
+                    pay_immediately_repeat: payImmediateRepeat,
+                    // TAFSD-419: a PAY IMMEDIATELY balance is always REVISED; any other
+                    // balance only when the issuer asks for it.
+                    is_revised: payImmediate || dto.is_revised === true,
                     // A new voucher of its own — it inherits none of the original's
                     // issuance traits (see CLAUDE.md). It wasn't produced by the
                     // original's bulk job, and it is released now (or held) exactly
