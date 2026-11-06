@@ -1315,6 +1315,7 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
             due_date: dto.due_date,
             validity_date: dto.validity_date,
             pay_immediately_custom_dates: dto.pay_immediately_custom_dates ?? false,
+            is_revised: dto.is_revised ?? false,
             late_fee_charge: dto.apply_late_fee ?? true,
             late_fee_amount: dto.late_fee_amount ?? 1000,
             waive_surcharge: dto.waive_surcharge ?? false,

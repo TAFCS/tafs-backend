@@ -75,6 +75,11 @@ export class StartBulkJobDto {
     @IsOptional()
     pay_immediately_custom_dates?: boolean;
 
+    // TAFSD-419: stamp every voucher this job issues as REVISED.
+    @IsBoolean()
+    @IsOptional()
+    is_revised?: boolean;
+
     // ── Bank ───────────────────────────────────────────────────────────────
     @Type(() => Number)
     @IsInt()

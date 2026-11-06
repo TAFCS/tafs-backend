@@ -51,6 +51,12 @@ export class CreateVoucherDto {
     @IsOptional()
     pay_immediately_custom_dates?: boolean;
 
+    // TAFSD-419: print the diagonal REVISED stamp on this voucher and every reprint.
+    @Transform(({ value }) => (value === 'true' || value === true))
+    @IsBoolean()
+    @IsOptional()
+    is_revised?: boolean;
+
     @Transform(({ value }) => (value === 'true' || value === true))
     @IsBoolean()
     @IsNotEmpty()
