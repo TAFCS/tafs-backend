@@ -1,4 +1,5 @@
-import { ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min, ValidateNested } from 'class-validator';
+import { DEDUCTION_KINDS, type DeductionKind } from '../deduction-waivers.util';
 import { Type } from 'class-transformer';
 import { OvertimeRateType } from '@prisma/client';
 
@@ -31,6 +32,32 @@ export class SetStatutoryWaiversDto {
   @IsOptional()
   @IsBoolean()
   income_tax?: boolean;
+}
+
+/**
+ * TAFSD-471/472: switch attendance deductions off on this run only.
+ * `types` replaces the whole-cycle set; `date` + `day_kinds` replaces that
+ * one day's set (an empty list switches the day back on).
+ */
+export class SetDeductionWaiversDto {
+  @IsOptional()
+  @IsArray()
+  @IsIn(DEDUCTION_KINDS as unknown as string[], { each: true })
+  types?: DeductionKind[];
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  date?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsIn(DEDUCTION_KINDS as unknown as string[], { each: true })
+  day_kinds?: DeductionKind[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  reason?: string;
 }
 
 /**

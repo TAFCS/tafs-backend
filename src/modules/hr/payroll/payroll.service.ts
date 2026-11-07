@@ -14,7 +14,18 @@ import { DisbursePayrollLineDto, ExcludePayrollLineDto, SettlePayrollLineDto } f
 import { computePayrollWindow, monthShareOfDay, partialMonthDivisor } from './payroll-period.util';
 import { EmployeeLineColumn, addEmployeeLinesSheet, addMatrixSheet, tagLabels, tenureLabel } from './payroll-excel.util';
 import { PayslipPdfService } from './payslip-pdf/payslip-pdf.service';
-import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, totalWindowDays, TenureWindow } from './tenure-window.util';
+import {
+  applyDeductionWaiverChange,
+  DEDUCTION_KINDS,
+  DeductionKind,
+  DeductionWaivers,
+  describeDeductionWaivers,
+  hasDeductionWaivers,
+  isDeductionWaived,
+  normalizeDeductionWaivers,
+} from './deduction-waivers.util';
+import { isStaffVisibleRun, STAFF_VISIBLE_RUN } from './staff-visibility.util';
+import { computeTenureWindows, describeCycleTenure, isDateInAnyWindow, progressionOverlapWhere, totalWindowDays, TenureWindow } from './tenure-window.util';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
 import { PayrollRulesService } from '../payroll-rules/payroll-rules.service';
 import { calculateMonthlyIncomeTax, calculateStatutoryContributions } from '../payroll-rules/payroll-tax-calculator.util';
@@ -22,7 +33,7 @@ import { SecurityDepositsService } from '../security-deposits/security-deposits.
 import { EmployeeLoansService } from '../employee-loans/employee-loans.service';
 import { ScopeService } from '../../../common/scope/scope.service';
 import { ZK_DEVICES } from '../../attendance/zk-device-health.util';
-import { effectiveManualStatus } from '../../attendance/manual-late.util';
+import { effectiveManualStatus, isLateCheckIn } from '../../attendance/manual-late.util';
 import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
@@ -61,6 +72,9 @@ type DayClassification = 'PRESENT' | 'LATE' | 'HALF_DAY' | 'ABSENT' | 'EXCUSED' 
 
 export interface DayBreakdownEntry {
   date: string;
+  /** TAFSD-472: deductions switched off on this day for this payroll run only. */
+  waived_deductions?: DeductionKind[];
+  waiver_reason?: string;
   is_working_day: boolean;
   day_type: string | null;
   day_description: string | null;
@@ -129,6 +143,7 @@ interface ComputedLine {
   eobi_waived: boolean;
   sessi_waived: boolean;
   income_tax_waived: boolean;
+  deduction_waivers: DeductionWaivers;
   daily_breakdown: DayBreakdownEntry[];
 }
 
@@ -137,12 +152,26 @@ export interface StatutoryWaivers {
   eobi: boolean;
   sessi: boolean;
   income_tax: boolean;
+  /** TAFSD-471/472: attendance deductions switched off, by type or by day. */
+  deductions?: DeductionWaivers;
 }
+
+type StatutoryKey = 'eobi' | 'sessi' | 'income_tax';
 
 const NO_WAIVERS: StatutoryWaivers = { eobi: false, sessi: false, income_tax: false };
 
-function waiversOf(line: { eobi_waived: boolean; sessi_waived: boolean; income_tax_waived: boolean }): StatutoryWaivers {
-  return { eobi: line.eobi_waived, sessi: line.sessi_waived, income_tax: line.income_tax_waived };
+function waiversOf(line: {
+  eobi_waived: boolean;
+  sessi_waived: boolean;
+  income_tax_waived: boolean;
+  deduction_waivers?: Prisma.JsonValue;
+}): StatutoryWaivers {
+  return {
+    eobi: line.eobi_waived,
+    sessi: line.sessi_waived,
+    income_tax: line.income_tax_waived,
+    deductions: normalizeDeductionWaivers(line.deduction_waivers),
+  };
 }
 
 interface DetectedFlag {
@@ -209,6 +238,14 @@ function cycleRosterStatusWhere(periodStart: Date): Prisma.employee_profilesWher
     { employment_status: { in: ['LEFT', 'TERMINATED'] }, date_of_leaving: { gte: periodStart } },
   ];
 }
+
+/** TAFSD-458: a picked employee generateRun left out, and why. */
+export type SkippedEmployee = {
+  employee_id: number;
+  full_name: string | null;
+  employee_code: string | null;
+  reason: string;
+};
 
 /** TAFSD-372: first payroll cycle paid day by day at the pay in effect on each day. */
 export const PAY_BY_EFFECTIVE_DATE_FROM = new Date(Date.UTC(2026, 9, 26));
@@ -605,7 +642,15 @@ export class PayrollService {
         classification = 'ABSENT';
       } else if (dayScans.length % 2 !== 0) {
         classification = 'UNRESOLVED';
-      } else if (record?.status === StaffAttendanceStatus.LATE) {
+      } else if (
+        record?.status === StaffAttendanceStatus.LATE ||
+        // TAFSD-485: judge lateness from the first punch, the way early leave
+        // is judged from the last one. The stored status can be a stale
+        // PRESENT (a back-dated day, or a timing changed after the row was
+        // written), which hid the late arrival while the early leave was cut.
+        (expected.expectedCheckIn &&
+          isLateCheckIn(dayScans[0].scan_time, expected.expectedCheckIn, expected.graceMinutes))
+      ) {
         classification = 'LATE';
       } else {
         classification = 'PRESENT';
@@ -825,37 +870,52 @@ export class PayrollService {
     // or leaves mid-cycle is still paid only for the days they were employed.
     const alwaysFullPay = employee.always_full_pay === true;
     const noAttendanceCuts = fullPayOverride || alwaysFullPay;
+    // TAFSD-471/472: deductions switched off on this run, by type or by day.
+    // With any switched off, every deduction is summed day by day (the same
+    // arithmetic as the varying-pay path), skipping what is waived.
+    const deductionWaivers = normalizeDeductionWaivers(waivers.deductions);
+    const byDay = payVaries || hasDeductionWaivers(deductionWaivers);
+    const unlessWaived = (kind: DeductionKind, pick: (d: DayBreakdownEntry) => number) => (d: DayBreakdownEntry) =>
+      isDeductionWaived(deductionWaivers, kind, d.date) ? 0 : pick(d);
     const absenceDeduction = noAttendanceCuts
       ? zero
-      : payVaries
-        ? sumDays((d) => (d.classification === 'ABSENT' || d.classification === 'UNPAID_LEAVE' ? 1 : 0))
+      : byDay
+        ? sumDays(unlessWaived('ABSENCE', (d) => (d.classification === 'ABSENT' || d.classification === 'UNPAID_LEAVE' ? 1 : 0)))
         : dailyRate.times(absentDays + unpaidLeaveDays);
     const halfDayDeduction = noAttendanceCuts
       ? zero
-      : payVaries
-        ? sumDays((d) => (d.classification === 'HALF_DAY' ? 0.5 : 0))
+      : byDay
+        ? sumDays(unlessWaived('HALF_DAY', (d) => (d.classification === 'HALF_DAY' ? 0.5 : 0)))
         : dailyRate.dividedBy(2).times(halfDays);
     const lateDeduction = noAttendanceCuts
       ? zero
-      : payVaries
+      : byDay
         ? minuteRateDivisor
-          ? sumDays((d) => d.late_minutes).dividedBy(minuteRateDivisor)
+          ? sumDays(unlessWaived('LATE', (d) => d.late_minutes)).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalLateMinutes);
     const earlyLeaveDeduction = noAttendanceCuts
       ? zero
-      : payVaries
+      : byDay
         ? minuteRateDivisor
-          ? sumDays((d) => d.early_leave_minutes ?? 0).dividedBy(minuteRateDivisor)
+          ? sumDays(unlessWaived('EARLY_LEAVE', (d) => d.early_leave_minutes ?? 0)).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalEarlyLeaveMinutes);
     const breakDeduction = noAttendanceCuts
       ? zero
-      : payVaries
+      : byDay
         ? minuteRateDivisor
-          ? sumDays((d) => d.break_minutes).dividedBy(minuteRateDivisor)
+          ? sumDays(unlessWaived('BREAK', (d) => d.break_minutes)).dividedBy(minuteRateDivisor)
           : zero
         : perMinuteRate.times(totalBreakMinutes);
+    // Mark the days so the breakdown shows what was let off.
+    for (const d of dailyBreakdown) {
+      const off = DEDUCTION_KINDS.filter((k) => deductionWaivers.days[d.date]?.includes(k));
+      if (off.length > 0) {
+        d.waived_deductions = off;
+        if (deductionWaivers.reasons[d.date]) d.waiver_reason = deductionWaivers.reasons[d.date];
+      }
+    }
     // Prorates the salary for every day the employee was off the roster — the
     // superset of three cases:
     //   * joined mid-cycle   — days before the join date
@@ -952,6 +1012,7 @@ export class PayrollService {
       full_pay_override: fullPayOverride,
       always_full_pay: alwaysFullPay,
       eobi_waived: waivers.eobi,
+      deduction_waivers: deductionWaivers,
       sessi_waived: waivers.sessi,
       income_tax_waived: waivers.income_tax,
       daily_breakdown: dailyBreakdown,
@@ -1227,12 +1288,11 @@ export class PayrollService {
       }),
       // Progression periods that overlap the payroll cycle — the source of
       // truth for mid-cycle join/leave/rejoin windows (see tenure-window.util).
-      // Overlap condition: valid_from <= periodEnd AND (valid_to IS NULL OR valid_to > periodStart).
+      // Overlap: valid_from before the day after periodEnd AND (valid_to IS NULL OR valid_to > periodStart).
       this.prisma.employee_progression_periods.findMany({
         where: {
           employee_id: { in: employeeIds },
-          valid_from: { lte: periodEnd },
-          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+          ...progressionOverlapWhere(periodStart, periodEnd),
         },
         select: {
           employee_id: true,
@@ -1353,7 +1413,7 @@ export class PayrollService {
 
     const existingLine = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
-      select: { finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+      select: { finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true, deduction_waivers: true },
     });
     if (existingLine?.finalized_at) {
       throw new BadRequestException("This employee's payroll line is already finalized and cannot be regenerated.");
@@ -1440,14 +1500,14 @@ export class PayrollService {
     await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
     const before = await this.prisma.payroll_run_lines.findUnique({
       where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
-      select: { eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+      select: { eobi_waived: true, sessi_waived: true, income_tax_waived: true, deduction_waivers: true },
     });
     if (!before) throw new NotFoundException('This employee has no line on this payroll run.');
     const result = await this.regenerateLine(runId, employeeId, user, undefined, waivers);
 
-    const labels: Record<keyof StatutoryWaivers, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
+    const labels: Record<StatutoryKey, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
     const prev = waiversOf(before);
-    const changes = (Object.keys(labels) as (keyof StatutoryWaivers)[])
+    const changes = (Object.keys(labels) as StatutoryKey[])
       .filter((k) => waivers[k] !== undefined && waivers[k] !== prev[k])
       .map((k) => `${labels[k]} ${waivers[k] ? 'waived' : 'applied again'}`);
     if (changes.length > 0) {
@@ -1461,6 +1521,53 @@ export class PayrollService {
         note: `${changes.join(', ')} for employee ${employeeId} on this payroll run only.`,
       });
     }
+    return result;
+  }
+
+  /**
+   * TAFSD-471/472: switch attendance deductions off (or back on) for one
+   * employee on this run only — by type for the whole cycle, or on single
+   * days (e.g. let off a late arrival on 14 Oct). The attendance itself is
+   * untouched. Recomputes the line; a finalized line is locked.
+   */
+  async setDeductionWaivers(
+    runId: number,
+    employeeId: number,
+    change: { types?: DeductionKind[]; date?: string; day_kinds?: DeductionKind[]; reason?: string },
+    user: IJwtStaffPayload,
+  ) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'payroll line');
+    const [before, run] = await Promise.all([
+      this.prisma.payroll_run_lines.findUnique({
+        where: { payroll_run_id_employee_id: { payroll_run_id: runId, employee_id: employeeId } },
+        select: { deduction_waivers: true },
+      }),
+      this.prisma.payroll_runs.findUnique({ where: { id: runId }, select: { period_start: true, period_end: true } }),
+    ]);
+    if (!before || !run) throw new NotFoundException('This employee has no line on this payroll run.');
+    if (change.types === undefined && change.date === undefined) {
+      throw new BadRequestException('Say which deductions to switch off: types for the whole cycle, or a date.');
+    }
+    if (change.date) {
+      const start = run.period_start.toISOString().slice(0, 10);
+      const end = run.period_end.toISOString().slice(0, 10);
+      if (change.date < start || change.date > end) {
+        throw new BadRequestException(`${change.date} is not in this payroll cycle (${start} to ${end}).`);
+      }
+    }
+    const prev = normalizeDeductionWaivers(before.deduction_waivers);
+    const next = applyDeductionWaiverChange(prev, change);
+    const result = await this.regenerateLine(runId, employeeId, user, undefined, { deductions: next });
+
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(runId),
+      action: 'LINE_DEDUCTION_WAIVERS',
+      field: 'employee_id',
+      new_value: String(employeeId),
+      changed_by: auditActorLabel(user),
+      note: `Employee ${employeeId}, this payroll run only: ${describeDeductionWaivers(next)} (was: ${describeDeductionWaivers(prev)}).`,
+    });
     return result;
   }
 
@@ -1521,8 +1628,8 @@ export class PayrollService {
       : { touched: 0 };
     const requested = dto.employee_ids ? dto.employee_ids.length : openLines.length;
 
-    const labels: Record<keyof StatutoryWaivers, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
-    const changes = (Object.keys(patch) as (keyof StatutoryWaivers)[]).map(
+    const labels: Record<StatutoryKey, string> = { eobi: 'EOBI', sessi: 'SESSI', income_tax: 'Income tax' };
+    const changes = (Object.keys(patch) as StatutoryKey[]).map(
       (k) => `${labels[k]} ${patch[k] ? 'waived' : 'applied again'}`,
     );
     void this.auditLogs.log({
@@ -1601,7 +1708,8 @@ export class PayrollService {
     // Test runs are throwaway/repeatable — no reason to page a test employee
     // every time one gets finalized during testing. (run.is_test is already
     // rejected above, kept for parity with finalizeRun's notification guard.)
-    if (!run.is_test && line.employee_profiles.user_id) {
+    // TAFSD-478: staff only hear about a run once it's released to them.
+    if (!run.is_test && run.released_to_staff_at && line.employee_profiles.user_id) {
       const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
       void this.employeeNoticeBoard
         .createPayrollNotice(employeeId, line.employee_profiles.user_id, 'Payroll finalized', `Your payroll for ${periodLabel} has been finalized.`, runId)
@@ -1793,8 +1901,9 @@ export class PayrollService {
     // Presence of employee_ids is what makes this a TEST run — scoped to
     // just those employees instead of every paid employee on the campus.
     const isTest = !!dto.employee_ids?.length;
+    const onlyIds = !isTest && dto.only_employee_ids?.length ? [...new Set(dto.only_employee_ids)] : null;
 
-    const candidates = isTest
+    const roster = isTest
       ? await this.prisma.employee_profiles.findMany({
           where: { id: { in: dto.employee_ids }, campus_id: dto.campus_id, monthly_pay: { not: null } },
           select: this.employeeLineSelect,
@@ -1808,6 +1917,18 @@ export class PayrollService {
           },
           select: this.employeeLineSelect,
         });
+    // TAFSD-458: a real run limited to employees picked in the generate modal.
+    // A pick that can't be paid on this run is skipped with a reason rather
+    // than failing everyone else's.
+    const candidates = onlyIds ? roster.filter((e) => onlyIds.includes(e.id)) : roster;
+    const skipped: SkippedEmployee[] = [];
+    if (onlyIds && candidates.length !== onlyIds.length) {
+      const onRoster = new Set(candidates.map((e) => e.id));
+      skipped.push(...(await this.rosterSkipReasons(onlyIds.filter((id) => !onRoster.has(id)), dto.campus_id, periodStart)));
+    }
+    if (onlyIds && candidates.length === 0) {
+      throw new BadRequestException(`None of the selected employees can be paid on this run. ${this.skippedSummary(skipped)}`);
+    }
     if (candidates.length === 0) {
       throw new BadRequestException(
         isTest
@@ -1845,10 +1966,58 @@ export class PayrollService {
       );
       const covered = new Set(overlapping.map((c) => c.employee_id));
       employees = candidates.filter((e) => !covered.has(e.id));
+      if (onlyIds) {
+        const seen = new Set<number>();
+        for (const c of overlapping) {
+          if (seen.has(c.employee_id)) continue;
+          seen.add(c.employee_id);
+          const r = c.payroll_runs;
+          skipped.push({
+            employee_id: c.employee_id,
+            full_name: c.employee_profiles.full_name,
+            employee_code: c.employee_profiles.employee_code,
+            reason: `Already on ${r.kind === PayrollRunKind.CUSTOM ? 'custom run' : 'payroll run'} #${r.id} (${r.period_start.toISOString().slice(0, 10)} to ${r.period_end.toISOString().slice(0, 10)}, ${r.campuses.campus_name}) for overlapping dates`,
+          });
+        }
+      }
       if (employees.length === 0) {
         throw new BadRequestException(
-          'Every payable employee on this campus is already on another payroll run with overlapping dates — nothing to calculate.',
+          onlyIds
+            ? `None of the selected employees can be paid on this run. ${this.skippedSummary(skipped)}`
+            : 'Every payable employee on this campus is already on another payroll run with overlapping dates — nothing to calculate.',
         );
+      }
+    }
+    // Picks whose line on this run is already finalized or excluded are left
+    // alone by upsertOpenLines; say so instead of counting them as done.
+    if (onlyIds && existing) {
+      const ids = employees.map((e) => e.id);
+      const [locked, excluded] = await Promise.all([
+        this.prisma.payroll_run_lines.findMany({
+          where: { payroll_run_id: existing.id, employee_id: { in: ids }, finalized_at: { not: null } },
+          select: { employee_id: true },
+        }),
+        this.prisma.payroll_run_exclusions.findMany({
+          where: { payroll_run_id: existing.id, employee_id: { in: ids } },
+          select: { employee_id: true },
+        }),
+      ]);
+      const leftAlone = [...locked, ...excluded].map((r) => r.employee_id);
+      const profiles = leftAlone.length
+        ? await this.prisma.employee_profiles.findMany({
+            where: { id: { in: leftAlone } },
+            select: { id: true, full_name: true, employee_code: true },
+          })
+        : [];
+      const names = new Map(profiles.map((p) => [p.id, p]));
+      for (const [rows, reason] of [
+        [locked, 'Already finalized on this run (un-finalize the line to recompute it)'],
+        [excluded, 'Excluded from this run (re-include them on the run page first)'],
+      ] as const) {
+        for (const { employee_id } of rows) {
+          const e = names.get(employee_id);
+          skipped.push({ employee_id, full_name: e?.full_name ?? null, employee_code: e?.employee_code ?? null, reason });
+        }
       }
     }
     // Re-generating for the same period replaces it in place (recomputed from
@@ -1894,7 +2063,7 @@ export class PayrollService {
       if (existing) {
         const old = await this.prisma.payroll_run_lines.findMany({
           where: { payroll_run_id: run.id },
-          select: { employee_id: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+          select: { employee_id: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true, deduction_waivers: true },
         });
         old.forEach((l) => keptWaivers.set(l.employee_id, waiversOf(l)));
         await this.prisma.payroll_run_lines.deleteMany({ where: { payroll_run_id: run.id } });
@@ -1927,10 +2096,53 @@ export class PayrollService {
       field: 'status',
       new_value: isTest ? 'DRAFT_TEST' : 'DRAFT',
       changed_by: auditActorLabel(user),
-      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${touchedCount} of ${employees.length} employee(s) touched${isTest ? ', test' : ''}).`,
+      note: `${existing ? 'Regenerated' : 'Generated'} payroll run for campus ${dto.campus_id}, ${dto.year}-${String(dto.month).padStart(2, '0')} (${touchedCount} of ${employees.length} employee(s) touched${isTest ? ', test' : ''}${onlyIds ? `, selected employees only, ${skipped.length} skipped` : ''}).`,
     });
 
-    return this.getRun(run.id, user);
+    const result = await this.getRun(run.id, user);
+    return onlyIds ? { ...result, touched_count: touchedCount, skipped_employees: skipped } : result;
+  }
+
+  /** TAFSD-458: why each picked employee isn't on this campus's roster for the cycle. */
+  private async rosterSkipReasons(ids: number[], campusId: number, periodStart: Date): Promise<SkippedEmployee[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.prisma.employee_profiles.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        full_name: true,
+        employee_code: true,
+        campus_id: true,
+        monthly_pay: true,
+        payroll_enabled: true,
+        employment_status: true,
+        date_of_leaving: true,
+      },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return ids.map((id) => {
+      const e = byId.get(id);
+      if (!e) return { employee_id: id, full_name: null, employee_code: null, reason: 'Employee not found' };
+      const status = e.employment_status ?? 'ACTIVE';
+      const reason =
+        e.campus_id !== campusId
+          ? 'Not on this campus'
+          : e.monthly_pay == null
+            ? 'No monthly pay set'
+            : !e.payroll_enabled
+              ? 'Payroll is switched off for them (Schedule & Pay tab)'
+              : status === 'LEFT' || status === 'TERMINATED'
+                ? 'Left before this payroll cycle'
+                : `Status is ${status}; only ACTIVE employees (or those who left during the cycle) are paid`;
+      return { employee_id: id, full_name: e.full_name, employee_code: e.employee_code, reason };
+    });
+  }
+
+  private skippedSummary(skipped: SkippedEmployee[]): string {
+    const shown = skipped
+      .slice(0, 10)
+      .map((s) => `${s.full_name ?? `Employee #${s.employee_id}`}${s.employee_code ? ` (${s.employee_code})` : ''}: ${s.reason}`);
+    return shown.join('; ') + (skipped.length > 10 ? `; and ${skipped.length - 10} more` : '');
   }
 
   /**
@@ -1952,7 +2164,7 @@ export class PayrollService {
     const [existingLines, exclusions] = await Promise.all([
       this.prisma.payroll_run_lines.findMany({
         where: { payroll_run_id: runId },
-        select: { employee_id: true, finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true },
+        select: { employee_id: true, finalized_at: true, full_pay_override: true, eobi_waived: true, sessi_waived: true, income_tax_waived: true, deduction_waivers: true },
       }),
       this.prisma.payroll_run_exclusions.findMany({
         where: { payroll_run_id: runId },
@@ -2237,8 +2449,7 @@ export class PayrollService {
       this.prisma.employee_progression_periods.findMany({
         where: {
           employee_id: { in: employees.map((e) => e.id) },
-          valid_from: { lte: periodEnd },
-          OR: [{ valid_to: null }, { valid_to: { gt: periodStart } }],
+          ...progressionOverlapWhere(periodStart, periodEnd),
         },
         select: { employee_id: true, employment_status: true, valid_from: true, valid_to: true },
       }),
@@ -2464,7 +2675,56 @@ export class PayrollService {
     if (!run || !this.canSeeRun(user, run.campus_id)) {
       throw new NotFoundException(`Payroll run ${id} not found`);
     }
-    return this.attachDerivedFieldsToLines(run);
+    const withFields = this.attachDerivedFieldsToLines(run);
+    const tenure = await this.cycleTenureByEmployee(
+      run.payroll_run_lines.map((l) => l.employee_id),
+      run.period_start,
+      run.period_end,
+    );
+    return {
+      ...withFields,
+      payroll_run_lines: withFields.payroll_run_lines.map((line) => ({
+        ...line,
+        tenure: tenure.get(line.employee_id),
+      })),
+    };
+  }
+
+  /**
+   * TAFSD-476: each employee's tenure inside a cycle (joined on, left on,
+   * rejoined), from the same rows payroll prorates with, so the run can say
+   * "Joined 5 Oct" instead of a blanket "Left mid-cycle".
+   */
+  private async cycleTenureByEmployee(employeeIds: number[], periodStart: Date, periodEnd: Date) {
+    if (employeeIds.length === 0) return new Map<number, ReturnType<typeof describeCycleTenure>>();
+    const [employees, progressionRows] = await Promise.all([
+      this.prisma.employee_profiles.findMany({
+        where: { id: { in: employeeIds } },
+        select: { id: true, join_date: true, date_of_leaving: true },
+      }),
+      this.prisma.employee_progression_periods.findMany({
+        where: { employee_id: { in: employeeIds }, ...progressionOverlapWhere(periodStart, periodEnd) },
+        select: { employee_id: true, employment_status: true, valid_from: true, valid_to: true },
+      }),
+    ]);
+    const rowsByEmployee = new Map<number, typeof progressionRows>();
+    for (const row of progressionRows) {
+      const bucket = rowsByEmployee.get(row.employee_id);
+      if (bucket) bucket.push(row);
+      else rowsByEmployee.set(row.employee_id, [row]);
+    }
+    return new Map(
+      employees.map((e) => [
+        e.id,
+        describeCycleTenure({
+          periodStart,
+          periodEnd,
+          joinDate: e.join_date,
+          dateOfLeaving: e.date_of_leaving,
+          progression: rowsByEmployee.get(e.id),
+        }),
+      ]),
+    );
   }
 
   /**
@@ -2603,8 +2863,9 @@ export class PayrollService {
     });
 
     // Test runs are throwaway/repeatable — no reason to page a test employee
-    // every time one gets finalized during testing.
-    if (!run.is_test) {
+    // every time one gets finalized during testing. TAFSD-478: nor before the
+    // run is released to staff; releaseRun sends the notices then.
+    if (!run.is_test && run.released_to_staff_at) {
       const title = 'Payroll finalized';
       const body = `Your payroll for ${periodLabel} has been finalized.`;
       for (const line of finalizedNow) {
@@ -2618,6 +2879,66 @@ export class PayrollService {
 
     const updatedRun = await this.getRun(id, user);
     return { ...updatedRun, finalize_summary: { finalized: finalizedNow.length, skipped } };
+  }
+
+  /**
+   * TAFSD-478: show a run in the staff app. Separate from finalizing, so a
+   * cycle can be finalized and checked (e.g. against the manual payroll)
+   * before employees see it. Employees with a finalized line hear about it now.
+   */
+  async releaseRun(id: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({
+      where: { id },
+      include: { payroll_run_lines: { include: { employee_profiles: { select: { user_id: true } } } } },
+    });
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${id} not found`);
+    }
+    if (run.is_test) throw new BadRequestException('Test runs are never shown in the staff app.');
+    if (run.released_to_staff_at) throw new BadRequestException('This payroll run is already released to the staff app.');
+    const finalized = run.payroll_run_lines.filter((l) => l.finalized_at);
+    if (finalized.length === 0) {
+      throw new BadRequestException('Finalize at least one employee before releasing this run to the staff app.');
+    }
+
+    await this.prisma.payroll_runs.update({
+      where: { id },
+      data: { released_to_staff_at: new Date(), released_by: auditActorLabel(user) },
+    });
+    const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(id),
+      action: 'RELEASED_TO_STAFF',
+      changed_by: auditActorLabel(user),
+      note: `Released to the staff app (period ${periodLabel}, ${finalized.length} finalized line(s)).`,
+    });
+    for (const line of finalized) {
+      const userId = line.employee_profiles.user_id;
+      if (!userId) continue;
+      void this.employeeNoticeBoard
+        .createPayrollNotice(line.employee_id, userId, 'Payroll finalized', `Your payroll for ${periodLabel} has been finalized.`, id)
+        .catch((err) => this.logger.error(`Failed to send payroll-released notice for employee ${line.employee_id}`, err));
+    }
+    return this.getRun(id, user);
+  }
+
+  /** TAFSD-478: hide a released run from the staff app again. Notices already sent stay. */
+  async unreleaseRun(id: number, user: IJwtStaffPayload) {
+    const run = await this.prisma.payroll_runs.findUnique({ where: { id } });
+    if (!run || !this.canSeeRun(user, run.campus_id)) {
+      throw new NotFoundException(`Payroll run ${id} not found`);
+    }
+    if (!run.released_to_staff_at) throw new BadRequestException('This payroll run is not released to the staff app.');
+    await this.prisma.payroll_runs.update({ where: { id }, data: { released_to_staff_at: null, released_by: null } });
+    void this.auditLogs.log({
+      entity_type: 'PAYROLL_RUN',
+      entity_id: String(id),
+      action: 'UNRELEASED_FROM_STAFF',
+      changed_by: auditActorLabel(user),
+      note: 'Hidden from the staff app again.',
+    });
+    return this.getRun(id, user);
   }
 
   /**
@@ -2715,7 +3036,7 @@ export class PayrollService {
     }
 
     const lines = await this.prisma.payroll_run_lines.findMany({
-      where: { employee_id: profile.id },
+      where: { employee_id: profile.id, payroll_runs: STAFF_VISIBLE_RUN },
       include: {
         payroll_runs: {
           select: {
@@ -2791,6 +3112,8 @@ export class PayrollService {
             period_start: true,
             period_end: true,
             status: true,
+            is_test: true,
+            released_to_staff_at: true,
             campuses: { select: { id: true, campus_name: true } },
           },
         },
@@ -2808,7 +3131,7 @@ export class PayrollService {
         },
       },
     });
-    if (!line) throw new NotFoundException('Payroll line not found for this period');
+    if (!line || !isStaffVisibleRun(line.payroll_runs)) throw new NotFoundException('Payroll line not found for this period');
 
     // eobi_employer_cost/sessi_employer_cost are deliberately excluded from
     // the spread below — internal-only, must never reach an employee. See
@@ -3111,7 +3434,8 @@ export class PayrollService {
 
     // Same rationale as finalizeRun: test runs are repeated constantly
     // during testing and shouldn't page the shared test employees each time.
-    if (!run.is_test && line.employee_profiles.user_id) {
+    // TAFSD-478: and nothing reaches staff before the run is released.
+    if (!run.is_test && run.released_to_staff_at && line.employee_profiles.user_id) {
       const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
       void this.employeeNoticeBoard
         .createPayrollNotice(

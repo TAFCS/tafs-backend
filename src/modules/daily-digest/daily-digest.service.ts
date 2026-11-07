@@ -114,7 +114,8 @@ export class DailyDigestService {
       studentsClockedOut,
     ] = await Promise.all([
       this.prisma.deposits.aggregate({
-        where: { deposit_date: { gte: dayStart, lt: dayEnd } },
+        // TAFSD-421: a family-credit payment brought in no new cash.
+        where: { deposit_date: { gte: dayStart, lt: dayEnd }, from_credit: false },
         _sum: { total_amount: true },
         _count: true,
       }),

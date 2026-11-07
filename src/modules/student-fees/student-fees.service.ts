@@ -21,6 +21,7 @@ import { getClassTermMap, termStartMonthForClass } from '../../common/utils/clas
 import { ScopeService } from '../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
+import { hasOpenCreditEntries } from '../vouchers/family-credit';
 // An audit-log entry queued during a transaction/multi-step operation and
 // flushed once the whole operation has committed.
 type FeeAuditEvent = {
@@ -2480,6 +2481,18 @@ export class StudentFeesService {
                 select: { id: true, status: true, target_month: true, academic_year: true, fee_date: true },
             }),
         ]);
+
+        // TAFSD-421: this wipes the student's deposits, which would strand any family
+        // credit they created or used. Reverse those deposits first.
+        const creditRows = await this.prisma.family_credit_ledger.findMany({
+            where: { student_id: studentId },
+            select: { deposit_id: true, amount: true },
+        });
+        if (hasOpenCreditEntries(creditRows)) {
+            throw new BadRequestException(
+                'This student has family credit entries. Reverse those deposits before resetting their fees.',
+            );
+        }
 
         const [deletedDeposits, deletedVouchers, resetFees] = await this.prisma.$transaction([
             this.prisma.deposits.deleteMany({ where: { student_id: studentId } }),

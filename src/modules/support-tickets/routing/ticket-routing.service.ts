@@ -117,6 +117,25 @@ export class TicketRoutingService {
       steps.push({ rule_id: rule.id, rule_name: rule.name, outcome: 'skipped', reason: outcome.reason });
     }
 
+    // Flow destinations (TAFSD-447): the leaf's own queue, then the lane's fallback.
+    for (const [label, queueId] of [
+      ['Leaf queue', subject.leaf_queue_id],
+      ['Lane fallback queue', subject.lane_fallback_queue_id],
+    ] as const) {
+      if (queueId == null) continue;
+      const queue = await this.prisma.ticket_queues.findUnique({ where: { id: queueId }, include: queueInclude });
+      if (!queue || queue.category !== subject.category) {
+        steps.push({ rule_id: null, rule_name: label, outcome: 'skipped', reason: 'queue no longer exists in this category' });
+        continue;
+      }
+      const outcome = await this.evaluateQueue(queue, subject, scopes);
+      if (outcome.ok) {
+        steps.push({ rule_id: null, rule_name: label, outcome: 'routed', reason: `to ${outcome.name}` });
+        return this.decision(subject, outcome, null, steps, true);
+      }
+      steps.push({ rule_id: null, rule_name: label, outcome: 'skipped', reason: outcome.reason });
+    }
+
     const fallback = await this.prisma.ticket_queues.findFirst({
       where: { category: subject.category, is_fallback: true, is_active: true },
       include: queueInclude,
@@ -161,8 +180,10 @@ export class TicketRoutingService {
     outcome: Extract<TargetOutcome, { ok: true }>,
     ruleId: number | null,
     steps: RoutingStep[],
+    /** A leaf's own queue is a planned destination, not a fallback. */
+    planned = false,
   ): RoutingDecision {
-    const clean = steps.length === 1 && ruleId != null;
+    const clean = steps.length === 1 && (ruleId != null || planned);
     return {
       routedRole: laneFor(subject.category, outcome.kind),
       assigneeId: outcome.assigneeId,

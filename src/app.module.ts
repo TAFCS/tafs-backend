@@ -14,6 +14,7 @@ import { FamiliesModule } from './modules/families/families.module';
 import { ClassesModule } from './modules/classes/classes.module';
 import { SectionsModule } from './modules/sections/sections.module';
 import { HousesModule } from './modules/houses/houses.module';
+import { StudentReportsModule } from './modules/student-reports/student-reports.module';
 import { FeeTypesModule } from './modules/fee-types/fee-types.module';
 import { ClassFeeScheduleModule } from './modules/class-fee-schedule/class-fee-schedule.module';
 import { FeesModule } from './modules/fees/fees.module';
@@ -54,6 +55,7 @@ import { StudentAllocationModule } from './modules/student-allocation/student-al
 import { DailyDigestModule } from './modules/daily-digest/daily-digest.module';
 import { AccessModule } from './modules/access/access.module';
 import { ScopeModule } from './common/scope/scope.module';
+import { HierarchyModule } from './common/hierarchy/hierarchy.module';
 
 @Module({
   imports: [
@@ -71,6 +73,7 @@ import { ScopeModule } from './common/scope/scope.module';
     ClassesModule,
     SectionsModule,
     HousesModule,
+    StudentReportsModule,
     FeeTypesModule,
     ClassFeeScheduleModule,
     FeesModule,
@@ -111,6 +114,7 @@ import { ScopeModule } from './common/scope/scope.module';
     DailyDigestModule,
     AccessModule,
     ScopeModule,
+    HierarchyModule,
   ],
   controllers: [AppController],
   providers: [

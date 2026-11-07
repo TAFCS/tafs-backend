@@ -1,4 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BENEFIT_DATE_FIELDS,
+  BENEFIT_FIELD_NAMES,
+  BENEFIT_SELECT,
+  STUDENT_BENEFITS,
+  benefitFields,
+  flattenBenefits,
+} from '../students/student-benefits';
 import { ScopeService } from '../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -20,6 +28,7 @@ import { invalidateUnpaidVoucherPdfs, isFatherRelationship } from '../vouchers/i
 import { StorageService } from '../../common/storage/storage.service';
 import { schoolHeadingForClass } from '../../common/utils/school-heading.util';
 
+import { hasOpenCreditEntries } from '../vouchers/family-credit';
 type AuditChildPayload = Omit<AuditLogParams, 'changed_by'> & { changed_by?: string };
 
 @Injectable()
@@ -207,12 +216,7 @@ export class StaffEditingService {
         house_id: true,
         family_id: true,
         home_phone: true,
-        is_complementary: true,
-        is_fee_endowment: true,
-        complementary_reason: true,
-        complementary_until: true,
-        fee_endowment_reason: true,
-        fee_endowment_until: true,
+        ...BENEFIT_SELECT,
         fee_start_term: true,
         graduated_from_class_id: true,
         families: {
@@ -394,8 +398,6 @@ export class StaffEditingService {
       father_cnic,
       mother_name,
       mother_cnic,
-      complementary_until,
-      fee_endowment_until,
       ...rest
     } = dto;
 
@@ -403,13 +405,12 @@ export class StaffEditingService {
       ...rest,
       ...(dob !== undefined ? { dob: new Date(dob) } : {}),
       ...(doa !== undefined ? { doa: doa ? new Date(doa) : null } : {}),
-      ...(complementary_until !== undefined
-        ? { complementary_until: complementary_until ? new Date(complementary_until) : null }
-        : {}),
-      ...(fee_endowment_until !== undefined
-        ? { fee_endowment_until: fee_endowment_until ? new Date(fee_endowment_until) : null }
-        : {}),
     };
+    // Benefit end and reminder dates arrive as YYYY-MM-DD; '' or null clears.
+    for (const f of BENEFIT_DATE_FIELDS) {
+      const v = studentData[f];
+      if (v !== undefined) studentData[f] = v ? new Date(v as string) : null;
+    }
 
     if (studentData.cnic !== undefined) {
       const c = typeof studentData.cnic === 'string' ? studentData.cnic.trim() : studentData.cnic;
@@ -465,52 +466,26 @@ export class StaffEditingService {
           }
         }
 
-        // Require reason + until only when enabling COMP/FE (false→true), not on re-saves.
-        const nextComplementary =
-          dto.is_complementary !== undefined ? dto.is_complementary : undefined;
-        const nextEndowment =
-          dto.is_fee_endowment !== undefined ? dto.is_fee_endowment : undefined;
-
-        if (nextComplementary === true) {
-          const enabling = !existing.is_complementary;
-          const reasonFromDto =
-            typeof dto.complementary_reason === 'string'
-              ? dto.complementary_reason.trim()
-              : '';
-          if (enabling) {
-            if (!reasonFromDto || !dto.complementary_until) {
-              throw new BadRequestException(
-                'Complementary students require a reason and an until date',
-              );
+        // Require reason + until only when enabling a benefit (false→true), not on re-saves.
+        for (const b of STUDENT_BENEFITS) {
+          const f = benefitFields(b);
+          const next = (dto as Record<string, unknown>)[f.flag];
+          if (next === true) {
+            const raw = (dto as Record<string, unknown>)[f.reason];
+            const reasonFromDto = typeof raw === 'string' ? raw.trim() : '';
+            if (!(existing as Record<string, unknown>)[f.flag]) {
+              if (!reasonFromDto || !(dto as Record<string, unknown>)[f.until]) {
+                throw new BadRequestException(
+                  `${b.label} students require a reason and an until date`,
+                );
+              }
             }
-            studentData.complementary_reason = reasonFromDto;
-          } else if (reasonFromDto) {
-            studentData.complementary_reason = reasonFromDto;
+            if (reasonFromDto) studentData[f.reason] = reasonFromDto;
+          } else if (next === false) {
+            studentData[f.reason] = null;
+            studentData[f.until] = null;
+            studentData[f.remindFrom] = null;
           }
-        } else if (nextComplementary === false) {
-          studentData.complementary_reason = null;
-          studentData.complementary_until = null;
-        }
-
-        if (nextEndowment === true) {
-          const enabling = !existing.is_fee_endowment;
-          const reasonFromDto =
-            typeof dto.fee_endowment_reason === 'string'
-              ? dto.fee_endowment_reason.trim()
-              : '';
-          if (enabling) {
-            if (!reasonFromDto || !dto.fee_endowment_until) {
-              throw new BadRequestException(
-                'Fee endowment students require a reason and an until date',
-              );
-            }
-            studentData.fee_endowment_reason = reasonFromDto;
-          } else if (reasonFromDto) {
-            studentData.fee_endowment_reason = reasonFromDto;
-          }
-        } else if (nextEndowment === false) {
-          studentData.fee_endowment_reason = null;
-          studentData.fee_endowment_until = null;
         }
 
         this.omitUndefined(studentData);
@@ -519,8 +494,7 @@ export class StaffEditingService {
         const dateFields = new Set([
           'dob',
           'doa',
-          'complementary_until',
-          'fee_endowment_until',
+          ...BENEFIT_DATE_FIELDS,
         ]);
         const TRACKED_STUDENT_FIELDS = [
           'full_name', 'cnic', 'dob', 'doa', 'gender', 'nationality', 'religion',
@@ -528,9 +502,8 @@ export class StaffEditingService {
           'interests', 'country', 'province', 'city', 'whatsapp_number',
           'whatsapp_country_code', 'primary_phone', 'primary_phone_country_code',
           'email', 'campus_id', 'class_id', 'section_id',
-          'house_id', 'academic_year', 'gr_number', 'status', 'is_complementary',
-          'is_fee_endowment', 'complementary_reason', 'complementary_until',
-          'fee_endowment_reason', 'fee_endowment_until',
+          'house_id', 'academic_year', 'gr_number', 'status',
+          ...BENEFIT_FIELD_NAMES,
           'fee_start_term', 'consent_publicity', 'admission_age_years',
           'physical_impairment',
         ];
@@ -944,12 +917,7 @@ export class StaffEditingService {
         class_id: true,
         section_id: true,
         house_id: true,
-        is_complementary: true,
-        is_fee_endowment: true,
-        complementary_reason: true,
-        complementary_until: true,
-        fee_endowment_reason: true,
-        fee_endowment_until: true,
+        ...BENEFIT_SELECT,
         fee_start_term: true,
         graduated_from_class_id: true,
         admission_age_years: true,
@@ -1739,16 +1707,7 @@ export class StaffEditingService {
       father_cnic: fatherLink?.guardians?.cnic ?? null,
       mother_name: motherLink?.guardians?.full_name ?? null,
       mother_cnic: motherLink?.guardians?.cnic ?? null,
-      is_complementary: s.is_complementary,
-      is_fee_endowment: s.is_fee_endowment,
-      complementary_reason: s.complementary_reason ?? null,
-      complementary_until: s.complementary_until
-        ? new Date(s.complementary_until).toISOString().slice(0, 10)
-        : null,
-      fee_endowment_reason: s.fee_endowment_reason ?? null,
-      fee_endowment_until: s.fee_endowment_until
-        ? new Date(s.fee_endowment_until).toISOString().slice(0, 10)
-        : null,
+      ...flattenBenefits(s),
       fee_start_term: s.fee_start_term,
       graduated_from_class_id: s.graduated_from_class_id,
       graduated_from_class: s.graduated_from_class ? {
@@ -1935,16 +1894,7 @@ export class StaffEditingService {
             return r === 'FATHER' || (r.includes('FATHER') && !r.includes('GRAND'));
           })?.guardians?.full_name ?? null,
         })),
-      is_complementary: s.is_complementary,
-      is_fee_endowment: s.is_fee_endowment,
-      complementary_reason: s.complementary_reason ?? null,
-      complementary_until: s.complementary_until
-        ? new Date(s.complementary_until).toISOString().slice(0, 10)
-        : null,
-      fee_endowment_reason: s.fee_endowment_reason ?? null,
-      fee_endowment_until: s.fee_endowment_until
-        ? new Date(s.fee_endowment_until).toISOString().slice(0, 10)
-        : null,
+      ...flattenBenefits(s),
       fee_start_term: s.fee_start_term,
       graduated_from_class_id: s.graduated_from_class_id,
       graduated_from_class: s.graduated_from_class,
@@ -2394,6 +2344,18 @@ export class StaffEditingService {
     ]
       .filter(Boolean)
       .join(' · ');
+
+    // TAFSD-421: this wipes the student's deposits, which would strand any family
+    // credit they created or used. Reverse those deposits first.
+    const creditRows = await this.prisma.family_credit_ledger.findMany({
+      where: { student_id: cc },
+      select: { deposit_id: true, amount: true },
+    });
+    if (hasOpenCreditEntries(creditRows)) {
+      throw new BadRequestException(
+        'This student has family credit entries. Reverse those deposits before deleting the student.',
+      );
+    }
 
     // 2. Comprehensive Transactional Wipe
     const result = await this.prisma.$transaction(async (tx) => {

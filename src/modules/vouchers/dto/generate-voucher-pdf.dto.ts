@@ -26,4 +26,10 @@ export class GenerateVoucherPdfDto {
     @IsBoolean()
     @Transform(({ value }) => value === 'true' || value === true)
     requires_release?: boolean;
+
+    // TAFSD-419: turn the REVISED stamp on or off. Only honoured with regenerate.
+    @IsOptional()
+    @IsBoolean()
+    @Transform(({ value }) => value === 'true' || value === true)
+    is_revised?: boolean;
 }

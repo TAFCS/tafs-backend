@@ -64,7 +64,7 @@ export class FinancialReportsController {
 
   @Get('fee-heads/snapshots')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#view')
+  @RequireAction('finance.financial_reports#fee_heads.view')
   async listFeeHeadsSnapshots(
     @Query() query: ListFeeHeadsSnapshotsQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -86,7 +86,7 @@ export class FinancialReportsController {
 
   @Get('fee-heads/snapshots/:id')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#view')
+  @RequireAction('finance.financial_reports#fee_heads.view')
   async getFeeHeadsSnapshot(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
@@ -119,7 +119,7 @@ export class FinancialReportsController {
 
   @Get('fee-heads')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#view')
+  @RequireAction('finance.financial_reports#fee_heads.view')
   async listFeeHeads(
     @Query() query: ListFeeHeadsQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -130,7 +130,7 @@ export class FinancialReportsController {
 
   @Get('fee-heads/export')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#export')
+  @RequireAction('finance.financial_reports#fee_heads.view', 'finance.financial_reports#export')
   async exportFeeHeads(
     @Query() query: ExportFeeHeadsQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -142,7 +142,7 @@ export class FinancialReportsController {
 
   @Get('deposits')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#view')
+  @RequireAction('finance.financial_reports#deposits.view')
   async listDeposits(
     @Query() query: ListDepositsQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -153,7 +153,7 @@ export class FinancialReportsController {
 
   @Get('deposits/export')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#export')
+  @RequireAction('finance.financial_reports#deposits.view', 'finance.financial_reports#export')
   async exportDeposits(
     @Query() query: ExportDepositsQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -165,7 +165,7 @@ export class FinancialReportsController {
 
   @Get('fee-matrix')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#view')
+  @RequireAction('finance.financial_reports#fee_matrix.view')
   async listFeeMatrix(
     @Query() query: ListFeeMatrixQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -176,7 +176,7 @@ export class FinancialReportsController {
 
   @Get('fee-matrix/export')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#export')
+  @RequireAction('finance.financial_reports#fee_matrix.view', 'finance.financial_reports#export')
   async exportFeeMatrix(
     @Query() query: ExportFeeMatrixQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -188,7 +188,7 @@ export class FinancialReportsController {
 
   @Get('defaulters')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#view')
+  @RequireAction('finance.financial_reports#defaulters.view')
   async listDefaulters(
     @Query() query: ListDefaultersQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
@@ -224,7 +224,7 @@ export class FinancialReportsController {
 
   @Get('defaulters/export')
   @CheckPolicies(canReadAnalytics)
-  @RequireAction('finance.financial_reports#export')
+  @RequireAction('finance.financial_reports#defaulters.view', 'finance.financial_reports#export')
   async exportDefaulters(
     @Query() query: ExportDefaultersQueryDto,
     @CurrentUser() user: IJwtStaffPayload,

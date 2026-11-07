@@ -20,8 +20,8 @@ import {
  * Each worksheet (one per campus) is its own run of pages: the title block
  * (the merged banner rows at the top) and the column header rows
  * (pageSetup.printTitlesRow) repeat on every page, with "PAGE X OF Y" under
- * it. Columns are shrunk to the page width, never past MIN_SCALE: a sheet too
- * wide for A4 at that size has to go on A3.
+ * it. Columns are stretched or shrunk to the page width, never shrunk past
+ * MIN_SCALE: a sheet too wide for A4 at that size has to go on A3.
  */
 
 export type SheetPaper = 'A4' | 'A3';
@@ -148,9 +148,12 @@ type PageModel = {
  */
 function layoutSheet(ws: ExcelJS.Worksheet, paper: SheetPaper): PageModel[] {
   const cols = columnCount(ws);
-  const scale = Math.min(1, usableWidth(paper) / sheetWidthPt(ws));
+  // Columns always span the page: a narrow sheet's columns widen to fill it
+  // (its text stays the same size), a wide one's shrink, and its text with them.
+  const stretch = usableWidth(paper) / sheetWidthPt(ws);
+  const scale = Math.min(1, stretch);
   const x: number[] = [MARGIN];
-  for (let c = 1; c <= cols; c++) x[c] = x[c - 1] + colWidthPt(ws, c) * scale;
+  for (let c = 1; c <= cols; c++) x[c] = x[c - 1] + colWidthPt(ws, c) * stretch;
 
   const merges: Region[] = (
     (ws.model as { merges?: string[] }).merges ?? []

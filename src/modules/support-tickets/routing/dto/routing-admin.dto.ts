@@ -48,6 +48,12 @@ export class CreateRoutingRuleDto {
   @MaxLength(100)
   subtopic?: string | null;
 
+  /** A ticket flow step key (TAFSD-447): matches every ticket whose path passes through it. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  node_key?: string | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(64)

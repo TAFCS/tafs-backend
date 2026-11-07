@@ -73,6 +73,7 @@ describe('SupportTicketsService leak-proofing', () => {
       mockAuditLogs as any,
       mockScope as any,
       mockRouting as any,
+      {} as any,
     );
   });
 
@@ -758,6 +759,10 @@ describe('SupportTicketsService leak-proofing', () => {
   });
 
   describe('resolveRouting', () => {
+    const origin = {
+      lane_id: null, flow_version: null, leaf_node_key: null, flow_path: null, path_keys: [],
+      leaf_queue_id: null, lane_fallback_queue_id: null, min_length: 20,
+    };
     const decision = { routedRole: 'PRINCIPAL', assigneeId: 'u', status: TicketStatus.ASSIGNED, queueId: null, ruleId: 3, note: null };
 
     it('hands the routing service the child placement including segment', async () => {
@@ -765,27 +770,33 @@ describe('SupportTicketsService leak-proofing', () => {
       prisma.classes.findUnique.mockResolvedValue({ segment_id: 6 });
       mockRouting.resolve.mockResolvedValue(decision);
 
-      const routing = await (service as any).resolveRouting(1, {
-        category: TicketCategory.GENERAL,
-        studentId: 77,
-        subtopic: 'Academics / Classwork',
-      });
+      const routing = await (service as any).resolveRouting(
+        1,
+        { ...origin, category: TicketCategory.GENERAL, subtopic: 'Academics / Classwork', path_keys: ['general', 'general-child', 'gc-academics-classwork'] },
+        77,
+      );
 
       expect(routing).toBe(decision);
       expect(mockRouting.resolve).toHaveBeenCalledWith({
         category: TicketCategory.GENERAL,
         subtopic: 'Academics / Classwork',
         student: { campus_id: 1, class_id: 15, segment_id: 6 },
+        path_keys: ['general', 'general-child', 'gc-academics-classwork'],
+        leaf_queue_id: null,
+        lane_fallback_queue_id: null,
       });
     });
 
     it('routes family-level tickets without a student', async () => {
       mockRouting.resolve.mockResolvedValue(decision);
-      await (service as any).resolveRouting(1, { category: TicketCategory.GENERAL, subtopic: 'Transport' });
+      await (service as any).resolveRouting(1, { ...origin, category: TicketCategory.GENERAL, subtopic: 'Transport', leaf_queue_id: 4 }, null);
       expect(mockRouting.resolve).toHaveBeenCalledWith({
         category: TicketCategory.GENERAL,
         subtopic: 'Transport',
         student: null,
+        path_keys: [],
+        leaf_queue_id: 4,
+        lane_fallback_queue_id: null,
       });
     });
   });

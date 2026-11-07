@@ -63,6 +63,10 @@ export interface VoucherPdfData {
     paidStamp?: boolean;
     /** When true, overlay a diagonal PAY IMMEDIATELY watermark on all three challan copies */
     payImmediate?: boolean;
+    /** TAFSD-420: add the FINAL NOTICE line. Only ever set with payImmediate. */
+    payImmediateRepeat?: boolean;
+    /** TAFSD-419: add the REVISED line to the diagonal stamp */
+    revised?: boolean;
     /** When true, overlay a diagonal WAIVED watermark — the whole voucher was written off */
     waived?: boolean;
     /** When false, hide the discount column. Default: true */

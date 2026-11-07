@@ -47,6 +47,13 @@ export class SplitPartiallyPaidDto {
     @IsOptional()
     pay_immediately_custom_dates?: boolean;
 
+    // TAFSD-419: stamp the balance voucher REVISED. A balance that is PAY
+    // IMMEDIATELY is always stamped, whatever this says.
+    @Transform(({ value }) => (value === 'true' || value === true))
+    @IsBoolean()
+    @IsOptional()
+    is_revised?: boolean;
+
     // Explicit admin override for the fee_date the new "BALANCE PAYMENT OF" head(s)
     // should carry. If omitted (and use_nearest_future_fee_date is false/unset), the
     // balance head keeps its original fee_date — the default, backwards-compatible

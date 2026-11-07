@@ -626,6 +626,7 @@ describe('VouchersService — supersession by fee date', () => {
       const txVouchersDelete = jest.fn();
 
       const tx: any = {
+        family_credit_ledger: { findMany: jest.fn().mockResolvedValue([]) },
         deposit_allocations: {
           findMany: jest.fn().mockResolvedValue([
             { deposit_id: 999, voucher_id: 300, student_fee_id: 101, amount: 90000 },
@@ -749,6 +750,7 @@ describe('VouchersService — supersession by fee date', () => {
         ],
       };
       const tx: any = {
+        family_credit_ledger: { findMany: jest.fn().mockResolvedValue([]) },
         deposit_allocations: {
           findMany: jest.fn().mockResolvedValue([{ deposit_id: 777, voucher_id: 310, student_fee_id: 103, amount: 500 }]),
           deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -826,6 +828,7 @@ describe('VouchersService — supersession by fee date', () => {
         888,
         expect.anything(),
         expect.anything(),
+        expect.any(String),
       );
       expect(result).toBeNull();
     });

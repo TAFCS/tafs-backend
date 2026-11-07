@@ -1,11 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LeaveRequestStatus } from '@prisma/client';
-import { IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsEnum, IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { toNumberArray, toStringArray } from '../../../../common/transforms/query-array.transform';
 
 export class CreateLeaveRequestDto {
-  @ApiProperty({ description: 'Leave type code: SICK | CASUAL | ANNUAL | UNPAID' })
+  @ApiProperty({ description: 'Leave type code: SICK | CASUAL (permanent staff only) | UNPAID' })
   @IsString()
   @MinLength(2)
   @MaxLength(20)
@@ -81,6 +81,16 @@ export class ReviewLeaveRequestDto {
   @IsString()
   @MaxLength(500)
   reviewReason?: string;
+
+  /**
+   * TAFSD-462: required when approving sick leave — paid days stay SICK_LEAVE,
+   * unpaid days are marked UNPAID_LEAVE and payroll deducts them. Ignored for
+   * other types, which are paid or unpaid by type.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isPaid?: boolean;
 }
 
 export class RevokeLeaveRequestDto {

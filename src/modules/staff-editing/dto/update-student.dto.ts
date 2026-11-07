@@ -177,6 +177,70 @@ export class UpdateStudentDto {
   fee_endowment_until?: string | null;
 
   @IsOptional()
+  @IsBoolean()
+  is_fee_endowment_mtf?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  fee_endowment_mtf_reason?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  fee_endowment_mtf_until?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  is_sehm_e_sadaat?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  sehm_e_sadaat_reason?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  sehm_e_sadaat_until?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  is_sehm_e_imam?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  sehm_e_imam_reason?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  sehm_e_imam_until?: string | null;
+
+  /** TAFSD-455: the home reminder starts on this date. */
+  @IsOptional()
+  @IsDateString()
+  fee_endowment_remind_from?: string | null;
+
+  /** TAFSD-455: the home reminder starts on this date. */
+  @IsOptional()
+  @IsDateString()
+  complementary_remind_from?: string | null;
+
+  /** TAFSD-455: the home reminder starts on this date. */
+  @IsOptional()
+  @IsDateString()
+  fee_endowment_mtf_remind_from?: string | null;
+
+  /** TAFSD-455: the home reminder starts on this date. */
+  @IsOptional()
+  @IsDateString()
+  sehm_e_sadaat_remind_from?: string | null;
+
+  /** TAFSD-455: the home reminder starts on this date. */
+  @IsOptional()
+  @IsDateString()
+  sehm_e_imam_remind_from?: string | null;
+
+  @IsOptional()
   @IsString()
   @MaxLength(10)
   fee_start_term?: string;
