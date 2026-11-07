@@ -61,6 +61,14 @@ export class AttendanceObjectionsService {
     // TAFSD-413: an overridden day's clock events carry negative ids (no real
     // scan behind them) — an objection against one is a day objection.
     const scanId = dto.scan_id && dto.scan_id > 0 ? dto.scan_id : null;
+    // TAFSD-490: only a whole-day objection carries a clock-out of its own.
+    let claimedCheckOut: Date | null = null;
+    if (dto.claimed_check_out_time) {
+      if (scanId) throw new BadRequestException('A clock-out time is only for a whole-day objection');
+      claimedCheckOut = new Date(dto.claimed_check_out_time);
+      if (Number.isNaN(claimedCheckOut.getTime())) throw new BadRequestException('Invalid claimed_check_out_time');
+      if (claimedCheckOut <= claimedTime) throw new BadRequestException('Clock-out must be after clock-in');
+    }
     let originalScanTime: Date | null = null;
     if (scanId) {
       const scan = await this.prisma.zk_attendance_scans.findFirst({
@@ -77,6 +85,7 @@ export class AttendanceObjectionsService {
         scan_id: scanId,
         original_scan_time: originalScanTime,
         claimed_time: claimedTime,
+        claimed_check_out_time: claimedCheckOut,
         reason: dto.reason,
         status: AttendanceObjectionStatus.PENDING,
       },
@@ -310,34 +319,39 @@ export class AttendanceObjectionsService {
           : record?.check_in_at && !record.check_out_at
             ? record.check_in_at
             : null;
-        if (arrival && existing.claimed_time > arrival) {
+        if (arrival && !existing.claimed_check_out_time && existing.claimed_time > arrival) {
           checkInAt = arrival;
           checkOutAt = existing.claimed_time;
         } else {
           // Whole-day objection: the claimed time is the arrival.
           checkInAt = existing.claimed_time;
-          // (58) Keep a real leaving time — the last punch of a complete day,
-          // else an override's check-out — and fall back to the schedule's
-          // leaving time only when the day has none.
-          const realLeaving =
-            dayScans.length >= 2 && dayScans.length % 2 === 0
-              ? dayScans[dayScans.length - 1].scan_time
-              : (record?.check_out_at ?? null);
-          if (realLeaving && realLeaving > existing.claimed_time) {
-            checkOutAt = realLeaving;
+          if (existing.claimed_check_out_time) {
+            // TAFSD-490: the employee gave the day's clock-out too.
+            checkOutAt = existing.claimed_check_out_time;
           } else {
-            // That weekday's leaving time (TAFSD-363: Friday may differ).
-            const leavingTime = timingsForDate(
-              existing.employee,
-              existing.employee.employee_day_timings,
-              new Date(existing.attendance_date),
-            ).leaving_time;
-            if (leavingTime) {
-              const lt = new Date(leavingTime);
-              const d = new Date(existing.attendance_date);
-              checkOutAt = new Date(
-                Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), lt.getUTCHours(), lt.getUTCMinutes(), 0),
-              );
+            // (58) Keep a real leaving time — the last punch of a complete day,
+            // else an override's check-out — and fall back to the schedule's
+            // leaving time only when the day has none.
+            const realLeaving =
+              dayScans.length >= 2 && dayScans.length % 2 === 0
+                ? dayScans[dayScans.length - 1].scan_time
+                : (record?.check_out_at ?? null);
+            if (realLeaving && realLeaving > existing.claimed_time) {
+              checkOutAt = realLeaving;
+            } else {
+              // That weekday's leaving time (TAFSD-363: Friday may differ).
+              const leavingTime = timingsForDate(
+                existing.employee,
+                existing.employee.employee_day_timings,
+                new Date(existing.attendance_date),
+              ).leaving_time;
+              if (leavingTime) {
+                const lt = new Date(leavingTime);
+                const d = new Date(existing.attendance_date);
+                checkOutAt = new Date(
+                  Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), lt.getUTCHours(), lt.getUTCMinutes(), 0),
+                );
+              }
             }
           }
         }
@@ -433,7 +447,9 @@ export class AttendanceObjectionsService {
       ? `${updated.employee.full_name}${updated.employee.employee_code ? ` (${updated.employee.employee_code})` : ''}`
       : updated.employee.employee_code ?? 'Unknown employee';
     const attendanceDateStr = existing.attendance_date.toISOString().slice(0, 10);
-    const claimedTimeStr = existing.claimed_time.toISOString().slice(11, 16);
+    const claimedTimeStr = existing.claimed_check_out_time
+      ? `${existing.claimed_time.toISOString().slice(11, 16)}–${existing.claimed_check_out_time.toISOString().slice(11, 16)}`
+      : existing.claimed_time.toISOString().slice(11, 16);
     const appliedDateStr = existing.created_at.toISOString().slice(0, 10);
     const recordedTimeStr = updated.scan
       ? `${updated.scan.scan_time.toISOString().slice(11, 16)} (${updated.scan.direction})`

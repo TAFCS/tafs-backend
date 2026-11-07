@@ -15,6 +15,11 @@ export class CreateAttendanceObjectionDto {
   @IsDateString()
   claimed_time: string;
 
+  /** TAFSD-490: a whole-day objection's clock-out (claimed_time is then its clock-in). */
+  @IsOptional()
+  @IsDateString()
+  claimed_check_out_time?: string;
+
   @IsString()
   @MaxLength(500)
   reason: string;

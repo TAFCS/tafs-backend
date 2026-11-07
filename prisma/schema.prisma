@@ -2028,6 +2028,8 @@ model attendance_objections {
   claimed_time    DateTime                  @db.Timestamp(6)
   /// TAFSD-474: the objected punch's time when the objection was raised — accepting rewrites the scan itself.
   original_scan_time DateTime?              @db.Timestamp(6)
+  /// TAFSD-490: a whole-day objection's claimed clock-out; claimed_time is its clock-in.
+  claimed_check_out_time DateTime?          @db.Timestamp(6)
   reason          String                    @db.VarChar(500)
   status          AttendanceObjectionStatus @default(PENDING)
   reviewed_by     String?

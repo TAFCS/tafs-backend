@@ -636,7 +636,13 @@ export class StaffAttendanceService {
       raw_scans: { id: number; scan_time: string; direction: string | null }[];
       is_working_day: boolean;
       day_type: string | null;
-      objections: { id: number; scan_id: number | null; claimed_time: string; status: string }[];
+      objections: {
+        id: number;
+        scan_id: number | null;
+        claimed_time: string;
+        claimed_check_out_time: string | null;
+        status: string;
+      }[];
     }[] = [];
 
     const toScanDto = (s: (typeof scans)[number]) => ({
@@ -758,6 +764,7 @@ export class StaffAttendanceService {
           id: o.id,
           scan_id: o.scan_id,
           claimed_time: o.claimed_time.toISOString(),
+          claimed_check_out_time: o.claimed_check_out_time?.toISOString() ?? null,
           status: o.status,
         })),
       });

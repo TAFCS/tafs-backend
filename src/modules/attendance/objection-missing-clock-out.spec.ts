@@ -21,6 +21,7 @@ type Opts = {
   daily?: { check_in_at: Date | null; check_out_at: Date | null };
   status?: AttendanceObjectionStatus;
   raceLost?: boolean;
+  claimedOut?: string;
 };
 
 function setup(opts: Opts) {
@@ -36,6 +37,7 @@ function setup(opts: Opts) {
     scan_id: scan?.id ?? null,
     scan,
     claimed_time: at(opts.claimed),
+    claimed_check_out_time: opts.claimedOut ? at(opts.claimedOut) : null,
     original_scan_time: null,
     reason: 'Punch was wrong',
     created_at: at('18:00'),
@@ -167,5 +169,46 @@ describe('TAFSD-489 (60): an objection is decided once', () => {
     const t = setup({ scans: ['08:00'], claimed: '16:00', raceLost: true });
     await expect(t.accept()).rejects.toBeInstanceOf(ConflictException);
     expect(t.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe('TAFSD-490: a whole-day objection with both times', () => {
+  it('saves the claimed clock-in and clock-out', async () => {
+    const t = setup({ scans: ['09:10', '15:30'], claimed: '08:00', claimedOut: '16:00' });
+    await t.accept();
+    expect(t.saved().check_in_at).toEqual(at('08:00'));
+    expect(t.saved().check_out_at).toEqual(at('16:00'));
+  });
+
+  it('is not mistaken for a missing clock-out on a day with one punch', async () => {
+    const t = setup({ scans: ['10:00'], claimed: '08:00', claimedOut: '16:00' });
+    await t.accept();
+    expect(t.saved().check_in_at).toEqual(at('08:00'));
+    expect(t.saved().check_out_at).toEqual(at('16:00'));
+  });
+});
+
+describe('TAFSD-490: raising a whole-day objection', () => {
+  const svc = () =>
+    new AttendanceObjectionsService(
+      {} as any,
+      { requireByUserId: jest.fn(async () => ({ id: 9, full_name: 'T' })) } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+  const base = { attendance_date: '2026-11-05', claimed_time: '2026-11-05T08:00:00Z', reason: 'Device was down' };
+
+  it('rejects a clock-out that is not after the clock-in', async () => {
+    await expect(
+      svc().create('u9', { ...base, claimed_check_out_time: '2026-11-05T07:30:00Z' } as any),
+    ).rejects.toThrow('Clock-out must be after clock-in');
+  });
+
+  it('rejects a clock-out on an objection about one punch', async () => {
+    await expect(
+      svc().create('u9', { ...base, scan_id: 5, claimed_check_out_time: '2026-11-05T16:00:00Z' } as any),
+    ).rejects.toThrow('only for a whole-day objection');
   });
 });
