@@ -1,4 +1,4 @@
-import { IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, Matches, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, Matches, MaxLength, ValidateNested } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { StaffAttendanceStatus } from '@prisma/client';
 import { toNumberArray } from '../../../common/transforms/query-array.transform';
@@ -20,6 +20,22 @@ export class GetStaffAttendanceQueryDto {
   department_id?: number[];
 }
 
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** TAFSD-484: one break on an overridden day. */
+export class StaffBreakDto {
+  @Matches(HHMM, { message: 'break start must be HH:mm' })
+  start_time: string;
+
+  @Matches(HHMM, { message: 'break end must be HH:mm' })
+  end_time: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reason?: string;
+}
+
 export class StaffAttendanceMarkDto {
   @Type(() => Number)
   @IsInt()
@@ -39,6 +55,14 @@ export class StaffAttendanceMarkDto {
   @IsOptional()
   @IsString()
   check_out_time?: string;
+
+  /** Breaks taken that day. Left out keeps the breaks already saved; [] records none. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => StaffBreakDto)
+  breaks?: StaffBreakDto[];
 }
 
 export class BulkMarkStaffAttendanceDto {

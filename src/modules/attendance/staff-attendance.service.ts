@@ -23,6 +23,7 @@ import {
 import type { DayBreakdownEntry } from '../hr/payroll/payroll.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import { effectiveManualStatus } from './manual-late.util';
+import { buildManualBreaks, ManualBreak, manualDaySegments, parseManualBreaks } from './manual-breaks.util';
 import { ZK_DEVICES } from './zk-device-health.util';
 import { describeCycleTenure, offRollReason, progressionOverlapWhere } from '../hr/payroll/tenure-window.util';
 import { STAFF_VISIBLE_RUN } from '../hr/payroll/staff-visibility.util';
@@ -45,10 +46,19 @@ function describeDay(row: {
   check_in_at: Date | null;
   check_out_at: Date | null;
   source: AttendanceSource;
+  manual_breaks?: Prisma.JsonValue | null;
 }): string {
   const hm = (d: Date | null) => (d ? d.toISOString().slice(11, 16) : '—');
   const times = row.check_in_at || row.check_out_at ? `, ${hm(row.check_in_at)}–${hm(row.check_out_at)}` : '';
-  return `${STATUS_LABELS[row.status] ?? row.status}${times} (${row.source.toLowerCase()})`;
+  const breaks = parseManualBreaks(row.manual_breaks);
+  const breakText = breaks?.length
+    ? `, breaks ${breaks
+        .map((b) => `${hm(new Date(b.start))}–${hm(new Date(b.end))}${b.reason ? ` (${b.reason})` : ''}`)
+        .join(', ')}`
+    : breaks
+      ? ', no breaks'
+      : '';
+  return `${STATUS_LABELS[row.status] ?? row.status}${times}${breakText} (${row.source.toLowerCase()})`;
 }
 
 @Injectable()
@@ -450,12 +460,10 @@ export class StaffAttendanceService {
     leavingTime: Date | null,
     record: attendance_staff_daily | null,
   ) {
-    const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string }[] = [];
+    const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string; reason?: string | null }[] = [];
 
     if (record?.source === AttendanceSource.MANUAL && record.check_in_at) {
-      const start = record.check_in_at.toISOString();
-      const end = record.check_out_at ? record.check_out_at.toISOString() : start;
-      segments.push({ type: 'WORK', start, end });
+      segments.push(...manualDaySegments(record.check_in_at, record.check_out_at, parseManualBreaks(record.manual_breaks)));
       return segments;
     }
 
@@ -977,7 +985,13 @@ export class StaffAttendanceService {
     // Upsert all records in a transaction. The callback returns upsert args,
     // not the query itself — an async function would await (run) a Prisma
     // query it returned, outside the transaction.
-    const saved: { employee_id: number; status: StaffAttendanceStatus; check_in_at: Date | null; check_out_at: Date | null }[] = [];
+    const saved: {
+      employee_id: number;
+      status: StaffAttendanceStatus;
+      check_in_at: Date | null;
+      check_out_at: Date | null;
+      manual_breaks: Prisma.JsonValue | null;
+    }[] = [];
     const upsertArgs = await Promise.all(dto.records.map(async (mark) => {
       let checkInAt: Date | null | undefined = undefined;
       let checkOutAt: Date | null | undefined = undefined;
@@ -1010,7 +1024,28 @@ export class StaffAttendanceService {
         const expected = await this.expectedTimes.resolveExpectedTimes(mark.employee_id, dto.campus_id, date);
         status = effectiveManualStatus(status, finalCheckIn, expected.expectedCheckIn, expected.graceMinutes) as StaffAttendanceStatus;
       }
-      saved.push({ employee_id: mark.employee_id, status, check_in_at: finalCheckIn, check_out_at: finalCheckOut });
+      // TAFSD-484: breaks left out keep what the row has; a day with no
+      // punches to keep (absent, leave) has no breaks either.
+      let breaks: ManualBreak[] | null | undefined = undefined;
+      if (clearsPunches) {
+        breaks = null;
+      } else if (mark.breaks) {
+        const built = buildManualBreaks(date, mark.breaks, finalCheckIn, finalCheckOut);
+        if ('error' in built) throw new BadRequestException(built.error);
+        breaks = built.breaks;
+      }
+      const breaksData =
+        breaks === undefined
+          ? {}
+          : { manual_breaks: breaks === null ? Prisma.DbNull : (breaks as unknown as Prisma.InputJsonValue) };
+      saved.push({
+        employee_id: mark.employee_id,
+        status,
+        check_in_at: finalCheckIn,
+        check_out_at: finalCheckOut,
+        manual_breaks:
+          breaks === undefined ? (existing?.manual_breaks ?? null) : (breaks as unknown as Prisma.JsonValue),
+      });
 
       return {
         where: { employee_id_date: { employee_id: mark.employee_id, date } },
@@ -1024,6 +1059,7 @@ export class StaffAttendanceService {
           source: AttendanceSource.MANUAL,
           ...(checkInAt !== undefined ? { check_in_at: checkInAt } : {}),
           ...(checkOutAt !== undefined ? { check_out_at: checkOutAt } : {}),
+          ...breaksData,
         },
         update: {
           status,
@@ -1032,6 +1068,7 @@ export class StaffAttendanceService {
           source: AttendanceSource.MANUAL,
           ...(checkInAt !== undefined ? { check_in_at: checkInAt } : {}),
           ...(checkOutAt !== undefined ? { check_out_at: checkOutAt } : {}),
+          ...breaksData,
         },
       } satisfies Prisma.attendance_staff_dailyUpsertArgs;
     }));
