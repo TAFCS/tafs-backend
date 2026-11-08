@@ -34,6 +34,7 @@ import { EditTicketMessageDto } from './dto/edit-ticket-message.dto';
 import { TransferTicketDto } from './dto/transfer-ticket.dto';
 import { ForwardTicketDto } from './dto/forward-ticket.dto';
 import { CloseTicketDto } from './dto/close-ticket.dto';
+import { MoveTicketDto } from './dto/move-ticket.dto';
 import { MarkTicketReadDto } from './dto/mark-ticket-read.dto';
 
 const canViewTickets = (ability: any) =>
@@ -326,6 +327,28 @@ export class SupportTicketsController {
     @CurrentUser() staff: any,
   ) {
     return this.supportTicketsService.forwardTicket(id, dto.targetUserId, staff);
+  }
+
+  @Get(':id/move-options')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#reassign')
+  @ApiOperation({ summary: 'Topics and desks this ticket can be moved to (TAFSD-448)' })
+  moveOptions(@Param('id') id: string, @CurrentUser() staff: any) {
+    return this.supportTicketsService.listMoveOptions(id, staff);
+  }
+
+  @Post(':id/move')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#reassign')
+  @ApiOperation({ summary: 'Move a ticket to another topic or desk, across General and Fees (TAFSD-448)' })
+  moveTicket(
+    @Param('id') id: string,
+    @Body() dto: MoveTicketDto,
+    @CurrentUser() staff: any,
+  ) {
+    return this.supportTicketsService.moveTicket(id, dto, staff);
   }
 
   @Post(':id/messages')

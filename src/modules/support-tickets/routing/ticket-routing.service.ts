@@ -69,6 +69,16 @@ type TargetOutcome =
   | { ok: true; assigneeId: string | null; status: TicketStatus; queueId: number | null; kind: 'user' | 'queue'; name: string }
   | { ok: false; reason: string };
 
+/** A desk a ticket can be moved to, with whether each member can see the ticket's child (TAFSD-448). */
+export interface DeskOption {
+  id: number;
+  name: string;
+  category: TicketCategory;
+  assignment: TicketQueueAssignment;
+  members: Array<{ id: string; full_name: string; username: string; role: StaffRole; in_scope: boolean }>;
+  in_scope: boolean;
+}
+
 export interface RoutingIssue {
   severity: 'error' | 'warning';
   code:
@@ -299,6 +309,55 @@ export class TicketRoutingService {
       select: { user: { select: { id: true, full_name: true, username: true, role: true } } },
     });
     return members.map((m) => m.user);
+  }
+
+  // ─── Moving a ticket (TAFSD-448) ───────────────────────────────────────────
+
+  /**
+   * Every active desk with its active members, each marked by whether their
+   * scope covers the student. A desk is in scope when any member is. Without a
+   * student there is no limit and everything is in scope.
+   */
+  async deskOptions(student: RoutingSubject['student'], queueId?: number) {
+    const queues = await this.prisma.ticket_queues.findMany({
+      where: { is_active: true, ...(queueId != null ? { id: queueId } : {}) },
+      include: queueInclude,
+      orderBy: [{ category: 'asc' }, { name: 'asc' }],
+    });
+    const scopes: ScopeCache = new Map();
+    const subject: RoutingSubject = { category: TicketCategory.GENERAL, student: student ?? null };
+    const out: DeskOption[] = [];
+    for (const q of queues) {
+      const members: DeskOption['members'] = [];
+      for (const m of q.members) {
+        if (!m.user.is_active || m.user.deleted_at) continue;
+        const reason = await this.ineligibility(m.user, subject, scopes);
+        members.push({
+          id: m.user.id,
+          full_name: m.user.full_name,
+          username: m.user.username,
+          role: m.user.role,
+          in_scope: reason == null,
+        });
+      }
+      out.push({
+        id: q.id,
+        name: q.name,
+        category: q.category,
+        assignment: q.assignment,
+        members,
+        in_scope: members.some((m) => m.in_scope),
+      });
+    }
+    return out;
+  }
+
+  /** Whether this person's scope covers the student (always true without one). */
+  async coversStudent(userId: string, student: RoutingSubject['student']): Promise<boolean> {
+    if (!student) return true;
+    const user = await this.prisma.users.findUnique({ where: { id: userId }, select: staffSelect });
+    if (!user) return false;
+    return (await this.ineligibility(user, { category: TicketCategory.GENERAL, student }, new Map())) == null;
   }
 
   // ─── Health ────────────────────────────────────────────────────────────────

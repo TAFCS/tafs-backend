@@ -140,4 +140,42 @@ describe('TicketFlowService', () => {
     const { service } = setup();
     await expect(service.overview({ ...admin, role: 'CAMPUS_ADMIN' })).rejects.toBeInstanceOf(ForbiddenException);
   });
+
+  describe('moving a ticket (TAFSD-448)', () => {
+    const child = { campus_id: 1, class_id: 15, segment_id: 3 };
+
+    it('offers child topics for a ticket about a child, and family topics otherwise', async () => {
+      const { service, prisma } = setup();
+      prisma.ticket_flows.findFirst.mockResolvedValue(row(3, TicketFlowStatus.PUBLISHED));
+      prisma.ticket_lanes.findMany = jest.fn(async () => [{ id: 1, key: 'general' }, { id: 2, key: 'fees' }]);
+
+      const withChild = await service.moveTopics(9, child);
+      const general = withChild.lanes.find((l) => l.key === 'general')!;
+      expect(general.topics.map((t) => t.label)).toContain('Academics / Classwork');
+      expect(general.topics.map((t) => t.label)).not.toContain('Transport');
+      const fees = withChild.lanes.find((l) => l.key === 'fees')!;
+      expect(fees).toMatchObject({ id: 2, category: 'FINANCIAL' });
+      expect(fees.topics.find((t) => t.key === 'f-refund-request')).toMatchObject({ label: 'Refund Request', path: [] });
+
+      const family = await service.moveTopics(9, null);
+      const familyGeneral = family.lanes.find((l) => l.key === 'general')!.topics.map((t) => t.label);
+      expect(familyGeneral).toContain('Transport');
+      expect(familyGeneral).not.toContain('Academics / Classwork');
+    });
+
+    it('resolves a leaf to its origin, and refuses one the ticket could not have reached', async () => {
+      const { service, prisma } = setup();
+      prisma.ticket_flows.findFirst.mockResolvedValue(row(3, TicketFlowStatus.PUBLISHED));
+      const origin = await service.originForLeaf(9, 'f-refund-request', child);
+      expect(origin).toMatchObject({
+        category: 'FINANCIAL',
+        subtopic: 'Refund Request',
+        lane_id: 2,
+        leaf_node_key: 'f-refund-request',
+        path_keys: ['fees', 'fees-child', 'f-refund-request'],
+      });
+      await expect(service.originForLeaf(9, 'gc-academics-classwork', null)).rejects.toThrow('needs a child');
+      await expect(service.originForLeaf(9, 'no-such-leaf', child)).rejects.toThrow('no longer');
+    });
+  });
 });

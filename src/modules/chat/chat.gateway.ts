@@ -982,6 +982,31 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.server.to(`staff_inbox_${toUserId}`).emit('ticketForwarded', { ticket, fromUserId });
   }
 
+  /**
+   * TAFSD-448: a ticket moved to another desk or lane. Sent as ticketTransferred
+   * so every client already resyncs on it: the old desk drops the ticket, the
+   * new desk and holder pick it up, and super admins refresh oversight.
+   */
+  async broadcastTicketMoved(
+    ticket: any,
+    before: { routed_queue_id: number | null; routed_role: string | null; current_assignee_id: string | null },
+  ) {
+    const rooms = new Set<string>([
+      'super_admin_approvals',
+      ...this.ticketPoolRooms(before),
+      ...this.ticketPoolRooms(ticket),
+    ]);
+    for (const userId of [before.current_assignee_id, ticket.current_assignee_id]) {
+      if (userId) rooms.add(`staff_inbox_${userId}`);
+    }
+    this.server.to([...rooms]).emit('ticketTransferred', {
+      ticket,
+      moved: true,
+      fromUserId: before.current_assignee_id,
+      toUserId: ticket.current_assignee_id,
+    });
+  }
+
   async broadcastReplyPendingApproval(message: any, ticket: any) {
     const payload = { message, ticket, status: 'PENDING' as const };
     this.server.to('super_admin_approvals').emit('replyPendingApproval', payload);

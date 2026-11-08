@@ -345,6 +345,98 @@ export class TicketFlowService {
     }
   }
 
+  // ─── Moving a ticket (TAFSD-448) ───────────────────────────────────────────
+
+  /**
+   * The topics a ticket can be moved to: every TICKET leaf of the published
+   * flow this ticket's family could have reached with the same child (or no
+   * child), grouped by lane.
+   */
+  async moveTopics(familyId: number, student: FlowPlacement | null) {
+    const [row, family, laneRows] = await Promise.all([
+      this.published(),
+      this.familyPlacements(familyId),
+      this.prisma.ticket_lanes.findMany({ select: { id: true, key: true } }),
+    ]);
+    const tree = row.tree as unknown as FlowTree;
+    const placements = family.map(({ campus_id, class_id, segment_id }) => ({ campus_id, class_id, segment_id }));
+    const laneId = new Map(laneRows.map((l) => [l.key, l.id]));
+    const lanes = new Map<
+      string,
+      {
+        id: number | null;
+        key: string;
+        name: string;
+        icon: string;
+        color: string;
+        category: TicketCategory;
+        topics: Array<{ key: string; label: string; path: string[] }>;
+      }
+    >();
+    for (const { leaf, lane, path } of ticketLeaves(tree)) {
+      const walk = walkPath(tree, path, student, placements);
+      if (!walk.ok) continue;
+      const ls = laneSettings(lane);
+      let entry = lanes.get(lane.key);
+      if (!entry) {
+        entry = {
+          id: laneId.get(lane.key) ?? null,
+          key: lane.key,
+          name: lane.label,
+          icon: lane.icon || 'help',
+          color: ls.color,
+          category: ls.legacy_category as TicketCategory,
+          topics: [],
+        };
+        lanes.set(lane.key, entry);
+      }
+      entry.topics.push({
+        key: leaf.key,
+        label: leaf.label,
+        // The questions between the lane and the leaf, without the child picker.
+        path: walk.steps
+          .filter((s) => s.type !== 'LANE' && s.type !== 'PICK_CHILD' && s.key !== leaf.key)
+          .map((s) => s.label),
+      });
+    }
+    return { version: row.version, lanes: [...lanes.values()] };
+  }
+
+  /** The origin a ticket gets when staff move it to this leaf, as if the parent had picked it. */
+  async originForLeaf(familyId: number, leafKey: string, student: FlowPlacement | null): Promise<FlowOrigin> {
+    const row = await this.published();
+    const hit = indexTree(row.tree as unknown as FlowTree).get(leafKey);
+    if (!hit || hit.node.type !== 'TICKET') {
+      throw new BadRequestException({
+        code: 'FLOW_CHANGED',
+        message: 'That topic is no longer in the help options. Please choose again.',
+      });
+    }
+    try {
+      return await this.resolvePath(familyId, row.version, hit.path, student);
+    } catch (e) {
+      if (e instanceof ConflictException || e instanceof BadRequestException) {
+        throw new BadRequestException({
+          code: 'TOPIC_NOT_AVAILABLE',
+          message: student
+            ? 'That topic is not available for this child.'
+            : 'That topic needs a child, and this ticket is not about one.',
+        });
+      }
+      throw e;
+    }
+  }
+
+  /** The lane a ticket lands in when moved to a desk of another category. */
+  async defaultLaneId(category: TicketCategory): Promise<number | null> {
+    const lane = await this.prisma.ticket_lanes.findFirst({
+      where: { legacy_category: category, is_active: true },
+      orderBy: [{ sort_order: 'asc' }, { id: 'asc' }],
+      select: { id: true },
+    });
+    return lane?.id ?? null;
+  }
+
   // ─── Admin ─────────────────────────────────────────────────────────────────
 
   private assertAdmin(staff: IJwtStaffPayload) {

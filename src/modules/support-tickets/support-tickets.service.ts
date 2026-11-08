@@ -16,6 +16,7 @@ import {
   StaffRole,
   TicketCategory,
   TicketEventType,
+  TicketQueueAssignment,
   TicketStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -30,6 +31,7 @@ import {
   ORIGINATION_OPTIONS,
   canSeeClosedTicket,
   closedTicketVisibilityWhere,
+  laneFor,
 } from '../../common/support-ticket-routing';
 import { TicketRoutingService } from './routing/ticket-routing.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
@@ -39,6 +41,7 @@ import { CreateTicketMessageDto } from './dto/create-ticket-message.dto';
 import { ReviewTicketMessageDto } from './dto/review-ticket-message.dto';
 import { EditTicketMessageDto } from './dto/edit-ticket-message.dto';
 import { CloseTicketDto } from './dto/close-ticket.dto';
+import { MoveTicketDto } from './dto/move-ticket.dto';
 
 import { ScopeService } from '../../common/scope/scope.service';
 
@@ -432,6 +435,7 @@ export class SupportTicketsService {
       transfer: open && inQueue && isAssignee,
       forward: open && isAssignee && this.canForward(staff, ticket, queue?.allow_forward ?? false),
       reply: open && (isAssignee || staff.role === 'SUPER_ADMIN'),
+      move: open && this.canMove(staff, ticket, queueIds),
     };
   }
 
@@ -767,6 +771,325 @@ export class SupportTicketsService {
 
     await this.chatGateway.broadcastTicketForwarded(updated, staff.sub, targetUserId);
     return updated;
+  }
+
+  // ─── Moving a ticket (TAFSD-448) ───────────────────────────────────────────
+
+  /**
+   * Loads an open ticket the caller may move: its assignee, a member of its
+   * desk, or a super admin. Scope is checked by assertCanViewTicket first.
+   */
+  private async loadMovableTicket(ticketId: string, staff: IJwtStaffPayload) {
+    const ticket = await this.prisma.support_tickets.findUnique({
+      where: { id: ticketId },
+      include: { ...ticketInclude, routed_queue: { select: { id: true, name: true } } },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    const queueIds = await this.assertCanViewTicket(ticket, staff);
+    if (ticket.status === TicketStatus.CLOSED) {
+      throw new BadRequestException('A closed ticket cannot be moved');
+    }
+    if (!this.canMove(staff, ticket, queueIds)) {
+      throw new ForbiddenException('Only the assignee, members of this ticket\'s desk or a super admin can move it');
+    }
+    return ticket;
+  }
+
+  private canMove(
+    staff: IJwtStaffPayload,
+    ticket: { current_assignee_id: string | null; routed_queue_id: number | null },
+    queueIds: number[],
+  ) {
+    return (
+      staff.role === 'SUPER_ADMIN' ||
+      ticket.current_assignee_id === staff.sub ||
+      (ticket.routed_queue_id != null && queueIds.includes(ticket.routed_queue_id))
+    );
+  }
+
+  /** The ticket's child, as routing and the flow see it; null for family-level tickets. */
+  private ticketPlacement(ticket: {
+    student_id: number | null;
+    students: { campus_id: number | null; class_id: number | null; classes: { segment_id: number | null } | null } | null;
+  }) {
+    if (ticket.student_id == null || !ticket.students) return null;
+    return {
+      campus_id: ticket.students.campus_id,
+      class_id: ticket.students.class_id,
+      segment_id: ticket.students.classes?.segment_id ?? null,
+    };
+  }
+
+  /**
+   * Where the caller can move this ticket: flow topics (routed as if the parent
+   * had picked them) and desks with their people. Only destinations whose scope
+   * covers the ticket's child are offered; super admins also get the rest,
+   * flagged `in_scope: false`, to override with.
+   */
+  async listMoveOptions(ticketId: string, staff: IJwtStaffPayload) {
+    const ticket = await this.loadMovableTicket(ticketId, staff);
+    const student = this.ticketPlacement(ticket);
+    const isAdmin = staff.role === 'SUPER_ADMIN';
+    const [topics, desks] = await Promise.all([
+      this.flow.moveTopics(ticket.family_id, student),
+      this.routing.deskOptions(student),
+    ]);
+    return {
+      current: {
+        category: ticket.category,
+        lane_id: ticket.lane_id,
+        leaf_node_key: ticket.leaf_node_key,
+        routed_queue_id: ticket.routed_queue_id,
+        current_assignee_id: ticket.current_assignee_id,
+      },
+      has_student: student != null,
+      can_override_scope: isAdmin,
+      flow_version: topics.version,
+      lanes: topics.lanes,
+      desks: isAdmin
+        ? desks
+        : desks
+            .filter((d) => d.in_scope)
+            .map((d) => ({ ...d, members: d.members.filter((m) => m.in_scope) })),
+    };
+  }
+
+  async moveTicket(ticketId: string, dto: MoveTicketDto, staff: IJwtStaffPayload) {
+    const reason = (dto.reason ?? '').trim();
+    if (reason.length < 3) throw new BadRequestException('Give a reason for the move');
+    if ((dto.leafKey ? 1 : 0) + (dto.queueId != null ? 1 : 0) !== 1) {
+      throw new BadRequestException('Choose either a topic or a desk');
+    }
+    if (dto.targetUserId && dto.queueId == null) {
+      throw new BadRequestException('A person is chosen within a desk');
+    }
+
+    const ticket = await this.loadMovableTicket(ticketId, staff);
+    const student = this.ticketPlacement(ticket);
+    const isAdmin = staff.role === 'SUPER_ADMIN';
+
+    // Work out the destination without writing anything.
+    let dest: {
+      category: TicketCategory;
+      subtopic: string | null;
+      lane_id: number | null;
+      flow_version: number | null;
+      leaf_node_key: string | null;
+      flow_path: Prisma.InputJsonValue | typeof Prisma.JsonNull;
+      queueId: number | null;
+      queueName: string | null;
+      assigneeId: string | null;
+      status: TicketStatus;
+      routedRole: StaffRole;
+      ruleId: number | null;
+      routingNote: string | null;
+      inScope: boolean;
+    };
+
+    if (dto.leafKey) {
+      const origin = await this.flow.originForLeaf(ticket.family_id, dto.leafKey, student);
+      const decision = await this.routing.resolve({
+        category: origin.category,
+        subtopic: origin.subtopic,
+        student,
+        path_keys: origin.path_keys,
+        leaf_queue_id: origin.leaf_queue_id,
+        lane_fallback_queue_id: origin.lane_fallback_queue_id,
+      });
+      // Routing only hands a ticket to people who can see the child; it lands
+      // out of scope only when it fell through to a desk nobody there can see.
+      let inScope = student == null;
+      if (!inScope && decision.assigneeId) inScope = true;
+      else if (!inScope && decision.queueId != null) {
+        inScope = (await this.routing.deskOptions(student, decision.queueId))[0]?.in_scope ?? false;
+      }
+      const queueName =
+        decision.queueId != null
+          ? (await this.prisma.ticket_queues.findUnique({ where: { id: decision.queueId }, select: { name: true } }))?.name ?? null
+          : null;
+      dest = {
+        category: origin.category,
+        subtopic: origin.subtopic,
+        lane_id: origin.lane_id,
+        flow_version: origin.flow_version,
+        leaf_node_key: origin.leaf_node_key,
+        flow_path: origin.flow_path ? (origin.flow_path as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+        queueId: decision.queueId,
+        queueName,
+        assigneeId: decision.assigneeId,
+        status: decision.status,
+        routedRole: decision.routedRole,
+        ruleId: decision.ruleId,
+        routingNote: decision.note,
+        inScope,
+      };
+    } else {
+      const desk = (await this.routing.deskOptions(student, dto.queueId))[0];
+      if (!desk) throw new BadRequestException('That desk does not exist or is switched off');
+      let assignee: { id: string; in_scope: boolean } | null = null;
+      if (dto.targetUserId) {
+        assignee = desk.members.find((m) => m.id === dto.targetUserId) ?? null;
+        if (!assignee) throw new BadRequestException('That person is not an active member of the desk');
+      } else if (desk.assignment === TicketQueueAssignment.AUTO) {
+        assignee = desk.members.find((m) => m.in_scope) ?? null;
+      }
+      const sameCategory = desk.category === ticket.category;
+      dest = {
+        category: desk.category,
+        subtopic: ticket.subtopic,
+        // Same category keeps the lane and topic; crossing over lands in that
+        // category's first lane with no topic, since a desk is not a topic.
+        lane_id: sameCategory ? ticket.lane_id : await this.flow.defaultLaneId(desk.category),
+        flow_version: sameCategory ? ticket.flow_version : null,
+        leaf_node_key: sameCategory ? ticket.leaf_node_key : null,
+        flow_path: sameCategory && ticket.flow_path != null ? (ticket.flow_path as Prisma.InputJsonValue) : Prisma.JsonNull,
+        queueId: desk.id,
+        queueName: desk.name,
+        assigneeId: assignee?.id ?? null,
+        status: assignee ? TicketStatus.ASSIGNED : TicketStatus.OPEN,
+        routedRole: laneFor(desk.category, 'queue'),
+        ruleId: null,
+        routingNote: `Moved by hand to ${desk.name}`,
+        inScope: assignee ? assignee.in_scope : desk.in_scope,
+      };
+    }
+
+    if (!dest.inScope) {
+      if (!isAdmin) {
+        throw new ForbiddenException('Nobody at that destination can see this student. Ask a super admin to move it.');
+      }
+      if (!dto.overrideScope) {
+        throw new ConflictException({
+          code: 'SCOPE_OVERRIDE_REQUIRED',
+          message: 'Nobody at that destination can see this student. Confirm to move it anyway.',
+        });
+      }
+    }
+    const overridden = !dest.inScope;
+
+    if (
+      dest.queueId === ticket.routed_queue_id &&
+      dest.assigneeId === ticket.current_assignee_id &&
+      dest.category === ticket.category &&
+      dest.leaf_node_key === ticket.leaf_node_key &&
+      dest.lane_id === ticket.lane_id
+    ) {
+      throw new BadRequestException('The ticket is already there');
+    }
+
+    const newAssignee = dest.assigneeId
+      ? await this.prisma.users.findUnique({ where: { id: dest.assigneeId }, select: { full_name: true, username: true } })
+      : null;
+    const fromLabel =
+      ticket.routed_queue?.name ?? ticket.current_assignee?.full_name ?? ticket.lane?.name ?? 'no desk';
+    const toLabel = dest.queueName
+      ? `${dest.queueName}${newAssignee ? ` (${newAssignee.full_name})` : ''}`
+      : newAssignee?.full_name ?? 'no desk (unassigned)';
+    const topicLabel = dto.leafKey && dest.subtopic ? ` as "${dest.subtopic}"` : '';
+    const note = [
+      `From ${fromLabel} to ${toLabel}${topicLabel}.`,
+      overridden ? 'Outside the destination\'s scope (super admin override).' : null,
+      `Reason: ${reason}`,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // Guard against a claim, transfer or close landing in between.
+      const result = await tx.support_tickets.updateMany({
+        where: {
+          id: ticketId,
+          status: { in: [TicketStatus.OPEN, TicketStatus.ASSIGNED] },
+          routed_queue_id: ticket.routed_queue_id,
+          current_assignee_id: ticket.current_assignee_id,
+        },
+        data: {
+          category: dest.category,
+          subtopic: dest.subtopic,
+          lane_id: dest.lane_id,
+          flow_version: dest.flow_version,
+          leaf_node_key: dest.leaf_node_key,
+          flow_path: dest.flow_path,
+          routed_queue_id: dest.queueId,
+          routed_role: dest.routedRole,
+          routed_rule_id: dest.ruleId,
+          routing_note: dest.routingNote?.slice(0, 500) ?? null,
+          current_assignee_id: dest.assigneeId,
+          status: dest.status,
+        },
+      });
+      if (result.count === 0) {
+        throw new ConflictException('The ticket changed while you were moving it. Reload and try again.');
+      }
+      await tx.ticket_events.create({
+        data: {
+          ticket_id: ticketId,
+          event_type: TicketEventType.MOVED,
+          actor_user_id: staff.sub,
+          from_user_id: ticket.current_assignee_id,
+          to_user_id: dest.assigneeId,
+          note,
+        },
+      });
+      return tx.support_tickets.findUniqueOrThrow({ where: { id: ticketId }, include: ticketInclude });
+    });
+
+    void this.auditLogs.log({
+      entity_type: 'SUPPORT_TICKET',
+      entity_id: ticketId,
+      action: TicketEventType.MOVED,
+      field: 'routed_queue_id',
+      old_value: fromLabel,
+      new_value: toLabel,
+      changed_by: staff.username,
+      student_id: ticket.student_id,
+      note: `${this.ticketContextLabel(updated)} — ${note}`,
+    });
+
+    await this.chatGateway.broadcastTicketMoved(updated, {
+      routed_queue_id: ticket.routed_queue_id,
+      routed_role: ticket.routed_role,
+      current_assignee_id: ticket.current_assignee_id,
+    });
+    await this.notifyStaffTicketMoved(updated, staff, toLabel, reason);
+    // Moving a ticket off your own desk can take it out of your sight; clients
+    // close the thread instead of reloading into "Access denied".
+    const viewerCanView = await this.assertCanViewTicket(updated, staff).then(
+      () => true,
+      () => false,
+    );
+    return { ...updated, viewer_can_view: viewerCanView };
+  }
+
+  /** Tell the new holder, or the whole new desk when nobody holds it yet. */
+  private async notifyStaffTicketMoved(
+    ticket: {
+      id: string;
+      current_assignee_id: string | null;
+      routed_queue_id: number | null;
+      subtopic?: string | null;
+      families?: { household_name?: string | null } | null;
+      students?: { full_name?: string | null } | null;
+    },
+    mover: IJwtStaffPayload,
+    toLabel: string,
+    reason: string,
+  ) {
+    const recipients = new Set<string>();
+    if (ticket.current_assignee_id) recipients.add(ticket.current_assignee_id);
+    else if (ticket.routed_queue_id != null) {
+      for (const m of await this.routing.activeMembers(ticket.routed_queue_id)) recipients.add(m.id);
+    }
+    recipients.delete(mover.sub);
+    if (recipients.size === 0) return;
+    const requester = ticket.students?.full_name?.trim() || ticket.families?.household_name?.trim() || null;
+    const body = [requester, ticket.subtopic?.trim(), reason.slice(0, 80)].filter(Boolean).join(' · ');
+    await this.fcmService.sendToUsers(
+      [...recipients],
+      ticket.current_assignee_id ? 'Support ticket moved to you' : `Support ticket moved to ${toLabel}`,
+      body || 'A support ticket was moved to you',
+      { type: 'SUPPORT_TICKET_MOVED', ticketId: ticket.id },
+    );
   }
 
   async createStaffMessage(

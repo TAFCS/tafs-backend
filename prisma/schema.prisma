@@ -2910,6 +2910,8 @@ enum TicketEventType {
   REPLY_REJECTED
   CLOSED_BY_STAFF
   CLOSED_BY_PARENT
+  /// TAFSD-448: sent to another lane, topic or desk by staff.
+  MOVED
 }
 
 enum fee_frequency {

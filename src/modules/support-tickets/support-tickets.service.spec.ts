@@ -800,4 +800,226 @@ describe('SupportTicketsService leak-proofing', () => {
       });
     });
   });
+
+  describe('moveTicket (TAFSD-448)', () => {
+    const mockFlow = { originForLeaf: jest.fn(), moveTopics: jest.fn(), defaultLaneId: jest.fn() };
+    const routing = {
+      resolve: jest.fn(),
+      queueIdsFor: jest.fn(),
+      activeMembers: jest.fn().mockResolvedValue([]),
+      deskOptions: jest.fn(),
+    };
+    const gateway = { ...mockGateway, broadcastTicketMoved: jest.fn() };
+    let mover: SupportTicketsService;
+
+    const academics = {
+      id: 't1',
+      family_id: 9,
+      status: TicketStatus.ASSIGNED,
+      category: TicketCategory.GENERAL,
+      subtopic: 'Academics / Classwork',
+      student_id: 77,
+      students: { campus_id: 1, class_id: 15, section_id: 3, full_name: 'Ali', classes: { segment_id: 6 } },
+      families: { household_name: 'Khan', students: [] },
+      current_assignee_id: 'principal',
+      current_assignee: { full_name: 'Principal P' },
+      routed_queue_id: 2,
+      routed_queue: { id: 2, name: 'General desk' },
+      routed_role: 'GENERAL_RESPONDENT',
+      lane_id: 1,
+      lane: { name: 'General' },
+      flow_version: 3,
+      leaf_node_key: 'gc-academics-classwork',
+      flow_path: [{ key: 'general', type: 'LANE', label: 'General' }],
+      created_at: new Date('2026-11-01'),
+    };
+    const refundOrigin = {
+      category: TicketCategory.FINANCIAL,
+      subtopic: 'Refund Request',
+      lane_id: 2,
+      flow_version: 3,
+      leaf_node_key: 'f-refund-request',
+      flow_path: [{ key: 'fees', type: 'LANE', label: 'Fees & Payments' }],
+      path_keys: ['fees', 'fees-child', 'f-refund-request'],
+      leaf_queue_id: null,
+      lane_fallback_queue_id: null,
+      min_length: 20,
+    };
+    const principal = { sub: 'principal', username: 'p', role: 'PRINCIPAL', userType: 'STAFF' } as any;
+    const admin = { sub: 'admin', username: 'sa', role: 'SUPER_ADMIN', userType: 'STAFF' } as any;
+    const outsider = { sub: 'other', username: 'o', role: 'GENERAL_RESPONDENT', userType: 'STAFF' } as any;
+
+    beforeEach(() => {
+      routing.queueIdsFor.mockResolvedValue([2]);
+      routing.activeMembers.mockResolvedValue([{ id: 'clerk' }]);
+      prisma.support_tickets.findUnique.mockResolvedValue(academics);
+      prisma.support_tickets.updateMany.mockResolvedValue({ count: 1 });
+      prisma.support_tickets.findUniqueOrThrow.mockResolvedValue({ ...academics, current_assignee_id: null, routed_queue_id: 5 });
+      (prisma.ticket_queues.findUnique as jest.Mock).mockResolvedValue({ name: 'Finance' });
+      (prisma as any).users.findUnique = jest.fn().mockResolvedValue(null);
+      mover = new SupportTicketsService(
+        prisma as any,
+        mockFcm as any,
+        gateway as any,
+        mockAuditLogs as any,
+        mockScope as any,
+        routing as any,
+        mockFlow as any,
+      );
+    });
+
+    it('moves a General / Academics ticket to Fees / Refund and lands it with Finance', async () => {
+      mockFlow.originForLeaf.mockResolvedValue(refundOrigin);
+      routing.resolve.mockResolvedValue({
+        routedRole: 'FINANCE_CLERK', assigneeId: null, status: TicketStatus.OPEN, queueId: 5, ruleId: null, note: null,
+      });
+      routing.deskOptions.mockResolvedValue([{ id: 5, in_scope: true, members: [] }]);
+
+      await mover.moveTicket('t1', { leafKey: 'f-refund-request', reason: 'This is about a refund' }, principal);
+
+      expect(mockFlow.originForLeaf).toHaveBeenCalledWith(9, 'f-refund-request', { campus_id: 1, class_id: 15, segment_id: 6 });
+      const update = prisma.support_tickets.updateMany.mock.calls[0][0];
+      expect(update.where).toMatchObject({ id: 't1', routed_queue_id: 2, current_assignee_id: 'principal' });
+      expect(update.data).toMatchObject({
+        category: TicketCategory.FINANCIAL,
+        subtopic: 'Refund Request',
+        routed_role: 'FINANCE_CLERK',
+        routed_queue_id: 5,
+        lane_id: 2,
+        leaf_node_key: 'f-refund-request',
+        current_assignee_id: null,
+        status: TicketStatus.OPEN,
+      });
+      const event = prisma.ticket_events.create.mock.calls[0][0].data;
+      expect(event).toMatchObject({ event_type: 'MOVED', actor_user_id: 'principal', from_user_id: 'principal', to_user_id: null });
+      expect(event.note).toBe('From General desk to Finance as "Refund Request". Reason: This is about a refund');
+      expect(gateway.broadcastTicketMoved).toHaveBeenCalledWith(expect.anything(), {
+        routed_queue_id: 2, routed_role: 'GENERAL_RESPONDENT', current_assignee_id: 'principal',
+      });
+      // The new desk hears about it (it is unclaimed there).
+      expect(mockFcm.sendToUsers).toHaveBeenCalledWith(['clerk'], 'Support ticket moved to Finance', expect.any(String), expect.objectContaining({ type: 'SUPPORT_TICKET_MOVED' }));
+    });
+
+    it('tells the mover when the ticket has left their sight', async () => {
+      routing.deskOptions.mockResolvedValue([{
+        id: 5, name: 'Finance', category: TicketCategory.FINANCIAL, assignment: 'POOL', in_scope: true, members: [],
+      }]);
+      mockFlow.defaultLaneId.mockResolvedValue(2);
+      // Principal sits on desk 2 only; the ticket is now on desk 5, unassigned.
+      const res = await mover.moveTicket('t1', { queueId: 5, reason: 'fees question' }, principal);
+      expect(res.viewer_can_view).toBe(false);
+      const adminRes = await mover.moveTicket('t1', { queueId: 5, reason: 'fees question' }, admin);
+      expect(adminRes.viewer_can_view).toBe(true);
+    });
+
+    it('requires a reason and exactly one destination', async () => {
+      await expect(mover.moveTicket('t1', { leafKey: 'x', reason: ' ' }, principal)).rejects.toThrow('reason');
+      await expect(mover.moveTicket('t1', { reason: 'wrong desk' }, principal)).rejects.toThrow('topic or a desk');
+      await expect(mover.moveTicket('t1', { leafKey: 'x', queueId: 5, reason: 'wrong desk' }, principal)).rejects.toThrow('topic or a desk');
+    });
+
+    it('refuses staff who neither hold the ticket nor sit on its desk', async () => {
+      routing.queueIdsFor.mockResolvedValue([]);
+      await expect(mover.moveTicket('t1', { queueId: 5, reason: 'wrong desk' }, outsider)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.support_tickets.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses a closed ticket', async () => {
+      prisma.support_tickets.findUnique.mockResolvedValue({ ...academics, status: TicketStatus.CLOSED });
+      await expect(mover.moveTicket('t1', { queueId: 5, reason: 'wrong desk' }, admin)).rejects.toThrow('closed');
+    });
+
+    describe('scope', () => {
+      const blindDesk = {
+        id: 5, name: 'Finance', category: TicketCategory.FINANCIAL, assignment: 'POOL', in_scope: false,
+        members: [{ id: 'clerk', full_name: 'Clerk', in_scope: false }],
+      };
+
+      it('refuses a desk nobody there can see the student at, for non-admins', async () => {
+        routing.deskOptions.mockResolvedValue([blindDesk]);
+        await expect(mover.moveTicket('t1', { queueId: 5, reason: 'wrong desk' }, principal)).rejects.toBeInstanceOf(ForbiddenException);
+      });
+
+      it('asks a super admin to confirm the override, then records it in the thread', async () => {
+        routing.deskOptions.mockResolvedValue([blindDesk]);
+        mockFlow.defaultLaneId.mockResolvedValue(2);
+        await expect(mover.moveTicket('t1', { queueId: 5, reason: 'wrong desk' }, admin)).rejects.toThrow(/Confirm/);
+        expect(prisma.support_tickets.updateMany).not.toHaveBeenCalled();
+
+        await mover.moveTicket('t1', { queueId: 5, reason: 'wrong desk', overrideScope: true }, admin);
+        const event = prisma.ticket_events.create.mock.calls[0][0].data;
+        expect(event.note).toContain('super admin override');
+      });
+
+      it('places no limit on a ticket with no student', async () => {
+        prisma.support_tickets.findUnique.mockResolvedValue({ ...academics, student_id: null, students: null });
+        routing.deskOptions.mockResolvedValue([{ ...blindDesk, in_scope: true, members: [{ ...blindDesk.members[0], in_scope: true }] }]);
+        mockFlow.defaultLaneId.mockResolvedValue(2);
+        await mover.moveTicket('t1', { queueId: 5, reason: 'wrong desk' }, principal);
+        expect(routing.deskOptions).toHaveBeenCalledWith(null, 5);
+      });
+    });
+
+    it('a desk in another category switches lane and clears the topic', async () => {
+      routing.deskOptions.mockResolvedValue([{
+        id: 5, name: 'Finance', category: TicketCategory.FINANCIAL, assignment: 'POOL', in_scope: true,
+        members: [{ id: 'clerk', full_name: 'Clerk', in_scope: true }],
+      }]);
+      mockFlow.defaultLaneId.mockResolvedValue(2);
+      (prisma as any).users.findUnique.mockResolvedValue({ full_name: 'Clerk', username: 'clerk' });
+      await mover.moveTicket('t1', { queueId: 5, targetUserId: 'clerk', reason: 'wrong desk' }, principal);
+      const data = prisma.support_tickets.updateMany.mock.calls[0][0].data;
+      expect(data).toMatchObject({
+        category: TicketCategory.FINANCIAL,
+        routed_role: 'FINANCE_CLERK',
+        lane_id: 2,
+        leaf_node_key: null,
+        routed_queue_id: 5,
+        current_assignee_id: 'clerk',
+        status: TicketStatus.ASSIGNED,
+      });
+      expect(prisma.ticket_events.create.mock.calls[0][0].data.note).toBe('From General desk to Finance (Clerk). Reason: wrong desk');
+    });
+
+    it('a desk in the same category keeps the lane and topic', async () => {
+      routing.deskOptions.mockResolvedValue([{
+        id: 7, name: 'Senior section', category: TicketCategory.GENERAL, assignment: 'POOL', in_scope: true,
+        members: [{ id: 'hos', full_name: 'HoS', in_scope: true }],
+      }]);
+      await mover.moveTicket('t1', { queueId: 7, reason: 'their section' }, principal);
+      const data = prisma.support_tickets.updateMany.mock.calls[0][0].data;
+      expect(data).toMatchObject({ lane_id: 1, leaf_node_key: 'gc-academics-classwork', routed_queue_id: 7, current_assignee_id: null });
+      expect(mockFlow.defaultLaneId).not.toHaveBeenCalled();
+    });
+
+    it('fails cleanly when the ticket changed underneath', async () => {
+      routing.deskOptions.mockResolvedValue([{
+        id: 7, name: 'Senior section', category: TicketCategory.GENERAL, assignment: 'POOL', in_scope: true, members: [],
+      }]);
+      prisma.support_tickets.updateMany.mockResolvedValue({ count: 0 });
+      await expect(mover.moveTicket('t1', { queueId: 7, reason: 'their section' }, principal)).rejects.toThrow(/changed/);
+      expect(prisma.ticket_events.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a move to where the ticket already is', async () => {
+      routing.deskOptions.mockResolvedValue([{
+        id: 2, name: 'General desk', category: TicketCategory.GENERAL, assignment: 'POOL', in_scope: true,
+        members: [{ id: 'principal', full_name: 'Principal P', in_scope: true }],
+      }]);
+      await expect(mover.moveTicket('t1', { queueId: 2, targetUserId: 'principal', reason: 'same' }, principal)).rejects.toThrow('already');
+    });
+
+    it('lists only in-scope desks and people for non-admins', async () => {
+      mockFlow.moveTopics.mockResolvedValue({ version: 3, lanes: [] });
+      routing.deskOptions.mockResolvedValue([
+        { id: 5, in_scope: false, members: [{ id: 'a', in_scope: false }] },
+        { id: 7, in_scope: true, members: [{ id: 'b', in_scope: true }, { id: 'c', in_scope: false }] },
+      ]);
+      const res = await mover.listMoveOptions('t1', principal);
+      expect(res.desks).toEqual([{ id: 7, in_scope: true, members: [{ id: 'b', in_scope: true }] }]);
+      expect(res.can_override_scope).toBe(false);
+      const adminRes = await mover.listMoveOptions('t1', admin);
+      expect(adminRes.desks).toHaveLength(2);
+    });
+  });
 });
