@@ -427,9 +427,8 @@ export class CalendarService {
 
     for (const campus of campuses) {
       try {
-        const day = await this.create({ ...template, campus_id: campus.id }, createdBy, changedBy);
+        const day = await this.create({ ...template, campus_id: campus.id }, createdBy, changedBy, { skipSync: true });
         result.created++;
-        if (day.sync_warning) result.sync_failed++;
         const nr = day.notification_report as CalendarNotificationReport | null | undefined;
         if (nr) {
           aggregatedNotify.attempted += nr.attempted;
@@ -452,9 +451,22 @@ export class CalendarService {
       }
     }
 
+    // Attendance re-sync rescans the campus rosters — kick it off in the
+    // background so the bulk save HTTP response returns immediately.
+    for (const campus of campuses) {
+      void this.holidaySync
+        .syncAfterCalendarChange(campus.id, dto.date)
+        .catch((err) =>
+          console.error(
+            `[Calendar] Bulk background attendance sync failed for campus ${campus.id} on ${dto.date}:`,
+            (err as Error)?.message,
+          ),
+        );
+    }
+
     if (result.created === 0 && result.failed > 0) {
       throw new BadRequestException(
-        `Failed to create calendar entry on all campuses (${result.failed} failed, ${result.skipped} skipped).`,
+        `Failed to create calendar entry on all campuses (${result.failed} failed${result.skipped > 0 ? `, ${result.skipped} already exist` : ''}).`,
       );
     }
 

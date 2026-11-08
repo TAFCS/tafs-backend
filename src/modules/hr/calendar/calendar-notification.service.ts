@@ -121,6 +121,27 @@ export class CalendarNotificationService {
     return 'created';
   }
 
+  private async dispatchFcmBatches(
+    payloads: Array<{ familyId: number; studentCc: number; title: string; body: string }>,
+    date: Date,
+    alertType: string,
+  ) {
+    const BATCH_SIZE = 25;
+    for (let i = 0; i < payloads.length; i += BATCH_SIZE) {
+      const batch = payloads.slice(i, i + BATCH_SIZE);
+      await Promise.allSettled(
+        batch.map((p) =>
+          this.fcmService.sendToFamily(p.familyId, p.title, p.body, {
+            type: 'calendar_alert',
+            student_cc: String(p.studentCc),
+            date: date.toISOString(),
+            alert_type: alertType,
+          }),
+        ),
+      );
+    }
+  }
+
   private matchesStudentScope(row: any, classId: number | null, sectionId: number | null): boolean {
     if (row.section_id != null) {
       return row.class_id === classId && row.section_id === sectionId;
@@ -163,39 +184,116 @@ export class CalendarNotificationService {
     const rawDesc = calendarRow.description || 'Holiday';
     const cleanDesc = rawDesc.startsWith('[PINNED] ') ? rawDesc.replace('[PINNED] ', '') : rawDesc;
 
-    for (const student of students) {
-      if (!this.matchesStudentScope(calendarRow, student.class_id, student.section_id)) {
-        continue;
-      }
-      if (!student.family_id) {
+    const scopedStudents = students.filter((s) => this.matchesStudentScope(calendarRow, s.class_id, s.section_id));
+    for (const s of scopedStudents) {
+      if (!s.family_id) {
         report.skipped_no_family++;
-        continue;
       }
+    }
 
-      report.attempted++;
+    const eligible = scopedStudents.filter((s) => s.family_id != null);
+    report.attempted = eligible.length;
+    if (eligible.length === 0) return report;
+
+    // Single query to identify who was already notified on this date/alert_type
+    const eligibleFamilyIds = [...new Set(eligible.map((s) => s.family_id!))];
+    const eligibleCcs = eligible.map((s) => s.cc);
+
+    const existingRows = await this.prisma.calendar_notifications.findMany({
+      where: {
+        family_id: { in: eligibleFamilyIds },
+        student_cc: { in: eligibleCcs },
+        date: calendarRow.date,
+        alert_type: alertType,
+      },
+      select: { family_id: true, student_cc: true },
+    });
+    const existingSet = new Set(existingRows.map((r) => `${r.family_id}:${r.student_cc}`));
+
+    const toNotify: typeof eligible = [];
+    for (const s of eligible) {
+      if (existingSet.has(`${s.family_id}:${s.cc}`)) {
+        report.already_notified++;
+      } else {
+        toNotify.push(s);
+      }
+    }
+
+    if (toNotify.length === 0) return report;
+
+    const toInsert: Array<{
+      family_id: number;
+      student_cc: number;
+      date: Date;
+      alert_type: string;
+      title: string;
+      body: string;
+    }> = [];
+
+    const fcmPayloads: Array<{
+      familyId: number;
+      studentCc: number;
+      title: string;
+      body: string;
+    }> = [];
+
+    for (const student of toNotify) {
       try {
         const vars = buildVars(student, formattedDate, cleanDesc);
         const title = await resolveTemplate(this.prisma, titleKey, titleFallback, vars);
         const body = await resolveTemplate(this.prisma, bodyKey, bodyFallback, vars);
-        const outcome = await this.notifyStudentDay(
-          student.family_id,
-          student.cc,
-          calendarRow.date,
-          alertType,
+        toInsert.push({
+          family_id: student.family_id!,
+          student_cc: student.cc,
+          date: calendarRow.date,
+          alert_type: alertType,
           title,
           body,
-        );
-        if (outcome === 'already_notified') report.already_notified++;
-        else report.notified++;
+        });
+        fcmPayloads.push({
+          familyId: student.family_id!,
+          studentCc: student.cc,
+          title,
+          body,
+        });
       } catch (err: any) {
         report.failed++;
         report.failures.push({
           student_cc: student.cc,
-          family_id: student.family_id,
+          family_id: student.family_id!,
           student_name: student.full_name,
-          reason: err?.message || 'Notification failed',
+          reason: err?.message || 'Failed to prepare notification',
         });
       }
+    }
+
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
+      const chunk = toInsert.slice(i, i + CHUNK_SIZE);
+      try {
+        const inserted = await this.prisma.calendar_notifications.createMany({
+          data: chunk,
+          skipDuplicates: true,
+        });
+        report.notified += inserted.count;
+        report.already_notified += chunk.length - inserted.count;
+      } catch (err: any) {
+        report.failed += chunk.length;
+        for (const item of chunk) {
+          report.failures.push({
+            student_cc: item.student_cc,
+            family_id: item.family_id,
+            reason: err?.message || 'Database insert failed',
+          });
+        }
+      }
+    }
+
+    // Fire-and-forget push notification delivery without blocking HTTP thread
+    if (fcmPayloads.length > 0) {
+      void this.dispatchFcmBatches(fcmPayloads, calendarRow.date, alertType).catch((err) =>
+        console.error('[CalendarNotify] Background FCM dispatch error:', err?.message),
+      );
     }
 
     return report;
@@ -233,25 +331,34 @@ export class CalendarNotificationService {
       },
     });
 
+    const rows = await this.calendarResolver.loadStudentCalendarRowsForDate(campusId, date);
+    const clearStudentCcs: number[] = [];
+
     for (const student of students) {
       if (!student.family_id) continue;
 
-      const resolved = await this.calendarResolver.resolveStudentDay(
-        campusId,
+      const resolved = this.calendarResolver.resolveStudentDayFromRows(
+        rows,
         student.class_id,
         student.section_id,
         date,
       );
-      if (!resolved.isWorkingDay) continue;
+      if (resolved.isWorkingDay) {
+        clearStudentCcs.push(student.cc);
+      }
+    }
 
-      await this.prisma.calendar_notifications.deleteMany({
-        where: {
-          family_id: student.family_id,
-          student_cc: student.cc,
-          date,
-          alert_type: { in: ['HOLIDAY', 'DAY_OFF'] },
-        },
-      });
+    if (clearStudentCcs.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < clearStudentCcs.length; i += CHUNK) {
+        await this.prisma.calendar_notifications.deleteMany({
+          where: {
+            student_cc: { in: clearStudentCcs.slice(i, i + CHUNK) },
+            date,
+            alert_type: { in: ['HOLIDAY', 'DAY_OFF'] },
+          },
+        });
+      }
     }
   }
 
@@ -271,58 +378,134 @@ export class CalendarNotificationService {
       },
     });
 
+    const rows = await this.calendarResolver.loadStudentCalendarRowsForDate(campusId, date);
     const formattedDate = formatDatePKT(date);
+    const holidayDisabled = await isTemplateDisabled(this.prisma, 'notif_holiday_title');
+    const weekendDisabled = await isTemplateDisabled(this.prisma, 'notif_day_off_title');
+
+    const eligibleStudents: Array<{
+      student: typeof students[0];
+      alertType: 'HOLIDAY' | 'DAY_OFF';
+      resolvedDesc: string;
+    }> = [];
 
     for (const student of students) {
       if (!student.family_id) continue;
+      const resolved = this.calendarResolver.resolveStudentDayFromRows(
+        rows,
+        student.class_id,
+        student.section_id,
+        date,
+      );
+      if (resolved.isWorkingDay) continue;
+
+      if (resolved.dayType === 'HOLIDAY' && !holidayDisabled) {
+        const rawResolvedDesc = resolved.description || 'Holiday';
+        const cleanResolvedDesc = rawResolvedDesc.startsWith('[PINNED] ') ? rawResolvedDesc.replace('[PINNED] ', '') : rawResolvedDesc;
+        eligibleStudents.push({
+          student,
+          alertType: 'HOLIDAY',
+          resolvedDesc: cleanResolvedDesc,
+        });
+      } else if (resolved.dayType === 'WEEKEND' && !weekendDisabled) {
+        eligibleStudents.push({
+          student,
+          alertType: 'DAY_OFF',
+          resolvedDesc: 'Scheduled Day Off',
+        });
+      }
+    }
+
+    if (eligibleStudents.length === 0) return;
+
+    // Check existing notifications in one batch query
+    const familyIds = [...new Set(eligibleStudents.map((e) => e.student.family_id!))];
+    const studentCcs = eligibleStudents.map((e) => e.student.cc);
+    const existing = await this.prisma.calendar_notifications.findMany({
+      where: {
+        family_id: { in: familyIds },
+        student_cc: { in: studentCcs },
+        date,
+        alert_type: { in: ['HOLIDAY', 'DAY_OFF'] },
+      },
+      select: { family_id: true, student_cc: true, alert_type: true },
+    });
+    const existingSet = new Set(existing.map((e) => `${e.family_id}:${e.student_cc}:${e.alert_type}`));
+
+    const toInsert: Array<{
+      family_id: number;
+      student_cc: number;
+      date: Date;
+      alert_type: string;
+      title: string;
+      body: string;
+    }> = [];
+    const fcmPayloads: Array<{
+      familyId: number;
+      studentCc: number;
+      alertType: string;
+      title: string;
+      body: string;
+    }> = [];
+
+    for (const item of eligibleStudents) {
+      const { student, alertType, resolvedDesc } = item;
+      const key = `${student.family_id}:${student.cc}:${alertType}`;
+      if (existingSet.has(key)) continue;
 
       try {
-        const resolved = await this.calendarResolver.resolveStudentDay(
-          campusId,
-          student.class_id,
-          student.section_id,
-          date,
-        );
-
-        if (resolved.isWorkingDay) continue;
-
-        if (resolved.dayType === 'HOLIDAY') {
-          if (await isTemplateDisabled(this.prisma, 'notif_holiday_title')) continue;
-          const rawResolvedDesc = resolved.description || 'Holiday';
-          const cleanResolvedDesc = rawResolvedDesc.startsWith('[PINNED] ') ? rawResolvedDesc.replace('[PINNED] ', '') : rawResolvedDesc;
-          const vars = { student_name: student.full_name, date: formattedDate, description: cleanResolvedDesc };
-          const hTitle = await resolveTemplate(this.prisma, 'notif_holiday_title', 'School Closed', vars);
-          const hBody = await resolveTemplate(this.prisma, 'notif_holiday_body',
-            '{student_name} — TAFS is closed on {date} for {description}.', vars);
-          await this.notifyStudentDay(
-            student.family_id,
-            student.cc,
-            date,
-            'HOLIDAY',
-            hTitle,
-            hBody,
-          );
-        } else if (resolved.dayType === 'WEEKEND') {
-          if (await isTemplateDisabled(this.prisma, 'notif_day_off_title')) continue;
-          const vars = { student_name: student.full_name, date: formattedDate };
-          const doTitle = await resolveTemplate(this.prisma, 'notif_day_off_title', 'Scheduled Day Off', vars);
-          const doBody = await resolveTemplate(this.prisma, 'notif_day_off_body',
-            '{student_name} — TAFS is closed on {date} (weekend).', vars);
-          await this.notifyStudentDay(
-            student.family_id,
-            student.cc,
-            date,
-            'DAY_OFF',
-            doTitle,
-            doBody,
-          );
+        let title = '';
+        let body = '';
+        if (alertType === 'HOLIDAY') {
+          const vars = { student_name: student.full_name || 'Student', date: formattedDate, description: resolvedDesc };
+          title = await resolveTemplate(this.prisma, 'notif_holiday_title', 'School Closed', vars);
+          body = await resolveTemplate(this.prisma, 'notif_holiday_body', '{student_name} — TAFS is closed on {date} for {description}.', vars);
+        } else {
+          const vars = { student_name: student.full_name || 'Student', date: formattedDate };
+          title = await resolveTemplate(this.prisma, 'notif_day_off_title', 'Scheduled Day Off', vars);
+          body = await resolveTemplate(this.prisma, 'notif_day_off_body', '{student_name} — TAFS is closed on {date} (weekend).', vars);
         }
+        toInsert.push({
+          family_id: student.family_id!,
+          student_cc: student.cc,
+          date,
+          alert_type: alertType,
+          title,
+          body,
+        });
+        fcmPayloads.push({
+          familyId: student.family_id!,
+          studentCc: student.cc,
+          alertType,
+          title,
+          body,
+        });
       } catch (err: any) {
-        console.error(
-          `[CalendarNotify] Day-off notify failed for student CC ${student.cc}:`,
-          err?.message,
-        );
+        console.error(`[CalendarNotify] Day-off notify prepare failed for student CC ${student.cc}:`, err?.message);
       }
+    }
+
+    if (toInsert.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < toInsert.length; i += CHUNK) {
+        await this.prisma.calendar_notifications.createMany({
+          data: toInsert.slice(i, i + CHUNK),
+          skipDuplicates: true,
+        });
+      }
+    }
+
+    if (fcmPayloads.length > 0) {
+      void this.dispatchFcmBatches(
+        fcmPayloads.map((p) => ({
+          familyId: p.familyId,
+          studentCc: p.studentCc,
+          title: p.title,
+          body: p.body,
+        })),
+        date,
+        fcmPayloads[0].alertType,
+      ).catch((err) => console.error('[CalendarNotify] Background FCM dispatch failed:', err?.message));
     }
   }
 
