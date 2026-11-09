@@ -71,9 +71,13 @@ export class NoticeBoardController {
   @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Chat'))
   @RequireAction('communication.notice_board#view')
-  @ApiOperation({ summary: 'Admin: list all posts' })
-  adminList(@Query('cursor') cursor: string | undefined, @CurrentUser() user: any) {
-    return this.service.getAllPosts(cursor ? parseInt(cursor) : undefined, user);
+  @ApiOperation({ summary: 'Admin: list all posts, optionally searched by text, poster, C.C., GR, student, family or class (q)' })
+  adminList(
+    @Query('cursor') cursor: string | undefined,
+    @Query('q') q: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.getAllPosts(cursor ? parseInt(cursor) : undefined, user, q);
   }
 
   @Post('admin/notice-board')
