@@ -34,6 +34,7 @@ import { EmployeeLoansService } from '../employee-loans/employee-loans.service';
 import { ScopeService } from '../../../common/scope/scope.service';
 import { ZK_DEVICES } from '../../attendance/zk-device-health.util';
 import { effectiveManualStatus, isLateCheckIn } from '../../attendance/manual-late.util';
+import { manualBreakMinutes, manualDaySegments, parseManualBreaks } from '../../attendance/manual-breaks.util';
 import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
@@ -400,12 +401,16 @@ export class PayrollService {
     leavingTime: Date | null,
     record: AttendanceStaffDailyRow | null,
   ) {
-    const segments: { type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF'; start: string; end: string; isMissingOut?: boolean }[] = [];
+    const segments: {
+      type: 'WORK' | 'BREAK' | 'OVERTIME' | 'DAY_OFF';
+      start: string;
+      end: string;
+      isMissingOut?: boolean;
+      reason?: string | null;
+    }[] = [];
 
     if (record?.source === AttendanceSource.MANUAL && record.check_in_at) {
-      const start = record.check_in_at.toISOString();
-      const end = record.check_out_at ? record.check_out_at.toISOString() : start;
-      segments.push({ type: 'WORK', start, end });
+      segments.push(...manualDaySegments(record.check_in_at, record.check_out_at, parseManualBreaks(record.manual_breaks)));
       return segments;
     }
 
@@ -598,7 +603,12 @@ export class PayrollService {
       );
       const record = recordByDate.get(key);
       const dayScans = scansByDate.get(key) ?? [];
-      const breakMinutes = Math.round(this.sumBreakMinutes(dayScans));
+      // TAFSD-484: breaks entered on an override replace the punch-derived ones.
+      const overrideBreaks =
+        record?.source === AttendanceSource.MANUAL ? parseManualBreaks(record.manual_breaks) : null;
+      const breakMinutes = overrideBreaks
+        ? manualBreakMinutes(overrideBreaks)
+        : Math.round(this.sumBreakMinutes(dayScans));
       const dowDefault = (await expectedFor(d)) ?? {
         expectedCheckIn: employee.reporting_time,
         expectedCheckOut: employee.leaving_time,

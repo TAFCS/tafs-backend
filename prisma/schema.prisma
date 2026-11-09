@@ -2176,6 +2176,9 @@ model attendance_staff_daily {
   expected_check_out_snapshot     DateTime?             @db.Timestamp(6)
   expected_grace_minutes_snapshot Int?
   expected_time_source_snapshot   ExpectedTimeSource?
+  /// TAFSD-484: breaks entered on a manual override, [{start, end, reason}].
+  /// null = none entered, so punch-derived breaks apply.
+  manual_breaks                   Json?
   campuses                        campuses              @relation(fields: [campus_id], references: [id], onDelete: NoAction)
   employee_profiles               employee_profiles     @relation(fields: [employee_id], references: [id], onDelete: Cascade)
 
