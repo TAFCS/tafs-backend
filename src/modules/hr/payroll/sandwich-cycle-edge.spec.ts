@@ -23,36 +23,78 @@ const isWeekday = (d: Date) => d.getUTCDay() >= 1 && d.getUTCDay() <= 5;
 function build() {
   const svc = Object.create(PayrollService.prototype) as any;
   svc.expectedTimes = {
-    resolveExpectedTimes: jest.fn(async () => ({ expectedCheckIn: T('08:00'), expectedCheckOut: T('16:00'), graceMinutes: 0 })),
+    resolveExpectedTimes: jest.fn(async () => ({
+      expectedCheckIn: T('08:00'),
+      expectedCheckOut: T('16:00'),
+      graceMinutes: 0,
+    })),
   };
   svc.calendarResolver = {
     resolveStaffDayFromRows: (_rows: unknown, d: Date) =>
       isWeekday(d)
-        ? { isWorkingDay: true, dayType: null, description: null, source: 'SCHEDULE' }
-        : { isWorkingDay: false, dayType: 'WEEKEND', description: 'Weekend', source: 'SCHEDULE' },
+        ? {
+            isWorkingDay: true,
+            dayType: null,
+            description: null,
+            source: 'SCHEDULE',
+          }
+        : {
+            isWorkingDay: false,
+            dayType: 'WEEKEND',
+            description: 'Weekend',
+            source: 'SCHEDULE',
+          },
   };
   svc.payrollRules = { findEffective: jest.fn(async () => null) };
   return svc;
 }
 
 const employee = {
-  id: 9, monthly_pay: new Prisma.Decimal(30000), reporting_time: null, leaving_time: null, late_relaxation_minutes: null,
-  department_id: 1, staff_category_id: 1, staff_categories: { code: 'T' }, days_per_week: 5, employee_work_schedules: [],
-  check_in_source: 'FIXED', join_date: D('2020-01-01'), date_of_leaving: null,
+  id: 9,
+  monthly_pay: new Prisma.Decimal(30000),
+  reporting_time: null,
+  leaving_time: null,
+  late_relaxation_minutes: null,
+  department_id: 1,
+  staff_category_id: 1,
+  staff_categories: { code: 'T' },
+  days_per_week: 5,
+  employee_work_schedules: [],
+  check_in_source: 'FIXED',
+  join_date: D('2020-01-01'),
+  date_of_leaving: null,
 };
-const scan = (iso: string, hhmm: string) => ({ employee_id: 9, attendance_date: D(iso), scan_time: at(iso, hhmm), device_sn: 'X' });
+const scan = (iso: string, hhmm: string) => ({
+  employee_id: 9,
+  attendance_date: D(iso),
+  scan_time: at(iso, hhmm),
+  device_sn: 'X',
+});
 const worked = (iso: string) => [scan(iso, '08:00'), scan(iso, '16:00')];
 
 // The OCT 2026 cycle: Sat 26 Sep – Sun 25 Oct. It opens and closes on a weekend.
 const START = D('2026-09-26');
 const END = D('2026-10-25');
 
-async function flagsFor(scans: ReturnType<typeof scan>[], emp: object = employee) {
+async function flagsFor(
+  scans: ReturnType<typeof scan>[],
+  emp: object = employee,
+) {
   const svc = build();
-  const line = await svc.computeEmployeeLine(emp, 1, START, END, [], [], scans, true);
+  const line = await svc.computeEmployeeLine(
+    emp,
+    1,
+    START,
+    END,
+    [],
+    [],
+    scans,
+    true,
+  );
   return { line, flags: svc.detectFlagsForLine(line) as { dates: string[] }[] };
 }
-const flagged = (flags: { dates: string[] }[]) => flags.flatMap((f) => f.dates).sort();
+const flagged = (flags: { dates: string[] }[]) =>
+  flags.flatMap((f) => f.dates).sort();
 
 describe('sandwich rule at the cycle edges', () => {
   beforeEach(() => {
@@ -62,7 +104,14 @@ describe('sandwich rule at the cycle edges', () => {
   it('absent all cycle, and on the Friday before and the Monday after: every weekend is sandwiched', async () => {
     const { flags } = await flagsFor([]);
     const dates = flagged(flags);
-    expect(dates).toEqual(expect.arrayContaining(['2026-09-26', '2026-09-27', '2026-10-24', '2026-10-25']));
+    expect(dates).toEqual(
+      expect.arrayContaining([
+        '2026-09-26',
+        '2026-09-27',
+        '2026-10-24',
+        '2026-10-25',
+      ]),
+    );
     // 5 weekends × 2 days, all of them.
     expect(dates).toHaveLength(10);
   });
@@ -71,7 +120,10 @@ describe('sandwich rule at the cycle edges', () => {
     const { flags, line } = await flagsFor(worked('2026-09-25'));
     expect(flagged(flags)).not.toContain('2026-09-26');
     expect(flagged(flags)).toContain('2026-10-25');
-    expect(line.daily_breakdown[0].prev_working_day).toMatchObject({ date: '2026-09-25', classification: 'PRESENT' });
+    expect(line.daily_breakdown[0].prev_working_day).toMatchObject({
+      date: '2026-09-25',
+      classification: 'PRESENT',
+    });
     // A punch outside the cycle doesn't count as a punch in it.
     expect(line.has_punches).toBe(false);
   });
@@ -80,7 +132,10 @@ describe('sandwich rule at the cycle edges', () => {
     const { flags, line } = await flagsFor(worked('2026-10-26'));
     expect(flagged(flags)).toContain('2026-09-26');
     expect(flagged(flags)).not.toContain('2026-10-25');
-    expect(line.daily_breakdown.at(-1).next_working_day).toMatchObject({ date: '2026-10-26', classification: 'PRESENT' });
+    expect(line.daily_breakdown.at(-1).next_working_day).toMatchObject({
+      date: '2026-10-26',
+      classification: 'PRESENT',
+    });
   });
 
   it("doesn't judge by a Monday that hasn't happened yet", async () => {
@@ -91,13 +146,33 @@ describe('sandwich rule at the cycle edges', () => {
   });
 
   it("doesn't look before a joining date", async () => {
-    const { flags } = await flagsFor([], { ...employee, join_date: D('2026-09-26') });
+    const { flags } = await flagsFor([], {
+      ...employee,
+      join_date: D('2026-09-26'),
+    });
     expect(flagged(flags)).not.toContain('2026-09-26');
+  });
+
+  it('absent all cycle: absences plus every sandwich add up to the whole month', async () => {
+    const { line, flags } = await flagsFor([]);
+    const sandwichDays = flags.reduce((n, f: any) => n + f.deduction_days, 0);
+    const attendanceCut =
+      Number(line.absence_deduction) + sandwichDays * Number(line.daily_rate);
+    expect(attendanceCut).toBeCloseTo(Number(line.monthly_pay), 2);
   });
 
   it('a cycle that opens on a working day is unchanged', async () => {
     const svc = build();
-    const line = await svc.computeEmployeeLine(employee, 1, D('2026-09-28'), D('2026-10-23'), [], [], [], true);
+    const line = await svc.computeEmployeeLine(
+      employee,
+      1,
+      D('2026-09-28'),
+      D('2026-10-23'),
+      [],
+      [],
+      [],
+      true,
+    );
     expect(line.daily_breakdown[0].prev_working_day).toBeUndefined();
     expect(line.daily_breakdown.at(-1).next_working_day).toBeUndefined();
   });

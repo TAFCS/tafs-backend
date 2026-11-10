@@ -808,7 +808,7 @@ export class PayrollService {
         const dayScans = scansByDate.get(key) ?? [];
         const manual = record?.source === AttendanceSource.MANUAL || record?.source === AttendanceSource.LEAVE;
         const classification: DayClassification = manual
-          ? (record!.status as DayClassification)
+          ? (record.status as DayClassification)
           : dayScans.length === 0
             ? 'ABSENT'
             : dayScans.length % 2 !== 0
@@ -818,9 +818,9 @@ export class PayrollService {
           date: key,
           classification,
           is_working_day: true,
-          check_in_at: (manual ? record!.check_in_at : dayScans[0]?.scan_time)?.toISOString() ?? null,
+          check_in_at: (manual ? record.check_in_at : dayScans[0]?.scan_time)?.toISOString() ?? null,
           check_out_at:
-            (manual ? record!.check_out_at : dayScans.length > 1 ? dayScans[dayScans.length - 1].scan_time : null)?.toISOString() ?? null,
+            (manual ? record.check_out_at : dayScans.length > 1 ? dayScans[dayScans.length - 1].scan_time : null)?.toISOString() ?? null,
           punches: dayScans.map((s) => ({
             at: s.scan_time.toISOString(),
             device_sn: s.device_sn,
