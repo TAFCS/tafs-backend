@@ -36,6 +36,7 @@ import { ZK_DEVICES } from '../../attendance/zk-device-health.util';
 import { effectiveManualStatus, isLateCheckIn } from '../../attendance/manual-late.util';
 import { manualBreakMinutes, manualDaySegments, parseManualBreaks } from '../../attendance/manual-breaks.util';
 import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
+import { todayPkt } from '../employees/employee-timings.service';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -93,6 +94,36 @@ export interface DayBreakdownEntry {
   /** Who last overrode this day (users.id, resolved to a name before it leaves the service) and when. */
   overridden_by?: string | null;
   overridden_at?: string | null;
+  /**
+   * TAFSD-500: set on the cycle's first day when it is an off day — the
+   * nearest working day before the cycle, in the previous one. The sandwich
+   * rule reads it so an off-block at the cycle's start isn't left paid just
+   * because its "before" day falls outside the cycle. null: none found yet
+   * (before joining, or nothing within EDGE_LOOKUP_DAYS).
+   */
+  prev_working_day?: OutsideWorkingDay | null;
+  /** TAFSD-500: the same on the cycle's last day, looking into the next cycle (null until that day has passed). */
+  next_working_day?: OutsideWorkingDay | null;
+}
+
+/** TAFSD-500: a working day just outside the cycle, as the sandwich rule sees it. */
+export interface OutsideWorkingDay {
+  date: string;
+  classification: DayClassification;
+  is_working_day: true;
+  check_in_at: string | null;
+  check_out_at: string | null;
+  punches: DayPunch[];
+}
+
+/**
+ * TAFSD-500: how far past either end of the cycle the sandwich rule looks for
+ * the nearest working day (covers a long holiday stretch at the cycle's edge).
+ */
+const EDGE_LOOKUP_DAYS = 21;
+
+function addUtcDays(d: Date, days: number): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + days));
 }
 
 export interface DayPunch {
@@ -134,6 +165,12 @@ interface ComputedLine {
   income_tax_deduction: Prisma.Decimal;
   eobi_employer_cost: Prisma.Decimal;
   sessi_employer_cost: Prisma.Decimal;
+  /** TAFSD-500: this cycle's own statutory amounts before the pay-left cap (see applyStatutoryCapToLine). */
+  statutory_due: StatutoryDue;
+  eobi_carried_in: Prisma.Decimal;
+  income_tax_carried_in: Prisma.Decimal;
+  eobi_carried_out: Prisma.Decimal;
+  income_tax_carried_out: Prisma.Decimal;
   eobi_exempt: boolean;
   sessi_exempt: boolean;
   total_deductions: Prisma.Decimal;
@@ -160,6 +197,53 @@ export interface StatutoryWaivers {
 type StatutoryKey = 'eobi' | 'sessi' | 'income_tax';
 
 const NO_WAIVERS: StatutoryWaivers = { eobi: false, sessi: false, income_tax: false };
+
+/** TAFSD-500: a cycle's own EOBI, income tax and employer costs, before the pay-left cap. */
+export interface StatutoryDue {
+  eobi: number;
+  income_tax: number;
+  eobi_employer: number;
+  sessi_employer: number;
+}
+
+/** TAFSD-500: EOBI / income tax owed from the previous cycle. */
+export interface StatutoryCarry {
+  eobi: Prisma.Decimal;
+  income_tax: Prisma.Decimal;
+}
+const NO_CARRY: StatutoryCarry = { eobi: new Prisma.Decimal(0), income_tax: new Prisma.Decimal(0) };
+
+/**
+ * TAFSD-500: EOBI then income tax are taken only from the pay left after
+ * attendance cuts (absence, late, sandwich…), so net pay never goes below 0
+ * because of them. What doesn't fit is carried to the next cycle. When the
+ * cycle earns nothing at all, the employer's EOBI / SESSI aren't recorded
+ * for it either.
+ */
+export function capStatutory(
+  monthlyPay: Prisma.Decimal,
+  attendanceCuts: Prisma.Decimal,
+  due: StatutoryDue,
+  carriedIn: StatutoryCarry,
+) {
+  const D = (n: Prisma.Decimal.Value) => new Prisma.Decimal(n);
+  const earned = monthlyPay.minus(attendanceCuts);
+  let left = Prisma.Decimal.max(0, earned);
+  const eobiOwed = D(due.eobi).plus(carriedIn.eobi);
+  const eobi = Prisma.Decimal.min(eobiOwed, left);
+  left = left.minus(eobi);
+  const taxOwed = D(due.income_tax).plus(carriedIn.income_tax);
+  const tax = Prisma.Decimal.min(taxOwed, left);
+  const earnedNothing = earned.lte(0);
+  return {
+    eobi_deduction: eobi.toDecimalPlaces(2),
+    income_tax_deduction: tax.toDecimalPlaces(2),
+    eobi_carried_out: eobiOwed.minus(eobi).toDecimalPlaces(2),
+    income_tax_carried_out: taxOwed.minus(tax).toDecimalPlaces(2),
+    eobi_employer_cost: earnedNothing ? D(0) : D(due.eobi_employer).toDecimalPlaces(2),
+    sessi_employer_cost: earnedNothing ? D(0) : D(due.sessi_employer).toDecimalPlaces(2),
+  };
+}
 
 function waiversOf(line: {
   eobi_waived: boolean;
@@ -301,8 +385,33 @@ export class PayrollService {
     employeeId: number,
     tx: Prisma.TransactionClient,
   ): Promise<void> {
+    await this.applyStatutoryCapToLine(runId, employeeId, tx);
     await this.employeeLoans.applySnapshotToLine(runId, employeeId, tx);
     await this.securityDeposits.applySnapshotToLine(runId, employeeId, tx);
+  }
+
+  /**
+   * TAFSD-500: re-caps EOBI and income tax once the sandwich / consecutive-late
+   * cuts are known (they're applied after the line is computed), so they never
+   * take net pay below 0; the rest carries to the next cycle. Lines computed
+   * before statutory_due existed are left as they were.
+   */
+  private async applyStatutoryCapToLine(runId: number, employeeId: number, tx: Prisma.TransactionClient): Promise<void> {
+    const line = await tx.payroll_run_lines.findFirst({ where: { payroll_run_id: runId, employee_id: employeeId } });
+    if (!line?.statutory_due || line.finalized_at) return;
+    const cuts = new Prisma.Decimal(line.absence_deduction)
+      .plus(line.half_day_deduction)
+      .plus(line.late_deduction)
+      .plus(line.early_leave_deduction)
+      .plus(line.break_deduction)
+      .plus(line.after_leaving_deduction)
+      .plus(line.sandwich_deduction)
+      .plus(line.consecutive_late_deduction);
+    const capped = capStatutory(line.monthly_pay, cuts, line.statutory_due as unknown as StatutoryDue, {
+      eobi: line.eobi_carried_in,
+      income_tax: line.income_tax_carried_in,
+    });
+    await tx.payroll_run_lines.update({ where: { id: line.id }, data: capped });
   }
 
   private async commitDiscretionaryDeductions(lineId: number, createdBy: string, tx: Prisma.TransactionClient): Promise<void> {
@@ -504,6 +613,7 @@ export class PayrollService {
       monthly_pay?: Prisma.Decimal | null;
     }[],
     waivers: StatutoryWaivers = NO_WAIVERS,
+    carriedIn: StatutoryCarry = NO_CARRY,
   ): Promise<ComputedLine> {
     const recordByDate = new Map(attendanceRecords.map((r) => [r.date.toISOString().slice(0, 10), r]));
     const scansByDate = this.groupScansByDate(scans);
@@ -541,10 +651,38 @@ export class PayrollService {
       everTimetable
         ? await Promise.all([
             this.calendarResolver.loadStaffTimetableActiveDays(employee.id),
-            this.calendarResolver.loadStaffMakeupRescheduleDates(employee.id, periodStart, periodEnd),
-            this.calendarResolver.loadStaffShiftOverrideDates(employee.id, periodStart, periodEnd),
+            this.calendarResolver.loadStaffMakeupRescheduleDates(employee.id, addUtcDays(periodStart, -EDGE_LOOKUP_DAYS), addUtcDays(periodEnd, EDGE_LOOKUP_DAYS)),
+            this.calendarResolver.loadStaffShiftOverrideDates(employee.id, addUtcDays(periodStart, -EDGE_LOOKUP_DAYS), addUtcDays(periodEnd, EDGE_LOOKUP_DAYS)),
           ])
         : [undefined, undefined, undefined];
+
+    // The working-day pattern and check-in source in effect on a date, and so
+    // whether it is a working day at all.
+    const resolveDay = (d: Date) => {
+      const daySnapshot = timingsFor(d);
+      const daySchedule = daySnapshot
+        ? scheduleFromSnapshot(daySnapshot)
+        : {
+            days_per_week: employee.days_per_week,
+            employee_work_schedules: employee.employee_work_schedules,
+            check_in_source: employee.check_in_source,
+          };
+      return this.calendarResolver.resolveStaffDayFromRows(
+        calendarRows,
+        new Date(d),
+        employee.id,
+        employee.department_id,
+        employee.staff_category_id,
+        employee.staff_categories?.code ?? null,
+        daySchedule.days_per_week,
+        daySchedule.employee_work_schedules,
+        mandatorySaturdayDates,
+        daySchedule.check_in_source,
+        timetableActiveDays,
+        makeupRescheduleDates,
+        shiftOverrideDates,
+      );
+    };
 
     // Walk every calendar day in the period once and classify it — this array
     // is the single source of truth; every aggregate below is derived from it
@@ -577,30 +715,7 @@ export class PayrollService {
     ) {
       if (!isDateInAnyWindow(d, tenureWindows)) continue;
       const key = d.toISOString().slice(0, 10);
-      // The working-day pattern and check-in source in effect on this date.
-      const daySnapshot = timingsFor(d);
-      const daySchedule = daySnapshot
-        ? scheduleFromSnapshot(daySnapshot)
-        : {
-            days_per_week: employee.days_per_week,
-            employee_work_schedules: employee.employee_work_schedules,
-            check_in_source: employee.check_in_source,
-          };
-      const resolved = this.calendarResolver.resolveStaffDayFromRows(
-        calendarRows,
-        new Date(d),
-        employee.id,
-        employee.department_id,
-        employee.staff_category_id,
-        employee.staff_categories?.code ?? null,
-        daySchedule.days_per_week,
-        daySchedule.employee_work_schedules,
-        mandatorySaturdayDates,
-        daySchedule.check_in_source,
-        timetableActiveDays,
-        makeupRescheduleDates,
-        shiftOverrideDates,
-      );
+      const resolved = resolveDay(d);
       const record = recordByDate.get(key);
       const dayScans = scansByDate.get(key) ?? [];
       // TAFSD-484: breaks entered on an override replace the punch-derived ones.
@@ -753,6 +868,55 @@ export class PayrollService {
         overridden_by: record?.source === AttendanceSource.MANUAL ? record.marked_by : null,
         overridden_at: record?.source === AttendanceSource.MANUAL ? record.updated_at.toISOString() : null,
       });
+    }
+
+    // TAFSD-500: an off-block at either end of the cycle is sandwiched by the
+    // nearest working day outside it, so look there too. Only when the cycle
+    // really starts/ends on that day (not a mid-cycle join or leave), and only
+    // for days that have already happened.
+    const outsideWorkingDay = (from: Date, step: 1 | -1): OutsideWorkingDay | null => {
+      const today = todayPkt();
+      for (let n = 1; n <= EDGE_LOOKUP_DAYS; n++) {
+        const d = addUtcDays(from, step * n);
+        const key = d.toISOString().slice(0, 10);
+        if (step < 0 && employee.join_date && d < employee.join_date) return null;
+        if (step > 0 && employee.date_of_leaving && d > employee.date_of_leaving) return null;
+        if (key >= today) return null;
+        if (!resolveDay(d).isWorkingDay) continue;
+        const record = recordByDate.get(key);
+        const dayScans = scansByDate.get(key) ?? [];
+        const manual = record?.source === AttendanceSource.MANUAL || record?.source === AttendanceSource.LEAVE;
+        const classification: DayClassification = manual
+          ? (record.status as DayClassification)
+          : dayScans.length === 0
+            ? 'ABSENT'
+            : dayScans.length % 2 !== 0
+              ? 'UNRESOLVED'
+              : 'PRESENT';
+        return {
+          date: key,
+          classification,
+          is_working_day: true,
+          check_in_at: (manual ? record.check_in_at : dayScans[0]?.scan_time)?.toISOString() ?? null,
+          check_out_at:
+            (manual ? record.check_out_at : dayScans.length > 1 ? dayScans[dayScans.length - 1].scan_time : null)?.toISOString() ?? null,
+          punches: dayScans.map((s) => ({
+            at: s.scan_time.toISOString(),
+            device_sn: s.device_sn,
+            device_name: ZK_DEVICES[s.device_sn]?.name ?? s.device_sn,
+            campus_code: ZK_DEVICES[s.device_sn]?.campusCode ?? null,
+          })),
+        };
+      }
+      return null;
+    };
+    const firstDay = dailyBreakdown[0];
+    const lastDay = dailyBreakdown[dailyBreakdown.length - 1];
+    if (firstDay && !firstDay.is_working_day && firstDay.date === periodStart.toISOString().slice(0, 10)) {
+      firstDay.prev_working_day = outsideWorkingDay(periodStart, -1);
+    }
+    if (lastDay && !lastDay.is_working_day && lastDay.date === periodEnd.toISOString().slice(0, 10)) {
+      lastDay.next_working_day = outsideWorkingDay(periodEnd, 1);
     }
 
     const scheduledWorkingDays = dailyBreakdown.filter((d) => d.is_working_day).length;
@@ -970,20 +1134,30 @@ export class PayrollService {
           .toDecimalPlaces(2)
       : new Prisma.Decimal(0);
 
-    const totalDeductions = absenceDeduction
+    // TAFSD-500: EOBI and tax are capped at the pay left after the attendance
+    // cuts, with anything owed from last cycle taken first in line. The
+    // sandwich cuts aren't known yet here; applyStatutoryCapToLine re-caps
+    // once they are.
+    const statutoryDue: StatutoryDue = {
+      eobi: eobiDeduction.toNumber(),
+      income_tax: incomeTaxDeduction.toNumber(),
+      eobi_employer: eobiEmployerCost.toNumber(),
+      sessi_employer: sessiEmployerCost.toNumber(),
+    };
+    const attendanceCuts = absenceDeduction
       .plus(halfDayDeduction)
       .plus(lateDeduction)
       .plus(earlyLeaveDeduction)
       .plus(breakDeduction)
-      .plus(afterLeavingDeduction)
-      .plus(eobiDeduction)
-      .plus(incomeTaxDeduction);
+      .plus(afterLeavingDeduction);
+    const capped = capStatutory(monthlyPay, attendanceCuts, statutoryDue, carriedIn);
+    const totalDeductions = attendanceCuts.plus(capped.eobi_deduction).plus(capped.income_tax_deduction);
     const netPay = monthlyPay.minus(totalDeductions);
 
     return {
       has_salary: employee.monthly_pay != null && !employee.monthly_pay.isZero(),
       is_mapped: isMapped,
-      has_punches: scans.length > 0,
+      has_punches: scans.some((s) => s.attendance_date >= periodStart && s.attendance_date <= periodEnd),
       scheduled_working_days: scheduledWorkingDays,
       total_calendar_days: totalCalendarDays,
       present_days: presentDays,
@@ -1010,10 +1184,15 @@ export class PayrollService {
       late_deduction: lateDeduction.toDecimalPlaces(2),
       early_leave_deduction: earlyLeaveDeduction.toDecimalPlaces(2),
       break_deduction: breakDeduction.toDecimalPlaces(2),
-      eobi_deduction: eobiDeduction,
-      income_tax_deduction: incomeTaxDeduction,
-      eobi_employer_cost: eobiEmployerCost,
-      sessi_employer_cost: sessiEmployerCost,
+      eobi_deduction: capped.eobi_deduction,
+      income_tax_deduction: capped.income_tax_deduction,
+      eobi_employer_cost: capped.eobi_employer_cost,
+      sessi_employer_cost: capped.sessi_employer_cost,
+      statutory_due: statutoryDue,
+      eobi_carried_in: carriedIn.eobi.toDecimalPlaces(2),
+      income_tax_carried_in: carriedIn.income_tax.toDecimalPlaces(2),
+      eobi_carried_out: capped.eobi_carried_out,
+      income_tax_carried_out: capped.income_tax_carried_out,
       eobi_exempt: eobiExempt,
       sessi_exempt: sessiExempt,
       total_deductions: totalDeductions.toDecimalPlaces(2),
@@ -1070,8 +1249,16 @@ export class PayrollService {
         while (beforeIdx >= 0 && !dailyBreakdown[beforeIdx].is_working_day) beforeIdx--;
         let afterIdx = j;
         while (afterIdx < dailyBreakdown.length && !dailyBreakdown[afterIdx].is_working_day) afterIdx++;
-        const before = beforeIdx >= 0 ? dailyBreakdown[beforeIdx] : null;
-        const after = afterIdx < dailyBreakdown.length ? dailyBreakdown[afterIdx] : null;
+        // TAFSD-500: a block touching the cycle's start or end is judged
+        // against the working day just outside it, when known.
+        const before =
+          beforeIdx >= 0 ? dailyBreakdown[beforeIdx] : i === 0 ? (dailyBreakdown[0].prev_working_day ?? null) : null;
+        const after =
+          afterIdx < dailyBreakdown.length
+            ? dailyBreakdown[afterIdx]
+            : j === dailyBreakdown.length
+              ? (dailyBreakdown[dailyBreakdown.length - 1].next_working_day ?? null)
+              : null;
         if (
           before &&
           after &&
@@ -1274,19 +1461,24 @@ export class PayrollService {
     waiversByEmployee: ReadonlyMap<number, StatutoryWaivers> = new Map(),
   ): Promise<(ComputedLine & { employee_id: number })[]> {
     const employeeIds = employees.map((e) => e.id);
+    // TAFSD-500: attendance and the calendar are loaded a little past both
+    // ends so the sandwich rule can see the working day just outside the
+    // cycle. Only the cycle's own days are classified and paid.
+    const loadStart = addUtcDays(periodStart, -EDGE_LOOKUP_DAYS);
+    const loadEnd = addUtcDays(periodEnd, EDGE_LOOKUP_DAYS);
     const [calendarRows, mandatoryByEmployee, shiftOverridesByEmployee, allAttendanceRecords, allScans, mappedRows, allProgressionRows] = await Promise.all([
-      this.calendarResolver.loadStaffCalendarRows(campusId, periodStart, periodEnd),
-      this.calendarResolver.loadMandatorySaturdayDatesForEmployees(employeeIds, periodStart, periodEnd),
-      this.expectedTimes.loadShiftOverridesForEmployees(employeeIds, periodStart, periodEnd),
+      this.calendarResolver.loadStaffCalendarRows(campusId, loadStart, loadEnd),
+      this.calendarResolver.loadMandatorySaturdayDatesForEmployees(employeeIds, loadStart, loadEnd),
+      this.expectedTimes.loadShiftOverridesForEmployees(employeeIds, loadStart, loadEnd),
       this.prisma.attendance_staff_daily.findMany({
-        where: { employee_id: { in: employeeIds }, date: { gte: periodStart, lte: periodEnd } },
+        where: { employee_id: { in: employeeIds }, date: { gte: loadStart, lte: loadEnd } },
       }),
       this.prisma.zk_attendance_scans.findMany({
         where: {
           employee_id: { in: employeeIds },
           person_type: 'STAFF',
           is_duplicate: false,
-          attendance_date: { gte: periodStart, lte: periodEnd },
+          attendance_date: { gte: loadStart, lte: loadEnd },
         },
         orderBy: { scan_time: 'asc' },
       }),
@@ -1355,6 +1547,27 @@ export class PayrollService {
       else progressionByEmployee.set(row.employee_id, [entry]);
     }
 
+    // TAFSD-500: EOBI / income tax the previous finalized cycle couldn't take.
+    const previousLines = await this.prisma.payroll_run_lines.findMany({
+      where: {
+        employee_id: { in: employeeIds },
+        finalized_at: { not: null },
+        payroll_runs: { is_test: false, period_end: { lt: periodStart } },
+      },
+      select: {
+        employee_id: true,
+        eobi_carried_out: true,
+        income_tax_carried_out: true,
+        payroll_runs: { select: { period_end: true } },
+      },
+      orderBy: { payroll_runs: { period_end: 'desc' } },
+    });
+    const carryByEmployee = new Map<number, StatutoryCarry>();
+    for (const prev of previousLines) {
+      if (carryByEmployee.has(prev.employee_id)) continue; // newest first
+      carryByEmployee.set(prev.employee_id, { eobi: prev.eobi_carried_out, income_tax: prev.income_tax_carried_out });
+    }
+
     const lines = await Promise.all(
       employees.map(async (employee) => ({
         employee_id: employee.id,
@@ -1372,6 +1585,7 @@ export class PayrollService {
           fullPayEmployeeIds.has(employee.id),
           progressionByEmployee.get(employee.id),
           waiversByEmployee.get(employee.id),
+          carryByEmployee.get(employee.id),
         )),
       })),
     );
