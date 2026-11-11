@@ -5,11 +5,7 @@
  * and the Excel all count the same way.
  */
 
-import {
-  STUDENT_BENEFITS,
-  STUDENT_BENEFIT_KEYS,
-  type StudentBenefitKey,
-} from '../students/student-benefits';
+import type { StudentCategoryRef } from '../students/student-benefits';
 
 export const STRENGTH_SPLITS = [
   'gender',
@@ -44,13 +40,19 @@ export const STRENGTH_SPLIT_LABELS: Record<StrengthSplit, string> = {
 export const SIBLING_FILTERS = ['LINKED', 'SINGLE'] as const;
 export type SiblingFilter = (typeof SIBLING_FILTERS)[number];
 
-/** TAFSD-455: every benefit category, or NONE. Full names only: never "FE" or "Comp". */
-export const CATEGORY_FILTERS = [...STUDENT_BENEFIT_KEYS, 'NONE'] as const;
-export type CategoryFilter = StudentBenefitKey | 'NONE';
+/**
+ * TAFSD-455/475: a School Setup category code, or NONE. Full names only on
+ * screen: never "FE" or "Comp".
+ */
+export const CATEGORY_FILTER_PATTERN = /^(NONE|[A-Z][A-Z0-9_]{1,39})$/;
+export type CategoryFilter = string;
 
-/** A benefit the student holds today: switched on and not past its end date. */
+/** A category the student holds today: not past its end date. */
 export interface ActiveBenefit {
-  key: StudentBenefitKey;
+  key: string;
+  label: string;
+  /** School Setup order. */
+  order: number;
   /** YYYY-MM-DD, or null when it has no end date. */
   until: string | null;
 }
@@ -89,7 +91,7 @@ export interface StrengthStudent {
   segment_order: number | null;
   /** TAFSD-452: other students of the same family who are Enrolled. */
   enrolled_siblings: number;
-  /** TAFSD-455: in STUDENT_BENEFITS order. Ended benefits are left out, so they don't count. */
+  /** TAFSD-455: in School Setup order. Ended benefits are left out, so they don't count. */
   benefits: ActiveBenefit[];
 }
 
@@ -135,15 +137,15 @@ export function categoryValue(
   s: Pick<StrengthStudent, 'benefits'>,
 ): SplitValue {
   if (s.benefits.length === 0)
-    return { key: 'cat:none', label: 'Neither', order: 1e6 };
-  const idx = s.benefits.map((b) =>
-    STUDENT_BENEFITS.findIndex((x) => x.key === b.key),
-  );
+    return { key: 'cat:none', label: 'Neither', order: 1e9 };
+  const held = [...s.benefits].sort((a, b) => a.order - b.order);
   return {
-    key: `cat:${s.benefits.map((b) => b.key.toLowerCase()).join('+')}`,
-    label: idx.map((i) => STUDENT_BENEFITS[i].label).join(' and '),
-    // Single categories first in list order, then combinations.
-    order: (idx.length - 1) * 1000 + idx.reduce((a, i) => a * 10 + i, 0),
+    key: `cat:${held.map((b) => b.key.toLowerCase()).join('+')}`,
+    label: held.map((b) => b.label).join(' and '),
+    // Single categories first in School Setup order, then combinations.
+    order:
+      (held.length - 1) * 1e7 +
+      held.reduce((a, b) => a * 1000 + Math.min(Math.max(b.order, 0), 999), 0),
   };
 }
 
@@ -304,6 +306,8 @@ export interface StrengthOptions {
   split2?: StrengthSplit | null;
   /** The category / siblings filters: which of those columns to show even at 0. */
   category?: CategoryFilter[];
+  /** TAFSD-475: the School Setup categories, for the category columns. */
+  categories?: StudentCategoryRef[];
   siblings?: SiblingFilter[];
 }
 
@@ -358,9 +362,13 @@ function fixedSplitValues(
   if (split === 'category') {
     const want = (k: CategoryFilter) =>
       !o.category?.length || o.category.includes(k);
-    for (const b of STUDENT_BENEFITS)
-      if (want(b.key))
-        add(categoryValue({ benefits: [{ key: b.key, until: null }] }));
+    for (const c of o.categories ?? [])
+      if (want(c.key) && (c.is_active || o.category?.includes(c.key)))
+        add(
+          categoryValue({
+            benefits: [{ key: c.key, label: c.label, order: c.order, until: null }],
+          }),
+        );
     if (want('NONE')) add(categoryValue({ benefits: [] }));
   }
   if (split === 'siblings') {

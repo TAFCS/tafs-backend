@@ -5,9 +5,37 @@ import {
   IsBoolean,
   IsEnum,
   IsDateString,
+  IsArray,
+  Matches,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+
+/** TAFSD-475: one special category on the student, by its School Setup code. */
+export class StudentCategoryInputDto {
+  @IsString()
+  @Matches(/^[A-Z][A-Z0-9_]{1,39}$/)
+  code: string;
+
+  /** false takes the category off the student. */
+  @IsBoolean()
+  on: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  until?: string | null;
+
+  /** The home reminder starts on this date. */
+  @IsOptional()
+  @IsDateString()
+  remind_from?: string | null;
+}
 import { StudentStatus } from '../../../constants/student-status.constant';
 
 export class UpdateStudentDto {
@@ -150,6 +178,18 @@ export class UpdateStudentDto {
   @IsDateString()
   doa?: string;
 
+  /**
+   * TAFSD-475: special categories to change. Categories not listed are left
+   * as they are. Replaces the per-category fields below, which older webapp
+   * builds still send (they map onto the same five categories).
+   */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => StudentCategoryInputDto)
+  categories?: StudentCategoryInputDto[];
+
+  /** @deprecated TAFSD-475: use `categories`. */
   @IsOptional()
   @IsBoolean()
   is_complementary?: boolean;

@@ -7,6 +7,7 @@ import {
   Min,
   IsString,
   MaxLength,
+  Matches,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import {
@@ -19,7 +20,7 @@ import {
 } from '../../students/dto/get-students.dto';
 import {
   CATEGORY_EXPORT_PARTS,
-  CATEGORY_FILTERS,
+  CATEGORY_FILTER_PATTERN,
   SIBLING_FILTERS,
   STRENGTH_ROW_LEVELS,
   STRENGTH_SPLITS,
@@ -82,7 +83,7 @@ export class StudentStrengthQueryDto {
   @IsOptional()
   @Transform(toStringArray)
   @IsArray()
-  @IsIn(CATEGORY_FILTERS as unknown as string[], { each: true })
+  @Matches(CATEGORY_FILTER_PATTERN, { each: true })
   category?: CategoryFilter[];
 
   /** TAFSD-455: only students whose benefit ends within this many days (or has no end date: excluded). */

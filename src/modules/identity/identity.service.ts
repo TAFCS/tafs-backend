@@ -608,13 +608,32 @@ export class IdentityService {
             physical_impairment: dto.physical_impairment || undefined,
             medical_info: dto.medical_info || undefined,
             interests: dto.interests || undefined,
-            is_complementary: dto.is_complementary ?? undefined,
-            is_fee_endowment: dto.is_fee_endowment ?? undefined,
             fee_start_term: dto.fee_start_term || undefined,
             academic_year: dto.admission?.academic_year || undefined,
             ...(promoteFromQuick ? { status: StudentStatus.SOFT_ADMISSION } : {}),
           },
         });
+
+        // TAFSD-475: the form's two category ticks, onto student_category_assignments.
+        // As before, the form gives them without a reason or end date.
+        for (const [code, on] of [
+          ['COMPLEMENTARY', dto.is_complementary],
+          ['FEE_ENDOWMENT', dto.is_fee_endowment],
+        ] as const) {
+          if (on === undefined || on === null) continue;
+          const cat = await tx.student_categories.findUnique({ where: { code }, select: { id: true } });
+          if (!cat) continue;
+          if (on)
+            await tx.student_category_assignments.upsert({
+              where: { student_id_category_id: { student_id: student.cc, category_id: cat.id } },
+              create: { student_id: student.cc, category_id: cat.id },
+              update: {},
+            });
+          else
+            await tx.student_category_assignments.deleteMany({
+              where: { student_id: student.cc, category_id: cat.id },
+            });
+        }
 
         // 3. Upsert Guardians if provided
         let fatherId: number | null = null;

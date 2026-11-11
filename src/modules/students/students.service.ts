@@ -1,10 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   BENEFIT_SELECT,
-  STUDENT_BENEFITS,
-  benefitFields,
+  categoryPrefix,
   flattenBenefits,
-  type StudentBenefitKey,
+  loadStudentCategories,
+  studentBenefits,
 } from './student-benefits';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -1206,11 +1206,8 @@ export class StudentsService {
       status: { header: 'Status', width: 15, getValue: (s) => s.status || '' },
       discipline: { header: 'Discipline', width: 18, getValue: (s) => s.student_admissions?.[0]?.discipline || '' },
       academic_year: { header: 'Academic Year', width: 15, getValue: (s) => s.academic_year || s.student_admissions?.[0]?.academic_year || '' },
-      is_complementary: { header: 'Is Complementary', width: 18, getValue: (s) => s.is_complementary ? 'Yes' : 'No' },
-      is_fee_endowment: { header: 'Is Fee Endowment', width: 18, getValue: (s) => s.is_fee_endowment ? 'Yes' : 'No' },
-      is_fee_endowment_mtf: { header: 'Is Fee Endowment (Monthly Tuition Fee)', width: 22, getValue: (s) => s.is_fee_endowment_mtf ? 'Yes' : 'No' },
-      is_sehm_e_sadaat: { header: 'Is Sehm-e-Sadaat', width: 18, getValue: (s) => s.is_sehm_e_sadaat ? 'Yes' : 'No' },
-      is_sehm_e_imam: { header: 'Is Sehm-e-Imam', width: 18, getValue: (s) => s.is_sehm_e_imam ? 'Yes' : 'No' },
+      // TAFSD-475: one Yes/No column per School Setup category (is_<code>), added below.
+      special_categories: { header: 'Special Categories', width: 30, getValue: (s) => studentBenefits(s).map((b) => b.label).join(', ') },
       fee_start_term: { header: 'Fee Start Term', width: 15, getValue: (s) => s.fee_start_term || '' },
       residential_address: { header: 'Residential Address', width: 35, getValue: (s) => s.families?.primary_address || '' },
       sibling_count: { header: 'Sibling Count', width: 15, getValue: (s) => s.families?.students ? Math.max(0, s.families.students.length - 1) : 0 },
@@ -1227,6 +1224,13 @@ export class StudentsService {
       emergency_contact_name: { header: 'Emergency Contact Name', width: 25, getValue: (s) => s.student_guardians.find((g: any) => g.is_emergency_contact === true)?.guardians?.full_name || '' },
       emergency_contact_phone: { header: 'Emergency Contact Phone', width: 20, getValue: (s) => s.student_guardians.find((g: any) => g.is_emergency_contact === true)?.guardians?.primary_phone || s.student_guardians.find((g: any) => g.is_emergency_contact === true)?.guardians?.whatsapp_number || '' },
     };
+    for (const c of await loadStudentCategories(this.prisma, { includeRetired: true })) {
+      columnsConfig[`is_${categoryPrefix(c.key)}`] = {
+        header: `Is ${c.label}`,
+        width: Math.max(18, c.label.length + 6),
+        getValue: (s) => (studentBenefits(s).some((b) => b.key === c.key) ? 'Yes' : 'No'),
+      };
+    }
 
     // Determine columns to export
     const requestedColumns = query.columns ? query.columns.split(',') : [];
@@ -3850,30 +3854,24 @@ export class StudentsService {
     const scopedCampusIds = user ? this.scope.campusIdsFor(user) : undefined;
     const campusFilter = scopedCampusIds ? { campus_id: { in: scopedCampusIds } } : {};
 
-    const due = (until: Date | null, remindFrom: Date | null) =>
-      !!until && (until <= horizon || (!!remindFrom && remindFrom <= today));
-
-    const students = await this.prisma.students.findMany({
+    // TAFSD-475: from student_category_assignments, every category alike.
+    const rows = await this.prisma.student_category_assignments.findMany({
       where: {
-        deleted_at: null,
-        ...campusFilter,
-        OR: STUDENT_BENEFITS.map((b) => {
-          const f = benefitFields(b);
-          return {
-            [f.flag]: true,
-            [f.until]: { not: null },
-            OR: [{ [f.until]: { lte: horizon } }, { [f.remindFrom]: { lte: today } }],
-          };
-        }),
+        until: { not: null },
+        OR: [{ until: { lte: horizon } }, { remind_from: { lte: today } }],
+        students: { deleted_at: null, ...campusFilter },
       },
       select: {
-        cc: true,
-        full_name: true,
-        ...BENEFIT_SELECT,
-        classes: { select: { description: true } },
+        reason: true,
+        until: true,
+        remind_from: true,
+        student_categories: { select: { code: true, label: true } },
+        students: {
+          select: { cc: true, full_name: true, classes: { select: { description: true } } },
+        },
       },
-      orderBy: { full_name: 'asc' },
-      take: 200,
+      orderBy: [{ until: 'asc' }],
+      take: 400,
     });
 
     const msPerDay = 24 * 60 * 60 * 1000;
@@ -3881,36 +3879,27 @@ export class StudentsService {
       student_id: number;
       student_name: string | null;
       current_class: string | null;
-      benefit_type: StudentBenefitKey;
+      benefit_type: string;
       benefit_label: string;
       until: string;
       remind_from: string | null;
       reason: string | null;
       days_remaining: number;
-    }> = [];
-
-    for (const s of students as Array<Record<string, any>>) {
-      for (const b of STUDENT_BENEFITS) {
-        const f = benefitFields(b);
-        if (!s[f.flag]) continue;
-        const until = s[f.until] ? new Date(s[f.until]) : null;
-        const remindFrom = s[f.remindFrom] ? new Date(s[f.remindFrom]) : null;
-        until?.setUTCHours(0, 0, 0, 0);
-        remindFrom?.setUTCHours(0, 0, 0, 0);
-        if (!until || !due(until, remindFrom)) continue;
-        alerts.push({
-          student_id: s.cc,
-          student_name: s.full_name,
-          current_class: s.classes?.description ?? null,
-          benefit_type: b.key,
-          benefit_label: b.label,
-          until: until.toISOString().slice(0, 10),
-          remind_from: remindFrom ? remindFrom.toISOString().slice(0, 10) : null,
-          reason: s[f.reason] ?? null,
-          days_remaining: Math.round((until.getTime() - today.getTime()) / msPerDay),
-        });
-      }
-    }
+    }> = rows.map((r) => {
+      const until = new Date(r.until!);
+      until.setUTCHours(0, 0, 0, 0);
+      return {
+        student_id: r.students.cc,
+        student_name: r.students.full_name,
+        current_class: r.students.classes?.description ?? null,
+        benefit_type: r.student_categories.code,
+        benefit_label: r.student_categories.label,
+        until: until.toISOString().slice(0, 10),
+        remind_from: r.remind_from ? new Date(r.remind_from).toISOString().slice(0, 10) : null,
+        reason: r.reason ?? null,
+        days_remaining: Math.round((until.getTime() - today.getTime()) / msPerDay),
+      };
+    });
 
     alerts.sort((a, b) => a.days_remaining - b.days_remaining);
     return alerts;

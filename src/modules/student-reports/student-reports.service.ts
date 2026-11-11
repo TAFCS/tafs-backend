@@ -6,10 +6,9 @@ import { StudentsService } from '../students/students.service';
 import type { GetStudentsDto } from '../students/dto/get-students.dto';
 import {
   BENEFIT_SELECT,
-  STUDENT_BENEFITS,
   benefitActive,
-  benefitFields,
-  type StudentBenefitKey,
+  loadStudentCategories,
+  studentBenefits,
 } from '../students/student-benefits';
 
 /** YYYY-MM-DD plus n days. */
@@ -76,35 +75,26 @@ export interface SiblingRef {
   benefits: BenefitDetail[];
 }
 
-/** TAFSD-455: a benefit switched on, including one past its end date (active = false). */
+/** TAFSD-455: a category the student holds, including one past its end date (active = false). */
 export interface BenefitDetail {
-  key: StudentBenefitKey;
+  key: string;
   label: string;
+  order: number;
   reason: string | null;
   until: string | null;
   remind_from: string | null;
   active: boolean;
 }
 
-const day = (d: Date | null | undefined) =>
-  d ? d.toISOString().slice(0, 10) : null;
-
-/** Every benefit switched on for a student row (selected with BENEFIT_SELECT). */
+/** Every category a student row holds (selected with BENEFIT_SELECT). */
 function benefitDetails(
   row: Record<string, any>,
   today: string,
 ): BenefitDetail[] {
-  return STUDENT_BENEFITS.filter((b) => row[b.flag]).map((b) => {
-    const f = benefitFields(b);
-    return {
-      key: b.key,
-      label: b.label,
-      reason: (row[f.reason] as string | null) ?? null,
-      until: day(row[f.until]),
-      remind_from: day(row[f.remindFrom]),
-      active: benefitActive(row, b, today),
-    };
-  });
+  return studentBenefits(row).map((b) => ({
+    ...b,
+    active: benefitActive(b, today),
+  }));
 }
 
 /** TAFSD-452: what the drill-down and the list sheet show beyond the grid's fields. */
@@ -314,6 +304,8 @@ export class StudentReportsService {
       split2: query.split2 ?? null,
       category: query.category,
       siblings: query.siblings,
+      // TAFSD-475: retired ones too, so their holders still show in a column.
+      categories: await loadStudentCategories(this.prisma, { includeRetired: true }),
     });
 
     const directoryQuery = {
@@ -395,7 +387,7 @@ export class StudentReportsService {
       benefits: details
         .get(r.cc)!
         .benefits.filter((b) => b.active)
-        .map((b) => ({ key: b.key, until: b.until })),
+        .map((b) => ({ key: b.key, label: b.label, order: b.order, until: b.until })),
     }));
     // Gender is free text in the table, so it is filtered after folding it.
     if (query.gender?.length) {
@@ -785,7 +777,7 @@ export class StudentReportsService {
           .map((v) =>
             v === 'NONE'
               ? 'NEITHER'
-              : STUDENT_BENEFITS.find((b) => b.key === v)!.label.toUpperCase(),
+              : (opts.categories?.find((c) => c.key === v)?.label ?? v).toUpperCase(),
           )
           .join(', ')}`,
       );

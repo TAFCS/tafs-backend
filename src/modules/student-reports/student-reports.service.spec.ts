@@ -1,8 +1,13 @@
 import * as ExcelJS from 'exceljs';
 import { StudentReportsService } from './student-reports.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import {
+  SEED_CATEGORIES,
+  withCategoryAssignments,
+} from '../../../test/student-categories.fixture';
 
-const row = (cc: number, over: Record<string, unknown> = {}) => ({
+const row = (cc: number, over: Record<string, unknown> = {}) =>
+  withCategoryAssignments({
   cc,
   full_name: `Student ${cc}`,
   gr_number: String(cc),
@@ -94,6 +99,7 @@ function service(roll = ROLL) {
     classes: { findMany: jest.fn().mockResolvedValue([]) },
     sections: { findMany: jest.fn().mockResolvedValue([]) },
     houses: { findMany: jest.fn().mockResolvedValue([]) },
+    student_categories: { findMany: jest.fn().mockResolvedValue(SEED_CATEGORIES) },
   };
   const students = { buildStudentsWhere: jest.fn().mockResolvedValue(where) };
   const svc = new StudentReportsService(prisma as any, students as any);

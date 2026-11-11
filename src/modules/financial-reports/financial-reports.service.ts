@@ -1,4 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BENEFIT_SELECT,
+  categoryFlagWhere,
+  studentBenefits,
+} from '../students/student-benefits';
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
 import {
@@ -351,8 +356,8 @@ const DEFAULTER_STUDENT_SELECT = {
   campus_id: true,
   class_id: true,
   graduated_from_class_id: true,
-  is_fee_endowment: true,
-  is_complementary: true,
+  // TAFSD-475: categories now live in student_category_assignments.
+  ...BENEFIT_SELECT,
   campuses: { select: { campus_name: true, campus_code: true } },
   classes: { select: { description: true } },
   graduated_from_class: { select: { description: true } },
@@ -2844,8 +2849,14 @@ export class FinancialReportsService {
         class_name: this.resolveStudentClassName(student),
         section: student.sections?.description ?? '',
         student_status: student.status,
-        is_fee_endowment: student.is_fee_endowment,
-        is_complementary: student.is_complementary,
+        ...(() => {
+          const held = studentBenefits(student);
+          return {
+            is_fee_endowment: held.some((b) => b.key === 'FEE_ENDOWMENT'),
+            is_complementary: held.some((b) => b.key === 'COMPLEMENTARY'),
+            categories: held.map((b) => b.label),
+          };
+        })(),
 
         category: row.category,
         months_behind: row.months_behind,
@@ -4827,13 +4838,20 @@ export class FinancialReportsService {
         classes: { segment_id: { in: query.segment_id } },
       }),
       ...(query.student_status?.length && { status: { in: query.student_status } }),
-      ...(query.is_fee_endowment !== undefined && {
-        is_fee_endowment: query.is_fee_endowment,
+      ...((graduationConditions.length ||
+        query.is_fee_endowment !== undefined ||
+        query.is_complementary !== undefined) && {
+        AND: [
+          ...graduationConditions,
+          // TAFSD-475: held in student_category_assignments.
+          ...(query.is_fee_endowment !== undefined
+            ? [categoryFlagWhere('FEE_ENDOWMENT', query.is_fee_endowment)]
+            : []),
+          ...(query.is_complementary !== undefined
+            ? [categoryFlagWhere('COMPLEMENTARY', query.is_complementary)]
+            : []),
+        ],
       }),
-      ...(query.is_complementary !== undefined && {
-        is_complementary: query.is_complementary,
-      }),
-      ...(graduationConditions.length && { AND: graduationConditions }),
     };
     return this.andUniversalScope(
       applyStudentScope(user, studentWhere, {
@@ -4877,13 +4895,20 @@ export class FinancialReportsService {
         classes: { segment_id: { in: query.segment_id } },
       }),
       ...(query.student_status?.length && { status: { in: query.student_status } }),
-      ...(query.is_fee_endowment !== undefined && {
-        is_fee_endowment: query.is_fee_endowment,
+      ...((graduationConditions.length ||
+        query.is_fee_endowment !== undefined ||
+        query.is_complementary !== undefined) && {
+        AND: [
+          ...graduationConditions,
+          // TAFSD-475: held in student_category_assignments.
+          ...(query.is_fee_endowment !== undefined
+            ? [categoryFlagWhere('FEE_ENDOWMENT', query.is_fee_endowment)]
+            : []),
+          ...(query.is_complementary !== undefined
+            ? [categoryFlagWhere('COMPLEMENTARY', query.is_complementary)]
+            : []),
+        ],
       }),
-      ...(query.is_complementary !== undefined && {
-        is_complementary: query.is_complementary,
-      }),
-      ...(graduationConditions.length && { AND: graduationConditions }),
     };
     return this.andUniversalScope(
       applyStudentScope(user, studentWhere, {
