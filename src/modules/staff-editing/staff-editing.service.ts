@@ -1,12 +1,10 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BENEFIT_SELECT, flattenBenefits } from '../students/student-benefits';
 import {
-  BENEFIT_DATE_FIELDS,
-  BENEFIT_FIELD_NAMES,
-  BENEFIT_SELECT,
-  STUDENT_BENEFITS,
-  benefitFields,
-  flattenBenefits,
-} from '../students/student-benefits';
+  applyCategoryEdits,
+  legacyCategoryEdits,
+  type CategoryEdit,
+} from '../students/student-category-edits';
 import { ScopeService } from '../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -398,6 +396,7 @@ export class StaffEditingService {
       father_cnic,
       mother_name,
       mother_cnic,
+      categories,
       ...rest
     } = dto;
 
@@ -406,11 +405,12 @@ export class StaffEditingService {
       ...(dob !== undefined ? { dob: new Date(dob) } : {}),
       ...(doa !== undefined ? { doa: doa ? new Date(doa) : null } : {}),
     };
-    // Benefit end and reminder dates arrive as YYYY-MM-DD; '' or null clears.
-    for (const f of BENEFIT_DATE_FIELDS) {
-      const v = studentData[f];
-      if (v !== undefined) studentData[f] = v ? new Date(v as string) : null;
-    }
+    // TAFSD-475: categories live in student_category_assignments. Older webapp
+    // builds still send the five per-category fields; they become edits too,
+    // and never reach the retired columns.
+    const legacy = legacyCategoryEdits(studentData);
+    for (const k of legacy.keys) delete studentData[k];
+    const categoryEdits: CategoryEdit[] = [...legacy.edits, ...(categories ?? [])];
 
     if (studentData.cnic !== undefined) {
       const c = typeof studentData.cnic === 'string' ? studentData.cnic.trim() : studentData.cnic;
@@ -466,36 +466,23 @@ export class StaffEditingService {
           }
         }
 
-        // Require reason + until only when enabling a benefit (false→true), not on re-saves.
-        for (const b of STUDENT_BENEFITS) {
-          const f = benefitFields(b);
-          const next = (dto as Record<string, unknown>)[f.flag];
-          if (next === true) {
-            const raw = (dto as Record<string, unknown>)[f.reason];
-            const reasonFromDto = typeof raw === 'string' ? raw.trim() : '';
-            if (!(existing as Record<string, unknown>)[f.flag]) {
-              if (!reasonFromDto || !(dto as Record<string, unknown>)[f.until]) {
-                throw new BadRequestException(
-                  `${b.label} students require a reason and an until date`,
-                );
-              }
-            }
-            if (reasonFromDto) studentData[f.reason] = reasonFromDto;
-          } else if (next === false) {
-            studentData[f.reason] = null;
-            studentData[f.until] = null;
-            studentData[f.remindFrom] = null;
-          }
+        // Reason + until are required only when giving a category, not on re-saves.
+        for (const c of await applyCategoryEdits(tx, cc, categoryEdits)) {
+          fieldChanges.push({
+            entity_type: 'STUDENT',
+            entity_id: String(cc),
+            action: 'UPDATED',
+            field: c.field,
+            old_value: c.old_value,
+            new_value: c.new_value,
+            student_id: cc,
+          });
         }
 
         this.omitUndefined(studentData);
 
         // Effective values after this update (for date/bool audit diffs)
-        const dateFields = new Set([
-          'dob',
-          'doa',
-          ...BENEFIT_DATE_FIELDS,
-        ]);
+        const dateFields = new Set(['dob', 'doa']);
         const TRACKED_STUDENT_FIELDS = [
           'full_name', 'cnic', 'dob', 'doa', 'gender', 'nationality', 'religion',
           'place_of_birth', 'identification_marks', 'medical_info',
@@ -503,7 +490,6 @@ export class StaffEditingService {
           'whatsapp_country_code', 'primary_phone', 'primary_phone_country_code',
           'email', 'campus_id', 'class_id', 'section_id',
           'house_id', 'academic_year', 'gr_number', 'status',
-          ...BENEFIT_FIELD_NAMES,
           'fee_start_term', 'consent_publicity', 'admission_age_years',
           'physical_impairment',
         ];

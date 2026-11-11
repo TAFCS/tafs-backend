@@ -8,6 +8,15 @@ import {
   splitValue,
   type StrengthStudent,
 } from './strength.util';
+import { toCategoryRef } from '../students/student-benefits';
+import { SEED_CATEGORIES } from '../../../test/student-categories.fixture';
+
+// TAFSD-475: categories come from School Setup; benefits carry their label and order.
+const CATEGORIES = SEED_CATEGORIES.map(toCategoryRef);
+const cat = (key: string, until: string | null = null) => {
+  const c = CATEGORIES.find((x) => x.key === key)!;
+  return { key, label: c.label, order: c.order, until };
+};
 
 const ctx = { today: '2026-11-01', sessionStart: '2026-08-01' };
 
@@ -194,7 +203,7 @@ describe('buildStrengthGrid', () => {
   });
 });
 
-const FE = { key: 'FEE_ENDOWMENT' as const, until: '2027-07-31' };
+const FE = cat('FEE_ENDOWMENT', '2027-07-31');
 
 describe('special categories (TAFSD-452)', () => {
   it('splits by siblings: linked only with an Enrolled sibling', () => {
@@ -209,8 +218,8 @@ describe('special categories (TAFSD-452)', () => {
       splitValue(
         student({
           benefits: [
-            ...(fe ? [{ key: 'FEE_ENDOWMENT' as const, until: null }] : []),
-            ...(comp ? [{ key: 'COMPLEMENTARY' as const, until: null }] : []),
+            ...(fe ? [cat('FEE_ENDOWMENT', null)] : []),
+            ...(comp ? [cat('COMPLEMENTARY', null)] : []),
           ],
         }),
         'category',
@@ -258,8 +267,8 @@ describe('special categories (TAFSD-452)', () => {
 });
 
 describe('more categories and ending soon (TAFSD-455)', () => {
-  const ses = { key: 'SEHM_E_SADAAT' as const, until: '2027-03-31' };
-  const mtf = { key: 'FEE_ENDOWMENT_MTF' as const, until: '2027-07-31' };
+  const ses = cat('SEHM_E_SADAAT', '2027-03-31');
+  const mtf = cat('FEE_ENDOWMENT_MTF', '2027-07-31');
 
   it('labels the new categories and combinations in full', () => {
     expect(
@@ -271,7 +280,7 @@ describe('more categories and ending soon (TAFSD-455)', () => {
   });
 
   it('orders single categories before combinations, Neither last', () => {
-    const order = (b: (typeof FE)[]) =>
+    const order = (b: ReturnType<typeof cat>[]) =>
       splitValue(student({ benefits: b }), 'category', ctx).order as number;
     expect(order([FE])).toBeLessThan(order([ses]));
     expect(order([ses])).toBeLessThan(order([FE, ses]));
@@ -304,7 +313,7 @@ describe('more categories and ending soon (TAFSD-455)', () => {
     ).toBe(false);
     expect(
       matchesCategoryFilters(
-        student({ benefits: [{ key: 'COMPLEMENTARY', until: null }] }),
+        student({ benefits: [cat('COMPLEMENTARY', null)] }),
         undefined,
         undefined,
         '2030-01-01',
@@ -317,7 +326,7 @@ describe('TAFSD-455: category and siblings columns', () => {
   const roll = [
     student({
       cc: 1,
-      benefits: [{ key: 'FEE_ENDOWMENT', until: '2027-07-31' }],
+      benefits: [cat('FEE_ENDOWMENT', '2027-07-31')],
     }),
     student({ cc: 2 }),
   ];
@@ -325,7 +334,7 @@ describe('TAFSD-455: category and siblings columns', () => {
   it('shows all five benefits and Neither, even at 0', () => {
     const g = buildStrengthGrid(
       roll,
-      { rows: 'campus', split: 'category' },
+      { rows: 'campus', split: 'category', categories: CATEGORIES },
       ctx,
     );
     expect(g.columns.map((c) => c.label)).toEqual([
@@ -348,6 +357,7 @@ describe('TAFSD-455: category and siblings columns', () => {
         split2: 'category',
         category: ['SEHM_E_SADAAT'],
         siblings: ['SINGLE'],
+        categories: CATEGORIES,
       },
       ctx,
     );

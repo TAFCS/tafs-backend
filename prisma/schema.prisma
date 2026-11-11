@@ -765,73 +765,73 @@ model student_siblings {
 }
 
 model students {
-  cc                            Int                           @id @default(autoincrement())
+  cc                            Int                            @id @default(autoincrement())
   family_id                     Int?
   campus_id                     Int?
-  gr_number                     String?                       @db.VarChar(50)
-  dob                           DateTime?                     @db.Date
-  gender                        String?                       @db.VarChar(10)
-  nationality                   String?                       @db.VarChar(50)
-  religion                      String?                       @db.VarChar(50)
+  gr_number                     String?                        @db.VarChar(50)
+  dob                           DateTime?                      @db.Date
+  gender                        String?                        @db.VarChar(10)
+  nationality                   String?                        @db.VarChar(50)
+  religion                      String?                        @db.VarChar(50)
   identification_marks          String?
   medical_info                  String?
   interests                     String?
   admission_age_years           Int?
   status                        student_status
-  created_at                    DateTime?                     @default(now()) @db.Timestamp(6)
-  deleted_at                    DateTime?                     @db.Timestamp(6)
+  created_at                    DateTime?                      @default(now()) @db.Timestamp(6)
+  deleted_at                    DateTime?                      @db.Timestamp(6)
   photograph_url                String?
-  country                       String?                       @db.VarChar(50)
-  province                      String?                       @db.VarChar(50)
-  city                          String?                       @db.VarChar(50)
+  country                       String?                        @db.VarChar(50)
+  province                      String?                        @db.VarChar(50)
+  city                          String?                        @db.VarChar(50)
   physical_impairment           String?
-  consent_publicity             Boolean?                      @default(false)
+  consent_publicity             Boolean?                       @default(false)
   school_leaving_cert_url       String?
   achievements_cert_url         String?
   photo_blue_bg_url             String?
-  whatsapp_number               String?                       @db.VarChar(20)
-  primary_phone                 String?                       @db.VarChar(20)
-  email                         String?                       @db.VarChar(100)
+  whatsapp_number               String?                        @db.VarChar(20)
+  primary_phone                 String?                        @db.VarChar(20)
+  email                         String?                        @db.VarChar(100)
   class_id                      Int?
   section_id                    Int?
   house_id                      Int?
-  doa                           DateTime?                     @db.Date
-  full_name                     String                        @db.VarChar(100)
-  place_of_birth                String?                       @db.VarChar(100)
-  primary_phone_country_code    String?                       @default("+92") @db.VarChar(10)
-  whatsapp_country_code         String?                       @default("+92") @db.VarChar(10)
-  academic_year                 String?                       @db.VarChar(10)
-  home_phone                    String?                       @db.VarChar(20)
-  is_complementary              Boolean                       @default(false)
-  is_fee_endowment              Boolean                       @default(false)
-  fee_start_term                String?                       @db.VarChar(10)
+  doa                           DateTime?                      @db.Date
+  full_name                     String                         @db.VarChar(100)
+  place_of_birth                String?                        @db.VarChar(100)
+  primary_phone_country_code    String?                        @default("+92") @db.VarChar(10)
+  whatsapp_country_code         String?                        @default("+92") @db.VarChar(10)
+  academic_year                 String?                        @db.VarChar(10)
+  home_phone                    String?                        @db.VarChar(20)
+  is_complementary              Boolean                        @default(false)
+  is_fee_endowment              Boolean                        @default(false)
+  fee_start_term                String?                        @db.VarChar(10)
   graduated_from_class_id       Int?
-  cnic                          String?                       @unique @db.VarChar(15)
-  not_pursuing                  Boolean                       @default(false)
+  cnic                          String?                        @unique @db.VarChar(15)
+  not_pursuing                  Boolean                        @default(false)
   quick_admission_meta          Json?
-  graduated_at                  DateTime?                     @db.Date
-  complementary_reason          String?                       @db.VarChar(500)
-  complementary_until           DateTime?                     @db.Date
-  fee_endowment_reason          String?                       @db.VarChar(500)
-  fee_endowment_until           DateTime?                     @db.Date
+  graduated_at                  DateTime?                      @db.Date
+  complementary_reason          String?                        @db.VarChar(500)
+  complementary_until           DateTime?                      @db.Date
+  fee_endowment_reason          String?                        @db.VarChar(500)
+  fee_endowment_until           DateTime?                      @db.Date
   /// TAFSD-455: more benefit categories, and when the home reminder starts for each.
-  is_fee_endowment_mtf          Boolean                       @default(false)
-  fee_endowment_mtf_reason      String?                       @db.VarChar(500)
-  fee_endowment_mtf_until       DateTime?                     @db.Date
-  is_sehm_e_sadaat              Boolean                       @default(false)
-  sehm_e_sadaat_reason          String?                       @db.VarChar(500)
-  sehm_e_sadaat_until           DateTime?                     @db.Date
-  is_sehm_e_imam                Boolean                       @default(false)
-  sehm_e_imam_reason            String?                       @db.VarChar(500)
-  sehm_e_imam_until             DateTime?                     @db.Date
-  fee_endowment_remind_from     DateTime?                     @db.Date
-  complementary_remind_from     DateTime?                     @db.Date
-  fee_endowment_mtf_remind_from DateTime?                     @db.Date
-  sehm_e_sadaat_remind_from     DateTime?                     @db.Date
-  sehm_e_imam_remind_from       DateTime?                     @db.Date
+  is_fee_endowment_mtf          Boolean                        @default(false)
+  fee_endowment_mtf_reason      String?                        @db.VarChar(500)
+  fee_endowment_mtf_until       DateTime?                      @db.Date
+  is_sehm_e_sadaat              Boolean                        @default(false)
+  sehm_e_sadaat_reason          String?                        @db.VarChar(500)
+  sehm_e_sadaat_until           DateTime?                      @db.Date
+  is_sehm_e_imam                Boolean                        @default(false)
+  sehm_e_imam_reason            String?                        @db.VarChar(500)
+  sehm_e_imam_until             DateTime?                      @db.Date
+  fee_endowment_remind_from     DateTime?                      @db.Date
+  complementary_remind_from     DateTime?                      @db.Date
+  fee_endowment_mtf_remind_from DateTime?                      @db.Date
+  sehm_e_sadaat_remind_from     DateTime?                      @db.Date
+  sehm_e_imam_remind_from       DateTime?                      @db.Date
   /// School Leaving Certificate serial — independent of CC / GR.
-  slc_number                    Int?                          @unique
-  graduated_academic_year       String?                       @db.VarChar(10)
+  slc_number                    Int?                           @unique
+  graduated_academic_year       String?                        @db.VarChar(10)
   attendance_notifications      attendance_notifications[]
   attendance_roll_records       attendance_roll_records[]
   attendance_student_daily      attendance_student_daily[]
@@ -845,6 +845,8 @@ model students {
   student_activities            student_activities[]
   student_admissions            student_admissions[]
   student_alevel_details        student_alevel_details?
+  /// TAFSD-475: special categories the student holds (replaces the is_<category> columns).
+  student_category_assignments  student_category_assignments[]
   student_fee_bundles           student_fee_bundles[]
   student_fee_installments      student_fee_installments[]
   student_fees                  student_fees[]
@@ -854,12 +856,12 @@ model students {
   student_previous_schools      student_previous_schools[]
   student_progression_periods   student_progression_periods[]
   student_subject_enrollments   student_subject_enrollments[]
-  campuses                      campuses?                     @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  classes                       classes?                      @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  families                      families?                     @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  graduated_from_class          classes?                      @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
-  houses                        houses?                       @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sections                      sections?                     @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campuses                      campuses?                      @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                       classes?                       @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  families                      families?                      @relation(fields: [family_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  graduated_from_class          classes?                       @relation("GraduatedFromClass", fields: [graduated_from_class_id], references: [id], onUpdate: NoAction)
+  houses                        houses?                        @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                      sections?                      @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student_photo_history         student_photo_history[]
   support_tickets               support_tickets[]
   voucher_notifications         voucher_notifications[]
@@ -874,6 +876,42 @@ model students {
   @@index([gr_number], map: "idx_students_gr_number")
   @@index([section_id], map: "idx_students_section_id")
   @@index([status], map: "idx_students_status")
+}
+
+/// TAFSD-475: special categories (Fee Endowment, Complementary, …), managed in
+/// School Setup. `code` is fixed once created; reports and filters key on it.
+model student_categories {
+  id                           Int                            @id @default(autoincrement())
+  code                         String                         @unique @db.VarChar(40)
+  label                        String                         @db.VarChar(100)
+  /// One line shown under the name, e.g. "Everything waived".
+  description                  String?                        @db.VarChar(300)
+  /// Chip colour: amber, orange, emerald, sky, violet, rose, teal, slate.
+  tone                         String                         @default("slate") @db.VarChar(20)
+  display_order                Int                            @default(0)
+  /// Retired categories can't be given to more students; holders keep them.
+  is_active                    Boolean                        @default(true)
+  created_at                   DateTime                       @default(now()) @db.Timestamp(6)
+  updated_at                   DateTime                       @updatedAt @db.Timestamp(6)
+  student_category_assignments student_category_assignments[]
+}
+
+/// TAFSD-475: a student holding a special category, with its reason, end date
+/// and the date the renewal reminder starts.
+model student_category_assignments {
+  id                 Int                @id @default(autoincrement())
+  student_id         Int
+  category_id        Int
+  reason             String?            @db.VarChar(500)
+  until              DateTime?          @db.Date
+  remind_from        DateTime?          @db.Date
+  created_at         DateTime           @default(now()) @db.Timestamp(6)
+  updated_at         DateTime           @updatedAt @db.Timestamp(6)
+  students           students           @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+  student_categories student_categories @relation(fields: [category_id], references: [id], onDelete: Restrict)
+
+  @@unique([student_id, category_id], map: "uq_student_category_assignment")
+  @@index([category_id], map: "idx_student_category_assignments_category")
 }
 
 model student_alevel_details {
@@ -2033,25 +2071,25 @@ model employee_security_deposit_transactions {
 }
 
 model attendance_objections {
-  id              Int                       @id @default(autoincrement())
-  employee_id     Int
-  attendance_date DateTime                  @db.Date
-  scan_id         Int?
-  claimed_time    DateTime                  @db.Timestamp(6)
+  id                     Int                       @id @default(autoincrement())
+  employee_id            Int
+  attendance_date        DateTime                  @db.Date
+  scan_id                Int?
+  claimed_time           DateTime                  @db.Timestamp(6)
   /// TAFSD-474: the objected punch's time when the objection was raised — accepting rewrites the scan itself.
-  original_scan_time DateTime?              @db.Timestamp(6)
+  original_scan_time     DateTime?                 @db.Timestamp(6)
   /// TAFSD-490: a whole-day objection's claimed clock-out; claimed_time is its clock-in.
-  claimed_check_out_time DateTime?          @db.Timestamp(6)
-  reason          String                    @db.VarChar(500)
-  status          AttendanceObjectionStatus @default(PENDING)
-  reviewed_by     String?
-  reviewed_at     DateTime?                 @db.Timestamp(6)
-  admin_notes     String?                   @db.VarChar(500)
-  created_at      DateTime                  @default(now()) @db.Timestamp(6)
-  updated_at      DateTime                  @updatedAt @db.Timestamp(6)
-  employee        employee_profiles         @relation(fields: [employee_id], references: [id], onDelete: Cascade)
-  reviewer        users?                    @relation("ObjectionReviewedBy", fields: [reviewed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  scan            zk_attendance_scans?      @relation(fields: [scan_id], references: [id])
+  claimed_check_out_time DateTime?                 @db.Timestamp(6)
+  reason                 String                    @db.VarChar(500)
+  status                 AttendanceObjectionStatus @default(PENDING)
+  reviewed_by            String?
+  reviewed_at            DateTime?                 @db.Timestamp(6)
+  admin_notes            String?                   @db.VarChar(500)
+  created_at             DateTime                  @default(now()) @db.Timestamp(6)
+  updated_at             DateTime                  @updatedAt @db.Timestamp(6)
+  employee               employee_profiles         @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  reviewer               users?                    @relation("ObjectionReviewedBy", fields: [reviewed_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  scan                   zk_attendance_scans?      @relation(fields: [scan_id], references: [id])
 
   @@index([employee_id, attendance_date])
   @@index([status])

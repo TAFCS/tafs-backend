@@ -144,7 +144,7 @@ const STUDENT_OVERRIDES_ACTIONS: TileAction[] = [
   { id: 'bundle.manage', label: 'Manage bundles', description: 'Bundle heads together and dissolve bundles', implies: ['view'] },
   { id: 'installment.manage', label: 'Manage installment plans', description: 'Create, edit and delete installment plans', implies: ['view'] },
   { id: 'waive', label: 'Waive a voucher', description: 'Write off an issued voucher, and reverse a waiver', implies: ['view'] },
-  { id: 'flags.edit', label: 'Edit fee concession flags', description: 'Complementary and fee-endowment flags on the student', implies: ['view'] },
+  { id: 'flags.edit', label: 'Edit fee concession flags', description: 'Special categories on the student (Fee Endowment, Complementary, …)', implies: ['view'] },
   { id: 'audit.view', label: 'Open the finance audit log', implies: ['view'] },
 
   { id: 'bulk_ops.view', label: 'Open bulk operations', description: 'Preview what a bulk add or delete would do, without running it', implies: ['view'] },
@@ -252,6 +252,17 @@ const SEGMENTS_ACTIONS: TileAction[] = [
   { id: 'create', label: 'Add a segment', implies: ['view'] },
   { id: 'edit', label: 'Edit segments and the campus map', implies: ['view'] },
   { id: 'delete', label: 'Delete a segment', implies: ['view'] },
+];
+
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+// TAFSD-475: the special categories list (Fee Endowment, Complementary, …).
+// Giving a category to a student stays on the student tiles (flags.edit).
+const SPECIAL_CATEGORIES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View special categories', default: true },
+
+  { id: 'create', label: 'Add a category', implies: ['view'] },
+  { id: 'edit', label: 'Rename, recolour, reorder or retire a category', implies: ['view'] },
+  { id: 'delete', label: 'Delete a category nobody holds', implies: ['view'] },
 ];
 
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
@@ -1029,6 +1040,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'school-setup.sections', module: 'school-setup', label: 'Sections', description: 'Class subdivisions', href: '/sections', capabilities: ['academic.sections.view'], actions: SECTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.sections.edit'] },
   { id: 'school-setup.houses', module: 'school-setup', label: 'Houses', description: 'Student house configuration', href: '/houses', capabilities: ['academic.campuses.view'], actions: HOUSES_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.segments', module: 'school-setup', label: 'Segments', description: 'Wings that group classes and staff', href: '/segments', capabilities: ['academic.classes.view'], actions: SEGMENTS_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
+  { id: 'school-setup.special_categories', module: 'school-setup', label: 'Special Categories', description: 'Fee Endowment, Complementary and other student categories', href: '/special-categories', capabilities: ['academic.classes.view'], actions: SPECIAL_CATEGORIES_ACTIONS, legacyFullAccessCapabilities: ['academic.classes.edit'] },
   { id: 'school-setup.section_allocation', module: 'school-setup', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'], actions: SECTION_ALLOCATION_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.house_balancer', module: 'school-setup', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
   { id: 'school-setup.fee_types', module: 'school-setup', label: 'Fee Types', description: 'Fee head definitions', href: '/fee-types', capabilities: ['fee_admin.fee_types.view'], actions: FEE_TYPES_ACTIONS, legacyFullAccessCapabilities: ['fee_admin.fee_types.edit'] },
