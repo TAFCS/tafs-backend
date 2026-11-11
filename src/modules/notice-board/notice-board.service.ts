@@ -7,7 +7,7 @@ import {
   NotFoundException,
   forwardRef,
 } from '@nestjs/common';
-import { NoticePostStatus, StaffRole, student_status } from '@prisma/client';
+import { NoticePostStatus, Prisma, StaffRole, student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { FcmService } from '../../common/fcm/fcm.service';
@@ -222,7 +222,7 @@ export class NoticeBoardService {
   // The feed shows live posts plus the caller's own pending / rejected ones
   // (badged in the UI). Other people's pending posts live on the review page
   // only — superadmins included.
-  async getAllPosts(cursor: number | undefined, user: IJwtStaffPayload) {
+  async getAllPosts(cursor: number | undefined, user: IJwtStaffPayload, q?: string) {
     // A scoped caller sees posts that reached at least one of their students,
     // plus their own. Most posts reach one campus or one family, so batches are
     // read until a full page is visible (bounded, so a narrow scope can't scan
@@ -233,16 +233,18 @@ export class NoticeBoardService {
     // pinned posts in the same id-cursored stream, a later page repeated them
     // and the board showed only the newest 30 posts with no way to see more.
     const reach = await this._scopeReach(user);
+    // TAFSD-497: an optional search narrows every batch; scope and paging stay as they are.
+    const search = await this._searchWhere(q);
     const PAGE = 30;
     const BATCH = reach ? 150 : PAGE;
     const fetchedPosts: Awaited<ReturnType<typeof this._postBatch>> = [];
     if (!cursor) {
-      const pinned = await this._postBatch(undefined, user, true, 0, undefined);
+      const pinned = await this._postBatch(undefined, user, true, 0, undefined, search);
       fetchedPosts.push(...(reach ? pinned.filter((p) => reach.reaches(p)) : pinned));
     }
     const unpinned: typeof fetchedPosts = [];
     for (let skip = 0; unpinned.length < PAGE && skip < BATCH * 8; skip += BATCH) {
-      const batch = await this._postBatch(cursor, user, false, skip, BATCH);
+      const batch = await this._postBatch(cursor, user, false, skip, BATCH, search);
       unpinned.push(...(reach ? batch.filter((p) => reach.reaches(p)) : batch));
       if (batch.length < BATCH) break;
     }
@@ -258,7 +260,7 @@ export class NoticeBoardService {
       ? withTargets.map((p) => ({ ...p, targeted_students: p.targeted_students.filter((t) => reach.seesStudent(t!.cc)) }))
       : withTargets;
 
-    // Holiday notices ride on the first page only.
+    // Holiday notices ride on the first page only, and only match a search by their wording.
     const allHolidays = cursor ? [] : await this.prisma.academic_calendar_days.findMany({
       where: {
         applies_to: 'STUDENT',
@@ -330,7 +332,11 @@ export class NoticeBoardService {
       };
     });
 
-    const merged = [...postsWithReach, ...holidayPosts];
+    const needle = q?.trim().toLowerCase();
+    const merged = [
+      ...postsWithReach,
+      ...(needle ? holidayPosts.filter((h) => `${h.title} ${h.body}`.toLowerCase().includes(needle)) : holidayPosts),
+    ];
     merged.sort((a, b) => {
       if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
       return new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime();
@@ -345,6 +351,7 @@ export class NoticeBoardService {
     pinned: boolean,
     skip: number,
     take: number | undefined,
+    search: Prisma.notice_board_postsWhereInput | null = null,
   ) {
     return this.prisma.notice_board_posts.findMany({
       where: {
@@ -352,12 +359,58 @@ export class NoticeBoardService {
         is_pinned: pinned,
         OR: [{ status: NoticePostStatus.APPROVED }, { posted_by: user.sub }],
         ...(cursor ? { id: { lt: cursor } } : {}),
+        ...(search ? { AND: [search] } : {}),
       },
       orderBy: pinned ? { posted_at: 'desc' } : { id: 'desc' },
       include: POST_LIST_INCLUDE,
       skip,
       take,
     });
+  }
+
+  /**
+   * TAFSD-497: what a board search matches. Free text hits the title, body
+   * and poster; it also finds students by C.C., GR, name, family number or
+   * family name, and classes by name or code, so a notice sent to one student
+   * (or to a class) turns up from any of those. null means no search.
+   */
+  private async _searchWhere(q: string | undefined): Promise<Prisma.notice_board_postsWhereInput | null> {
+    const term = q?.trim();
+    if (!term) return null;
+    const text = { contains: term, mode: 'insensitive' as const };
+    const exact = { equals: term, mode: 'insensitive' as const };
+    const num = /^\d{1,9}$/.test(term) ? Number(term) : null;
+    const long = term.length >= 3;
+
+    const classes = await this.prisma.classes.findMany({
+      where: { OR: [{ description: exact }, { class_code: exact }] },
+      select: { id: true },
+    });
+    const classIds = classes.map((c) => c.id);
+
+    const students = await this.prisma.students.findMany({
+      where: {
+        OR: [
+          ...(num != null ? [{ cc: num }, { family_id: num }] : []),
+          { gr_number: exact },
+          ...(long ? [{ full_name: text }, { families: { household_name: text } }] : []),
+          ...(classIds.length ? [{ class_id: { in: classIds }, deleted_at: null }] : []),
+        ],
+      },
+      select: { cc: true },
+      take: 5000,
+    });
+    const ccs = students.map((st) => st.cc);
+
+    return {
+      OR: [
+        { title: text },
+        { body: text },
+        { users: { full_name: text } },
+        ...(ccs.length ? [{ student_ccs: { hasSome: ccs } }] : []),
+        ...(classIds.length ? [{ class_ids: { hasSome: classIds } }] : []),
+      ],
+    };
   }
 
   /**
