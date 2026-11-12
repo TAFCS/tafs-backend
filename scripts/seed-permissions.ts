@@ -49,6 +49,8 @@ const permissionsList = [
     // A SUPER_ADMIN grants the Post-dated Cheques tile (and its actions) per
     // role or person in People & Access.
     { key: 'finance.postdated_cheques.view', module: 'Finance Operations', description: 'Open Post-dated Cheques' },
+    // TAFSD-504: granted with the Family Credit tile, per person.
+    { key: 'finance.family_credit.view', module: 'Finance Operations', description: 'Open Family Credit' },
 
     // System Administration
     { key: 'system.users.view', module: 'System Administration', description: 'View staff accounts' },
