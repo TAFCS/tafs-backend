@@ -380,9 +380,28 @@ nullable, so that also drops cash with no method. Use `from_credit`.
   match. Meezan writes deposits itself and doesn't compare the amount; no case has
   occurred, but see its follow-up ticket before relying on that.
 
+**Manual entries (TAFSD-504, Family Credit tile `finance.family_credit`).**
+`src/modules/family-credit/` writes add (+`MANUAL_CREDIT`), deduct (−`MANUAL_DEBIT`),
+refund paid back (−`REFUNDED`, with `method`), move to another family
+(−`TRANSFER_OUT` here, +`TRANSFER_IN` there, `linked_entry_id` joins them) and undo
+(`ENTRY_REVERSED`, `reverses_entry_id` is unique so an entry is undone once).
+- None of them is a deposit: no `deposit_id`, no voucher, so no cash report,
+  analytics tile or digest sees them, and `hasOpenCreditEntries` ignores them.
+  A refund is cash paid out but appears only in the ledger.
+- Every one needs a reason, takes `lockFamilyCreditBalances()` (several families
+  lock in id order) and never leaves a balance below zero. That includes undoing
+  an added credit or the receiving half of a transfer once it has been spent.
+- A transfer is undone as a pair, from either side. Deposit-linked rows can't be
+  undone from the tile; reverse the deposit. Because manual entries can lower a
+  balance, reversing a deposit's excess can now be refused after a refund,
+  deduction or transfer too, not only after a sibling's voucher used it.
+- Each action is its own grant (`#add`, `#deduct`, `#refund`, `#transfer`,
+  `#undo`, `#export`); no legacy capability bridges into them.
+
 **Check after any change here:** `npm test -- family-credit`, then
-`scripts/verify-family-credit-flows.ts` against a local throwaway database (its
-header says how, and why never to set that up from this repo).
+`scripts/verify-family-credit-flows.ts` and `scripts/verify-family-credit-manual.ts`
+against a local throwaway database (the flows script's header says how, and why
+never to set that up from this repo).
 
 ---
 
@@ -394,7 +413,12 @@ header says how, and why never to set that up from this repo).
   `PARTIALLY_PAID`, `PAID`, `DISCOUNT`, `WAIVED`.
 - `deposit_allocations.type`: `FEE_HEAD`, `LATE_FEE`, `SURCHARGE`, `DISCOUNT`.
 - `family_credit_ledger.kind`: `EXCESS_DEPOSIT`, `APPLIED_TO_VOUCHER`,
-  `EXCESS_REVERSED`, `APPLICATION_REVERSED`.
+  `EXCESS_REVERSED`, `APPLICATION_REVERSED` (deposit-linked, TAFSD-421);
+  `MANUAL_CREDIT`, `MANUAL_DEBIT`, `REFUNDED`, `TRANSFER_OUT`, `TRANSFER_IN`,
+  `ENTRY_REVERSED` (Family Credit tile, TAFSD-504). Kinds are switched on only in
+  `vouchers/family-credit.ts` (`MANUAL_FAMILY_CREDIT_KINDS`, `rowsToUndo`,
+  `FAMILY_CREDIT_KIND_LABEL`) and the webapp's `KIND_LABELS`; every balance is a
+  plain sum, so a new kind needs no report change, but it needs a label in both.
 
 Adding a value means auditing every `status IN (...)` / `notIn` / switch in
 `vouchers.service.ts`, `financial-reports.service.ts`, `analytics.service.ts`,

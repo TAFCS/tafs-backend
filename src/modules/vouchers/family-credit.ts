@@ -21,8 +21,46 @@ export const FAMILY_CREDIT_KIND = {
     APPLIED_TO_VOUCHER: 'APPLIED_TO_VOUCHER',
     EXCESS_REVERSED: 'EXCESS_REVERSED',
     APPLICATION_REVERSED: 'APPLICATION_REVERSED',
+    // TAFSD-504: manual entries from the Family Credit tile. None of them is a
+    // deposit or touches a voucher, so no cash or fee report ever sees them.
+    MANUAL_CREDIT: 'MANUAL_CREDIT',
+    MANUAL_DEBIT: 'MANUAL_DEBIT',
+    REFUNDED: 'REFUNDED',
+    TRANSFER_OUT: 'TRANSFER_OUT',
+    TRANSFER_IN: 'TRANSFER_IN',
+    ENTRY_REVERSED: 'ENTRY_REVERSED',
 } as const;
 export type FamilyCreditKind = (typeof FAMILY_CREDIT_KIND)[keyof typeof FAMILY_CREDIT_KIND];
+
+/** Plain-language name of each kind, for exports and audit notes. */
+export const FAMILY_CREDIT_KIND_LABEL: Record<FamilyCreditKind, string> = {
+    EXCESS_DEPOSIT: 'Excess payment kept',
+    APPLIED_TO_VOUCHER: 'Used on a voucher',
+    EXCESS_REVERSED: 'Excess payment reversed',
+    APPLICATION_REVERSED: 'Voucher payment reversed',
+    MANUAL_CREDIT: 'Credit added',
+    MANUAL_DEBIT: 'Credit deducted',
+    REFUNDED: 'Refunded to family',
+    TRANSFER_OUT: 'Moved to another family',
+    TRANSFER_IN: 'Moved in from another family',
+    ENTRY_REVERSED: 'Entry undone',
+};
+
+/**
+ * TAFSD-504: the entries the Family Credit tile writes, and the only ones it can
+ * undo. A deposit's entries are undone by reversing the deposit, never here, or
+ * the deposit and the ledger would disagree.
+ */
+export const MANUAL_FAMILY_CREDIT_KINDS: readonly FamilyCreditKind[] = [
+    FAMILY_CREDIT_KIND.MANUAL_CREDIT,
+    FAMILY_CREDIT_KIND.MANUAL_DEBIT,
+    FAMILY_CREDIT_KIND.REFUNDED,
+    FAMILY_CREDIT_KIND.TRANSFER_OUT,
+    FAMILY_CREDIT_KIND.TRANSFER_IN,
+];
+
+export const REFUND_METHODS = ['cash', 'cheque', 'bank_transfer'] as const;
+export type RefundMethod = (typeof REFUND_METHODS)[number];
 
 type Money = Prisma.Decimal | number | string;
 const ZERO = new Prisma.Decimal(0);
@@ -78,7 +116,8 @@ export function creditReversalEntry(
         if (net.gt(dec(familyBalance))) {
             throw new BadRequestException(
                 `${rs(net)} of this deposit became family credit, but only ${rs(familyBalance)} is left because ` +
-                    'the rest has been used on another voucher. Reverse those deposits first.',
+                    'the rest has been used on another voucher, refunded, deducted or moved to another family. ' +
+                    'Reverse those deposits first, or undo those entries in Family Credit.',
             );
         }
         return { amount: net.negated(), kind: FAMILY_CREDIT_KIND.EXCESS_REVERSED };
@@ -113,4 +152,104 @@ export async function lockFamilyCreditBalance(
         _sum: { amount: true },
     });
     return dec(agg._sum.amount);
+}
+
+/**
+ * TAFSD-504: a manual amount is positive, in rupees and paisa at most, and
+ * sane. The ledger column is Decimal(12, 2).
+ */
+export function assertManualAmount(amount: Money): Prisma.Decimal {
+    const d = dec(amount);
+    if (!d.isFinite() || d.lte(0)) throw new BadRequestException('Enter an amount above zero.');
+    if (d.decimalPlaces() > 2) throw new BadRequestException('The amount can have at most two decimal places.');
+    if (d.gt(100_000_000)) throw new BadRequestException('That amount is too large for a single entry.');
+    return d;
+}
+
+/** Every manual entry carries a reason, so the ledger explains itself. */
+export function assertReason(reason: string | null | undefined): string {
+    const r = (reason ?? '').trim();
+    if (r.length < 3) throw new BadRequestException('Give a reason of at least a few words.');
+    if (r.length > 500) throw new BadRequestException('Keep the reason under 500 characters.');
+    return r;
+}
+
+/** Taking credit out never leaves a family below zero. */
+export function assertBalanceCovers(balance: Money, amount: Money, familyLabel = 'This family'): void {
+    if (dec(amount).gt(dec(balance))) {
+        throw new BadRequestException(
+            `${familyLabel} has ${rs(balance)} of credit, so ${rs(amount)} can't be taken out. The balance can't go below zero.`,
+        );
+    }
+}
+
+type LedgerRowLike = {
+    id: number;
+    family_id: number;
+    amount: Money;
+    kind: string;
+    linked_entry_id?: number | null;
+};
+
+/**
+ * TAFSD-504: which rows an Undo of `entry` must cancel. A transfer is undone as a
+ * pair, from either side, so money never ends up in only one of the two families.
+ * Refuses anything that is not a manual entry.
+ */
+export function rowsToUndo<T extends LedgerRowLike>(entry: T, pair: T | null): T[] {
+    if (!MANUAL_FAMILY_CREDIT_KINDS.includes(entry.kind as FamilyCreditKind)) {
+        if (entry.kind === FAMILY_CREDIT_KIND.ENTRY_REVERSED) {
+            throw new BadRequestException('This entry is itself an undo. Add a new entry instead.');
+        }
+        throw new BadRequestException(
+            "This entry came from a deposit. Reverse the deposit on Receive Deposit or Payment History instead, so the deposit and the credit stay in step.",
+        );
+    }
+    const isTransfer = entry.kind === FAMILY_CREDIT_KIND.TRANSFER_OUT || entry.kind === FAMILY_CREDIT_KIND.TRANSFER_IN;
+    if (!isTransfer) return [entry];
+    if (!pair) throw new BadRequestException('The other half of this transfer is missing, so it cannot be undone here.');
+    const out = entry.kind === FAMILY_CREDIT_KIND.TRANSFER_OUT ? entry : pair;
+    const into = entry.kind === FAMILY_CREDIT_KIND.TRANSFER_IN ? entry : pair;
+    if (out.kind !== FAMILY_CREDIT_KIND.TRANSFER_OUT || into.kind !== FAMILY_CREDIT_KIND.TRANSFER_IN || into.linked_entry_id !== out.id) {
+        throw new BadRequestException('The other half of this transfer does not match, so it cannot be undone here.');
+    }
+    return [out, into];
+}
+
+/**
+ * The opposite rows for an undo, checked against each family's balance (taken
+ * under lock). Undoing an added credit, or the receiving side of a transfer,
+ * takes money out, so the family must still hold it.
+ */
+export function undoEntries<T extends LedgerRowLike>(
+    rows: T[],
+    balances: Map<number, Money>,
+): Array<{ family_id: number; amount: Prisma.Decimal; reverses_entry_id: number }> {
+    const after = new Map<number, Prisma.Decimal>();
+    for (const [id, b] of balances) after.set(id, dec(b));
+    const out = rows.map((r) => {
+        const amount = dec(r.amount).negated();
+        const next = (after.get(r.family_id) ?? ZERO).add(amount);
+        if (next.lt(0)) {
+            throw new BadRequestException(
+                `Undoing this would leave family #${r.family_id} below zero: it holds ` +
+                    `${rs(after.get(r.family_id) ?? ZERO)} and the undo takes ${rs(amount.abs())}. ` +
+                    'Some of that credit has already been used.',
+            );
+        }
+        after.set(r.family_id, next);
+        return { family_id: r.family_id, amount, reverses_entry_id: r.id };
+    });
+    return out;
+}
+
+/** Lock several families in a fixed order, so two transfers can't deadlock. */
+export async function lockFamilyCreditBalances(
+    tx: Prisma.TransactionClient,
+    familyIds: number[],
+): Promise<Map<number, Prisma.Decimal>> {
+    const ids = [...new Set(familyIds)].sort((a, b) => a - b);
+    const balances = new Map<number, Prisma.Decimal>();
+    for (const id of ids) balances.set(id, await lockFamilyCreditBalance(tx, id));
+    return balances;
 }

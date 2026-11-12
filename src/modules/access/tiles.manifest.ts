@@ -597,6 +597,24 @@ const RECEIVE_DEPOSIT_ACTIONS: TileAction[] = [
   { id: 'pay_from_credit', label: 'Pay a voucher from family credit', description: 'Use money the family already paid, with no new cash', implies: ['record'] },
 ];
 
+// TAFSD-504: Family Credit. Its own tile, separate from Receive Deposit (where
+// credit is still recorded and spent as part of a deposit). Each manual entry
+// is its own grant because each moves money differently: `add` creates credit
+// with no cash, `refund` records cash paid back out, `transfer` moves it between
+// families. No legacy capability bridges into these: like every web tile it is
+// default-deny and granted per person.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const FAMILY_CREDIT_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Family Credit', description: "See which families hold credit and each family's full history", default: true },
+
+  { id: 'add', label: 'Add credit to a family', description: 'Creates credit with no deposit behind it, e.g. an opening balance', implies: ['view'] },
+  { id: 'deduct', label: 'Deduct credit from a family', description: 'Never below zero', implies: ['view'] },
+  { id: 'refund', label: 'Record a refund paid back to a family', description: 'Cash, cheque or bank transfer; never below zero', implies: ['view'] },
+  { id: 'transfer', label: 'Move credit to another family', implies: ['view'] },
+  { id: 'undo', label: 'Undo a manual credit entry', description: 'Adds an opposite entry; deposit entries are undone by reversing the deposit', implies: ['view'] },
+  { id: 'export', label: 'Export the list to Excel', implies: ['view'] },
+];
+
 // Transfers had NO guard of any kind: TransferController carried no
 // @UseGuards, so every route -- including the one that rewrites a student's
 // class, campus and GR number -- was reachable without a login. It is now
@@ -999,6 +1017,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'finance.pending_release', module: 'finance', label: 'Pending Release', description: 'Held vouchers awaiting parent visibility', href: '/pending-release', capabilities: ['finance.vouchers.release'], actions: PENDING_RELEASE_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.release'] },
   { id: 'finance.payment_history', module: 'finance', label: 'Payment History', description: 'Payment transaction log', href: '/payment-history', capabilities: ['finance.vouchers.view'], actions: PAYMENT_HISTORY_ACTIONS, legacyFullAccessCapabilities: ['finance.vouchers.download'] },
   { id: 'finance.receive_deposit', module: 'finance', label: 'Receive Deposit', description: 'Record cash and cheque deposits', href: '/vouchers/deposit', capabilities: ['finance.deposits.record'], actions: RECEIVE_DEPOSIT_ACTIONS, legacyFullAccessCapabilities: ['finance.deposits.record'] },
+  { id: 'finance.family_credit', module: 'finance', label: 'Family Credit', description: 'Credit families hold from overpayments: balances, history, add, deduct, refund and move', href: '/family-credit', capabilities: ['finance.family_credit.view'], actions: FAMILY_CREDIT_ACTIONS },
   { id: 'finance.postdated_cheques', module: 'finance', label: 'Post-dated Cheques', description: 'Cheque tracking and alerts', href: '/postdated-cheques', capabilities: ['finance.postdated_cheques.view'], actions: POSTDATED_CHEQUES_ACTIONS },
 
   // ── Communications ───────────────────────────────────────────────────────

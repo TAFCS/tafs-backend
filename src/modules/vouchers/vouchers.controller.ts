@@ -395,7 +395,7 @@ export class VouchersController {
     /** TAFSD-421: a family's credit balance and ledger, newest first. */
     @Get('family-credit/:familyId')
     @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
-    @RequireAnyAction('finance.receive_deposit#view', 'finance.vouchers#view')
+    @RequireAnyAction('finance.receive_deposit#view', 'finance.vouchers#view', 'finance.family_credit#view')
     @CheckPolicies(
         (ability) =>
             ability.can(Action.Read, 'Voucher') ||
