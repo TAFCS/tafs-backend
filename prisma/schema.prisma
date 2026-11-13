@@ -149,6 +149,7 @@ model campuses {
   unconfirmed_admissions        unconfirmed_admissions[]
   users                         users[]
   vouchers                      vouchers[]
+  exam_schedules                exam_schedules[]
 }
 
 model class_fee_schedule {
@@ -191,6 +192,9 @@ model classes {
   teaching_groups                    teaching_groups[]
   timetables                         timetables[]
   vouchers                           vouchers[]
+  exam_schedule_classes              exam_schedule_classes[]
+  exam_schedule_papers               exam_schedule_papers[]
+  exam_documents                     exam_documents[]
 }
 
 model segments {
@@ -878,6 +882,8 @@ model students {
   voucher_notifications         voucher_notifications[]
   vouchers                      vouchers[]
   zk_attendance_scans           zk_attendance_scans[]
+
+  exam_documents exam_documents[]
 
   @@index([campus_id], map: "idx_students_campus_id")
   @@index([class_id], map: "idx_students_class_id")
@@ -3242,4 +3248,97 @@ model student_photo_history {
 
   @@index([student_id])
   @@index([student_id, uploaded_at])
+}
+
+/// TAFSD-510: an assessment's schedule on one campus (e.g. "First Semester
+/// Assessments", Senior Cambridge, Dec 2026). Admit cards (VI–X) and statements
+/// of entry (every other class) are issued from it, only to students whose dues
+/// are cleared through `dues_cleared_through`.
+model exam_schedules {
+  id                    Int                     @id @default(autoincrement())
+  campus_id             Int
+  academic_year         String                  @db.VarChar(10)
+  /// "FIRST SEMESTER ASSESSMENTS"
+  title                 String                  @db.VarChar(150)
+  /// Line under the title, e.g. "SENIOR CAMBRIDGE"
+  segment_line          String?                 @db.VarChar(150)
+  reference_no          String?                 @db.VarChar(100)
+  /// Every fee head with fee_date on or before this date must be settled. The
+  /// last day of the fee month the schedule names ("dues till December 2026").
+  dues_cleared_through  DateTime                @db.Date
+  /// No document can be issued before this date.
+  issue_from            DateTime?               @db.Date
+  /// Printed under the papers, in order.
+  notes                 String[]                @default([])
+  /// DRAFT | PUBLISHED. Documents are issued only from a published schedule.
+  status                String                  @default("DRAFT") @db.VarChar(20)
+  created_by            String?                 @db.VarChar(100)
+  updated_by            String?                 @db.VarChar(100)
+  created_at            DateTime                @default(now()) @db.Timestamp(6)
+  updated_at            DateTime                @updatedAt @db.Timestamp(6)
+  campuses              campuses                @relation(fields: [campus_id], references: [id])
+  exam_schedule_classes exam_schedule_classes[]
+  exam_schedule_papers  exam_schedule_papers[]
+  exam_documents        exam_documents[]
+
+  @@index([campus_id, academic_year])
+}
+
+/// TAFSD-510: the classes a schedule covers.
+model exam_schedule_classes {
+  schedule_id    Int
+  class_id       Int
+  exam_schedules exam_schedules @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+  classes        classes        @relation(fields: [class_id], references: [id])
+
+  @@id([schedule_id, class_id])
+}
+
+/// TAFSD-510: one cell of the school's schedule grid: a class's paper on a date.
+model exam_schedule_papers {
+  id             Int            @id @default(autoincrement())
+  schedule_id    Int
+  class_id       Int
+  paper_date     DateTime       @db.Date
+  /// As printed, e.g. "8:00 – 11:30"
+  time_text      String         @db.VarChar(60)
+  /// As printed, e.g. "BIOLOGY / COMPUTER PRACTICAL"
+  subject        String         @db.VarChar(255)
+  /// Optional syllabus / component code, e.g. "2059 / 01"
+  code           String?        @db.VarChar(40)
+  sort_order     Int            @default(0)
+  exam_schedules exam_schedules @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+  classes        classes        @relation(fields: [class_id], references: [id])
+
+  @@index([schedule_id, class_id])
+}
+
+/// TAFSD-510: an admit card / statement of entry issued to one student from one
+/// schedule. One per student per schedule; a reprint keeps the serial.
+model exam_documents {
+  id               Int            @id @default(autoincrement())
+  schedule_id      Int
+  student_id       Int
+  /// ADMIT_CARD | STATEMENT_OF_ENTRY
+  doc_type         String         @db.VarChar(30)
+  /// Per schedule, from 1.
+  serial_no        Int
+  class_id         Int
+  section_id       Int?
+  issued_at        DateTime       @default(now()) @db.Timestamp(6)
+  issued_by        String         @db.VarChar(100)
+  print_count      Int            @default(1)
+  last_printed_at  DateTime       @default(now()) @db.Timestamp(6)
+  /// Dues owed through the schedule's month when it was issued (0 unless overridden).
+  dues_outstanding Decimal        @default(0) @db.Decimal(12, 2)
+  override_reason  String?
+  overridden_by    String?        @db.VarChar(100)
+  /// Restrict: a schedule with issued documents can't be deleted.
+  exam_schedules   exam_schedules @relation(fields: [schedule_id], references: [id], onDelete: Restrict)
+  students         students       @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+  classes          classes        @relation(fields: [class_id], references: [id])
+
+  @@unique([schedule_id, student_id])
+  @@unique([schedule_id, serial_no])
+  @@index([student_id])
 }
