@@ -178,11 +178,12 @@ export class ShiftOverridesService {
       const usual = timingsForDate(row.employee_profiles, row.employee_profiles.employee_day_timings, row.date);
       const changeSummary = describeShiftChange(startTime, endTime, usual.reporting_time, usual.leaving_time);
       void this.noticeBoard
-        .createScheduleNotice(
+        .createTemplatedScheduleNotice(
           row.employee_id,
           userId,
-          `Schedule Update for ${formatDatePKT(row.date)}`,
-          `Your hours on ${formatDatePKT(row.date)} have been changed: ${changeSummary}.`,
+          'notif_staff_shift_changed',
+          { title: 'Schedule Update for {date}', body: 'Your hours on {date} have been changed: {change}.' },
+          { date: formatDatePKT(row.date), change: changeSummary },
         )
         .catch((err) => console.error('[ShiftOverrides] Schedule notice failed:', err?.message));
     }
@@ -257,11 +258,15 @@ export class ShiftOverridesService {
 
     if (existing.employee_profiles.user_id) {
       void this.noticeBoard
-        .createScheduleNotice(
+        .createTemplatedScheduleNotice(
           existing.employee_id,
           existing.employee_profiles.user_id,
-          `Schedule Update for ${formatDatePKT(existing.date)}`,
-          `Your schedule change for ${formatDatePKT(existing.date)} has been removed — your normal hours apply.`,
+          'notif_staff_shift_removed',
+          {
+            title: 'Schedule Update for {date}',
+            body: 'Your schedule change for {date} has been removed — your normal hours apply.',
+          },
+          { date: formatDatePKT(existing.date) },
         )
         .catch((err) => console.error('[ShiftOverrides] Removal notice failed:', err?.message));
     }

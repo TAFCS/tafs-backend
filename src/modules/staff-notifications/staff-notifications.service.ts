@@ -64,7 +64,7 @@ export class StaffNotificationsService {
         select: { id: true },
       });
       if (employee) {
-        await this.employeeNotices.createPersonalNotice(employee.id, userId, input.title, input.body, input.kind);
+        await this.employeeNotices.createPersonalNotice(employee.id, userId, input.title, input.body, input.kind, input.pushData);
       } else {
         await this.fcm.sendToUsers([userId], input.title, input.body, { type: input.kind, ...input.pushData });
       }

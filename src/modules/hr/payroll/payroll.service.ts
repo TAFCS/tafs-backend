@@ -37,6 +37,7 @@ import { effectiveManualStatus, isLateCheckIn } from '../../attendance/manual-la
 import { manualBreakMinutes, manualDaySegments, parseManualBreaks } from '../../attendance/manual-breaks.util';
 import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 import { todayPkt } from '../employees/employee-timings.service';
+import { renderNotification } from '../../../utils/notification-templates.util';
 
 type StaffCalendarRows = Awaited<ReturnType<CalendarDayResolverService['loadStaffCalendarRows']>>;
 type AttendanceStaffDailyRow = attendance_staff_daily;
@@ -338,6 +339,29 @@ export const PAY_BY_EFFECTIVE_DATE_FROM = new Date(Date.UTC(2026, 9, 26));
 @Injectable()
 export class PayrollService {
   private readonly logger = new Logger(PayrollService.name);
+
+  /**
+   * TAFSD-514: the staff app's payroll notice (finalized / settled), with its
+   * text from the Notification Templates page. Nothing is sent when switched off.
+   */
+  private async payrollNotice(
+    kind: 'finalized' | 'settled',
+    employeeId: number,
+    userId: string,
+    period: string,
+    runId: number,
+  ) {
+    const text = await renderNotification(
+      this.prisma,
+      `notif_staff_payroll_${kind}`,
+      kind === 'finalized'
+        ? { title: 'Payroll finalized', body: 'Your payroll for {period} has been finalized.' }
+        : { title: 'Salary settled', body: 'Your salary for {period} has been settled. Please check your bank account.' },
+      { period },
+    );
+    if (!text) return;
+    await this.employeeNoticeBoard.createPayrollNotice(employeeId, userId, text.title, text.body, runId);
+  }
 
   // Shared by every roster/single-employee lookup that feeds
   // computeEmployeeLinesForRange (generateRun's two roster branches,
@@ -1935,8 +1959,7 @@ export class PayrollService {
     // TAFSD-478: staff only hear about a run once it's released to them.
     if (!run.is_test && run.released_to_staff_at && line.employee_profiles.user_id) {
       const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
-      void this.employeeNoticeBoard
-        .createPayrollNotice(employeeId, line.employee_profiles.user_id, 'Payroll finalized', `Your payroll for ${periodLabel} has been finalized.`, runId)
+      void this.payrollNotice('finalized', employeeId, line.employee_profiles.user_id, periodLabel, runId)
         .catch((err) => this.logger.error(`Failed to send payroll-finalized notice for employee ${employeeId}`, err));
     }
 
@@ -3090,13 +3113,10 @@ export class PayrollService {
     // every time one gets finalized during testing. TAFSD-478: nor before the
     // run is released to staff; releaseRun sends the notices then.
     if (!run.is_test && run.released_to_staff_at) {
-      const title = 'Payroll finalized';
-      const body = `Your payroll for ${periodLabel} has been finalized.`;
       for (const line of finalizedNow) {
         const userId = line.employee_profiles.user_id;
         if (!userId) continue;
-        void this.employeeNoticeBoard
-          .createPayrollNotice(line.employee_id, userId, title, body, id)
+        void this.payrollNotice('finalized', line.employee_id, userId, periodLabel, id)
           .catch((err) => this.logger.error(`Failed to send payroll-finalized notice for employee ${line.employee_id}`, err));
       }
     }
@@ -3140,8 +3160,7 @@ export class PayrollService {
     for (const line of finalized) {
       const userId = line.employee_profiles.user_id;
       if (!userId) continue;
-      void this.employeeNoticeBoard
-        .createPayrollNotice(line.employee_id, userId, 'Payroll finalized', `Your payroll for ${periodLabel} has been finalized.`, id)
+      void this.payrollNotice('finalized', line.employee_id, userId, periodLabel, id)
         .catch((err) => this.logger.error(`Failed to send payroll-released notice for employee ${line.employee_id}`, err));
     }
     return this.getRun(id, user);
@@ -3661,14 +3680,7 @@ export class PayrollService {
     // TAFSD-478: and nothing reaches staff before the run is released.
     if (!run.is_test && run.released_to_staff_at && line.employee_profiles.user_id) {
       const periodLabel = `${run.period_start.toISOString().slice(0, 10)} to ${run.period_end.toISOString().slice(0, 10)}`;
-      void this.employeeNoticeBoard
-        .createPayrollNotice(
-          employeeId,
-          line.employee_profiles.user_id,
-          'Salary settled',
-          `Your salary for ${periodLabel} has been settled. Please check your bank account.`,
-          runId,
-        )
+      void this.payrollNotice('settled', employeeId, line.employee_profiles.user_id, periodLabel, runId)
         .catch((err) => this.logger.error(`Failed to send payroll-settled notice for employee ${employeeId}`, err));
     }
 

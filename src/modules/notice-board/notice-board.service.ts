@@ -7,6 +7,7 @@ import {
   NotFoundException,
   forwardRef,
 } from '@nestjs/common';
+import { renderNotification } from '../../utils/notification-templates.util';
 import { NoticePostStatus, Prisma, StaffRole, student_status } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
@@ -934,12 +935,10 @@ export class NoticeBoardService {
     }
     if (contentChanged && post.posted_by !== user.sub) {
       const what = this._authorNoun(updated);
-      this._notifyAuthor(
-        updated,
-        'NOTICE_EDITED',
-        `Your ${what} was edited`,
-        `"${this._postLabel(updated)}" was edited by ${changedBy ?? 'an admin'}. Open it to see what changed.`,
-      );
+      this._notifyAuthor(updated, 'NOTICE_EDITED', 'notif_staff_notice_edited', {
+        title: 'Your {kind} was edited',
+        body: '"{label}" was edited by {changed_by}. Open it to see what changed.',
+      }, { kind: what, label: this._postLabel(updated), changed_by: changedBy ?? 'an admin' });
     }
 
     return updated;
@@ -1188,12 +1187,10 @@ export class NoticeBoardService {
     this._sendPostNotifications(post).catch((err) =>
       console.error('Notice board FCM dispatch failed:', err.message),
     );
-    this._notifyAuthor(
-      post,
-      'NOTICE_APPROVED',
-      `Your ${this._authorNoun(post)} was approved`,
-      `"${this._postLabel(post)}" was approved and is now live.`,
-    );
+    this._notifyAuthor(post, 'NOTICE_APPROVED', 'notif_staff_notice_approved', {
+      title: 'Your {kind} was approved',
+      body: '"{label}" was approved and is now live.',
+    }, { kind: this._authorNoun(post), label: this._postLabel(post) });
 
     await this.auditLogs.log({
       entity_type: 'NOTICE',
@@ -1213,12 +1210,10 @@ export class NoticeBoardService {
     if (!trimmed) throw new BadRequestException('A reason is required to reject a post.');
     const post = await this._decide(id, user, NoticePostStatus.REJECTED, trimmed);
 
-    this._notifyAuthor(
-      post,
-      'NOTICE_REJECTED',
-      `Your ${this._authorNoun(post)} was not approved`,
-      `"${this._postLabel(post)}" was not approved. Reason: ${trimmed}`,
-    );
+    this._notifyAuthor(post, 'NOTICE_REJECTED', 'notif_staff_notice_rejected', {
+      title: 'Your {kind} was not approved',
+      body: '"{label}" was not approved. Reason: {reason}',
+    }, { kind: this._authorNoun(post), label: this._postLabel(post), reason: trimmed });
 
     await this.auditLogs.log({
       entity_type: 'NOTICE',
@@ -1310,16 +1305,28 @@ export class NoticeBoardService {
    * TAFSD-429: tells the author their post was approved, rejected or edited —
    * under the webapp's bell, and in the staff app's notices with a push.
    */
-  private _notifyAuthor(post: { id: number; posted_by: string }, kind: string, title: string, body: string) {
-    void this.staffNotifications.notify(post.posted_by, {
-      kind,
-      title,
-      body,
-      link: `/notice-board?post=${post.id}`,
-      entityType: 'NOTICE',
-      entityId: String(post.id),
-      pushData: { post_id: String(post.id) },
-    });
+  private _notifyAuthor(
+    post: { id: number; posted_by: string },
+    kind: string,
+    /** TAFSD-514: Notification Templates base key; off = nothing sent. */
+    templateBase: string,
+    fallback: { title: string; body: string },
+    vars: Record<string, string>,
+  ) {
+    void renderNotification(this.prisma, templateBase, fallback, vars)
+      .then((text) => {
+        if (!text) return;
+        return this.staffNotifications.notify(post.posted_by, {
+          kind,
+          title: text.title,
+          body: text.body,
+          link: `/notice-board?post=${post.id}`,
+          entityType: 'NOTICE',
+          entityId: String(post.id),
+          pushData: { post_id: String(post.id) },
+        });
+      })
+      .catch((err) => console.error('Notice author notification failed:', err?.message));
   }
 
   /** "message" for a notification-only post, else "notice". */

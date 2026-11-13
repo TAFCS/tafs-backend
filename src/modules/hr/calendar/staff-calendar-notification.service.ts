@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { SATURDAY_CLASH_FALLBACK } from '../../../utils/notification-templates.util';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { CalendarDayResolverService } from './calendar-day-resolver.service';
 import { EmployeeNoticeBoardService } from '../../employee-notice-board/employee-notice-board.service';
@@ -127,28 +128,22 @@ export class StaffCalendarNotificationService {
         if (changeType !== 'REMOVED') {
           if (day.day_type === 'HOLIDAY' && !resolved.isWorkingDay && resolved.dayType === 'HOLIDAY') {
             const desc = resolved.description ?? day.description ?? 'Holiday';
-            await this.noticeBoard.createScheduleNotice(
-              emp.id,
-              emp.user_id,
-              'Day Off Marked',
-              `You're marked off on ${formattedDate} for ${desc}. Your attendance will show as Excused — no action needed.`,
-            );
+            await this.noticeBoard.createTemplatedScheduleNotice(emp.id, emp.user_id, 'notif_staff_day_off', {
+              title: 'Day Off Marked',
+              body: "You're marked off on {date} for {description}. Your attendance will show as Excused — no action needed.",
+            }, { date: formattedDate, description: desc });
           } else if (day.day_type === 'WORKDAY' && resolved.isWorkingDay) {
             const desc = day.description ?? 'a working day override';
-            await this.noticeBoard.createScheduleNotice(
-              emp.id,
-              emp.user_id,
-              'Working Day Notice',
-              `You're required to attend on ${formattedDate} (${desc}) — this day has been changed to a working day.`,
-            );
+            await this.noticeBoard.createTemplatedScheduleNotice(emp.id, emp.user_id, 'notif_staff_working_day', {
+              title: 'Working Day Notice',
+              body: "You're required to attend on {date} ({description}) — this day has been changed to a working day.",
+            }, { date: formattedDate, description: desc });
           }
         } else if (previousDayType === 'HOLIDAY' && resolved.isWorkingDay) {
-          await this.noticeBoard.createScheduleNotice(
-            emp.id,
-            emp.user_id,
-            'Day Off Cancelled',
-            `The day off on ${formattedDate} has been cancelled — you're now expected to attend as normal.`,
-          );
+          await this.noticeBoard.createTemplatedScheduleNotice(emp.id, emp.user_id, 'notif_staff_day_off_cancelled', {
+            title: 'Day Off Cancelled',
+            body: "The day off on {date} has been cancelled — you're now expected to attend as normal.",
+          }, { date: formattedDate });
         }
       } catch (err: any) {
         // One employee's notice failing (e.g. a transient DB error) shouldn't stop
@@ -169,11 +164,12 @@ export class StaffCalendarNotificationService {
     if (!employee?.user_id) return;
 
     const formattedDate = formatDatePKT(date);
-    await this.noticeBoard.createScheduleNotice(
+    await this.noticeBoard.createTemplatedScheduleNotice(
       employeeId,
       employee.user_id,
-      'Attendance Required Despite Day Off',
-      `You have a day off marked for ${formattedDate}, but a mandatory Saturday assignment takes priority — please check in as usual.`,
+      'notif_staff_saturday_clash',
+      SATURDAY_CLASH_FALLBACK,
+      { dates: formattedDate },
     );
   }
 }

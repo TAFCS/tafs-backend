@@ -48,6 +48,7 @@ function setup(opts: Opts) {
     },
   };
   const upsert = jest.fn(async () => ({}));
+  const staffNotifications = { notify: jest.fn(async () => undefined) };
   const prisma: any = {
     attendance_objections: {
       findUnique: jest.fn(async () => existing),
@@ -77,11 +78,12 @@ function setup(opts: Opts) {
         graceMinutes: 10,
       })),
     } as any,
+    staffNotifications as any,
   );
   const user = { sub: 'hr1', role: 'HR', campusId: 2 } as any;
   const accept = () => svc.review(1, { status: AttendanceObjectionStatus.ACCEPTED, admin_notes: 'ok' } as any, user);
   const saved = () => (upsert.mock.calls[0] as any)[0].update;
-  return { accept, saved, upsert };
+  return { accept, saved, upsert, staffNotifications };
 }
 
 describe('TAFSD-479: accepting a missing clock-out', () => {
@@ -197,6 +199,7 @@ describe('TAFSD-490: raising a whole-day objection', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
   const base = { attendance_date: '2026-11-05', claimed_time: '2026-11-05T08:00:00Z', reason: 'Device was down' };
 
@@ -210,5 +213,21 @@ describe('TAFSD-490: raising a whole-day objection', () => {
     await expect(
       svc().create('u9', { ...base, scan_id: 5, claimed_check_out_time: '2026-11-05T16:00:00Z' } as any),
     ).rejects.toThrow('only for a whole-day objection');
+  });
+});
+
+describe('TAFSD-513 (item 68): the decision reaches the staff app notice inbox', () => {
+  it('accepting sends a staff notification (notice + push) that opens My objections', async () => {
+    const t = setup({ scans: ['08:05'], objectTo: 0, direction: 'IN', claimed: '07:55' });
+    await t.accept();
+    expect(t.staffNotifications.notify).toHaveBeenCalledWith(
+      'u9',
+      expect.objectContaining({
+        kind: 'OBJECTION_ACCEPTED',
+        title: 'Attendance objection accepted',
+        body: expect.stringContaining('Your attendance objection for'),
+        pushData: expect.objectContaining({ route: '/my-objections', objection_id: '1' }),
+      }),
+    );
   });
 });

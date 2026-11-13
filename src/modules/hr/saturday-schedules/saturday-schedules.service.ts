@@ -19,8 +19,10 @@ import {
   ListSaturdaySchedulesQueryDto,
 } from './dto/saturday-schedules.dto';
 import {
-  resolveTemplate,
+  SATURDAY_CLASH_FALLBACK,
   isTemplateDisabled,
+  renderNotification,
+  resolveTemplate,
 } from '../../../utils/notification-templates.util';
 import { actionsCover } from '../../access/tiles.manifest';
 import {
@@ -335,12 +337,24 @@ export class SaturdaySchedulesService {
           affectedCampusIds.add(row.employee_profiles.campus_id);
       }
 
-      for (const campusId of affectedCampusIds) {
+      // TAFSD-514: text from the Notification Templates page; off = no broadcast.
+      const broadcast = affectedCampusIds.size
+        ? await renderNotification(
+            this.prisma,
+            'notif_staff_saturday_broadcast',
+            {
+              title: 'Mandatory Saturday Attendance — {month}',
+              body: 'Saturday attendance schedules for {month} have been updated. Please check your assigned dates in the employee app.',
+            },
+            { month: monthLabel },
+          )
+        : null;
+      for (const campusId of broadcast ? affectedCampusIds : []) {
         void this.noticeBoard
           .createPost(
             {
-              title: `Mandatory Saturday Attendance — ${monthLabel}`,
-              body: `Saturday attendance schedules for ${monthLabel} have been updated. Please check your assigned dates in the employee app.`,
+              title: broadcast!.title,
+              body: broadcast!.body,
               target_roles: [StaffRole.TEACHER],
               campus_ids: [campusId],
             },
@@ -380,11 +394,12 @@ export class SaturdaySchedulesService {
           conflictDatesByEmployee.get(conflict.employee_id) ?? [];
         const conflictDateLabel = this.formatSaturdayList(conflictDates);
         void this.noticeBoard
-          .createScheduleNotice(
+          .createTemplatedScheduleNotice(
             conflict.employee_id,
             userId,
-            'Attendance Required Despite Day Off',
-            `You have a day off marked for ${conflictDateLabel}, but a mandatory Saturday assignment takes priority — please check in as usual.`,
+            'notif_staff_saturday_clash',
+            SATURDAY_CLASH_FALLBACK,
+            { dates: conflictDateLabel },
           )
           .catch((err) =>
             console.error(
@@ -521,11 +536,15 @@ export class SaturdaySchedulesService {
 
     if (existing.employee_profiles.user_id) {
       void this.noticeBoard
-        .createScheduleNotice(
+        .createTemplatedScheduleNotice(
           existing.employee_id,
           existing.employee_profiles.user_id,
-          'Saturday Attendance Cancelled',
-          `You're no longer required to attend on ${this.formatSaturdayList([existing.date])} — this Saturday has been removed from your schedule.`,
+          'notif_staff_saturday_removed',
+          {
+            title: 'Saturday Attendance Cancelled',
+            body: "You're no longer required to attend on {date} — this Saturday has been removed from your schedule.",
+          },
+          { date: this.formatSaturdayList([existing.date]) },
         )
         .catch((err) =>
           console.error(

@@ -16,6 +16,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FcmService } from '../../common/fcm/fcm.service';
+import { StaffNotificationsService } from '../staff-notifications/staff-notifications.service';
+import { clause, renderNotification } from '../../utils/notification-templates.util';
 import { EmployeeProfileResolverService } from '../hr/employee-profile-resolver.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
 import { ScopeService } from '../../common/scope/scope.service';
@@ -37,6 +39,7 @@ export class AttendanceObjectionsService {
     private readonly auditLogs: AuditLogsService,
     private readonly scope: ScopeService,
     private readonly expectedTimes: EmployeeExpectedTimesService,
+    private readonly staffNotifications: StaffNotificationsService,
   ) {}
 
   private parseDate(dateStr: string): Date {
@@ -417,30 +420,41 @@ export class AttendanceObjectionsService {
       }
     }
 
-    // Notify the employee directly via FCM
+    // TAFSD-513 (item 68): the decision lands in the staff app's notice inbox
+    // with a push (StaffNotificationsService), with Notification Templates text.
     if (existing.employee.user_id) {
       const isAccepted = dto.status === AttendanceObjectionStatus.ACCEPTED;
       const dateLabel = existing.attendance_date.toISOString().slice(0, 10);
-      const title = isAccepted
-        ? 'Attendance objection accepted'
-        : 'Attendance objection rejected';
-      const body = isAccepted
-        ? `Your attendance objection for ${dateLabel} was accepted.${dto.admin_notes?.trim() ? ` Note: ${dto.admin_notes.trim()}` : ''}`
-        : `Your attendance objection for ${dateLabel} was rejected.${dto.admin_notes?.trim() ? ` Reason: ${dto.admin_notes.trim()}` : ''}`;
-
-      await this.fcmService.sendToUsers(
-        [existing.employee.user_id],
-        title,
-        body,
+      const outcome = isAccepted ? 'accepted' : 'rejected';
+      const text = await renderNotification(
+        this.prisma,
+        `notif_staff_objection_${outcome}`,
+        isAccepted
+          ? { title: 'Attendance objection accepted', body: 'Your attendance objection for {date} was accepted.{note_clause}' }
+          : { title: 'Attendance objection rejected', body: 'Your attendance objection for {date} was rejected.{note_clause}' },
         {
-          type: 'attendance_objection_decision',
-          status: dto.status,
-          objection_id: String(id),
           date: dateLabel,
-          route: '/my-objections',
-          click_action: 'FLUTTER_NOTIFICATION_CLICK',
+          note: dto.admin_notes?.trim() ?? '',
+          note_clause: clause(isAccepted ? 'Note' : 'Reason', dto.admin_notes),
         },
       );
+      if (text) {
+        await this.staffNotifications.notify(existing.employee.user_id, {
+          kind: `OBJECTION_${outcome.toUpperCase()}`,
+          title: text.title,
+          body: text.body,
+          link: '/hr/attendance-objections',
+          entityType: 'ATTENDANCE_OBJECTION',
+          entityId: String(id),
+          pushData: {
+            status: dto.status,
+            objection_id: String(id),
+            date: dateLabel,
+            route: '/my-objections',
+            click_action: 'FLUTTER_NOTIFICATION_CLICK',
+          },
+        });
+      }
     }
 
     const employeeLabel = updated.employee.full_name
@@ -518,10 +532,18 @@ export class AttendanceObjectionsService {
     if (userIds.length === 0) return;
 
     const dateLabel = date.toISOString().slice(0, 10);
+    // TAFSD-514: text from the Notification Templates page.
+    const text = await renderNotification(
+      this.prisma,
+      'notif_staff_objection_new',
+      { title: 'Attendance objection filed', body: '{employee_name} filed an objection for {date}' },
+      { employee_name: employeeName, date: dateLabel },
+    );
+    if (!text) return;
     await this.fcmService.sendToUsers(
       userIds,
-      'Attendance objection filed',
-      `${employeeName} filed an objection for ${dateLabel}`,
+      text.title,
+      text.body,
       {
         type: 'attendance_objection',
         date: dateLabel,

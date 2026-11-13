@@ -9,6 +9,7 @@ import {
   UnprocessableEntityException,
   forwardRef,
 } from '@nestjs/common';
+import { renderNotification } from '../../utils/notification-templates.util';
 import {
   ChatMessageType,
   MessageStatus,
@@ -1083,13 +1084,21 @@ export class SupportTicketsService {
     recipients.delete(mover.sub);
     if (recipients.size === 0) return;
     const requester = ticket.students?.full_name?.trim() || ticket.families?.household_name?.trim() || null;
-    const body = [requester, ticket.subtopic?.trim(), reason.slice(0, 80)].filter(Boolean).join(' · ');
-    await this.fcmService.sendToUsers(
-      [...recipients],
-      ticket.current_assignee_id ? 'Support ticket moved to you' : `Support ticket moved to ${toLabel}`,
-      body || 'A support ticket was moved to you',
-      { type: 'SUPPORT_TICKET_MOVED', ticketId: ticket.id },
+    const summary = [requester, ticket.subtopic?.trim(), reason.slice(0, 80)].filter(Boolean).join(' · ');
+    // TAFSD-514: fixed text from the Notification Templates page; {summary} is the parent's words.
+    const text = await renderNotification(
+      this.prisma,
+      ticket.current_assignee_id ? 'notif_staff_ticket_moved_to_you' : 'notif_staff_ticket_moved_to_desk',
+      ticket.current_assignee_id
+        ? { title: 'Support ticket moved to you', body: '{summary}' }
+        : { title: 'Support ticket moved to {desk}', body: '{summary}' },
+      { desk: toLabel, summary: summary || 'A support ticket was moved to you' },
     );
+    if (!text) return;
+    await this.fcmService.sendToUsers([...recipients], text.title, text.body, {
+      type: 'SUPPORT_TICKET_MOVED',
+      ticketId: ticket.id,
+    });
   }
 
   async createStaffMessage(
@@ -2190,14 +2199,18 @@ export class SupportTicketsService {
   ) {
     if (this.chatGateway.isParentInTicketRoom(ticket.id)) return;
 
-    const trimmedNote = note?.trim();
-    const body =
-      trimmedNote ||
-      (ticket.subtopic
-        ? `Your query “${ticket.subtopic}” has been closed.`
-        : 'Your support query has been closed.');
+    // TAFSD-514: text from the Notification Templates page. A closing note the
+    // staff member wrote replaces the body, as before.
+    const text = await renderNotification(
+      this.prisma,
+      'notif_ticket_closed',
+      { title: 'Query closed', body: 'Your support query{topic_clause} has been closed.' },
+      { topic: ticket.subtopic?.trim() ?? '', topic_clause: ticket.subtopic?.trim() ? ` “${ticket.subtopic.trim()}”` : '' },
+    );
+    if (!text) return;
+    const body = note?.trim() || text.body;
 
-    await this.fcmService.sendToFamily(ticket.family_id, 'Query closed', body, {
+    await this.fcmService.sendToFamily(ticket.family_id, text.title, body, {
       type: 'SUPPORT_TICKET_CLOSED',
       ticketId: ticket.id,
     });
@@ -2246,15 +2259,18 @@ export class SupportTicketsService {
       Boolean,
     );
 
-    await this.fcmService.sendToUsers(
-      [...recipientIds],
-      'New support ticket',
-      bodyParts.join(' · ') || 'A parent opened a new support ticket',
-      {
-        type: 'SUPPORT_TICKET_CREATED',
-        ticketId: ticket.id,
-      },
+    // TAFSD-514: fixed text from the Notification Templates page; {summary} is the parent's words.
+    const text = await renderNotification(
+      this.prisma,
+      'notif_staff_ticket_new',
+      { title: 'New support ticket', body: '{summary}' },
+      { summary: bodyParts.join(' · ') || 'A parent opened a new support ticket' },
     );
+    if (!text) return;
+    await this.fcmService.sendToUsers([...recipientIds], text.title, text.body, {
+      type: 'SUPPORT_TICKET_CREATED',
+      ticketId: ticket.id,
+    });
   }
 
   private assertCanPostToTicket(

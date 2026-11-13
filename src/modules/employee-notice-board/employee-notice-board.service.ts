@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { renderNotification } from '../../utils/notification-templates.util';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { FcmService } from '../../common/fcm/fcm.service';
@@ -322,11 +323,36 @@ export class EmployeeNoticeBoardService {
   }
 
   /**
+   * TAFSD-514: a schedule notice whose text comes from the Notification
+   * Templates page (`<base>_title` / `_body`). Sends nothing when that
+   * notification is switched off.
+   */
+  async createTemplatedScheduleNotice(
+    employeeId: number,
+    userId: string,
+    base: string,
+    fallback: { title: string; body: string },
+    vars: Record<string, string>,
+  ) {
+    const text = await renderNotification(this.prisma, base, fallback, vars);
+    if (!text) return null;
+    return this.createScheduleNotice(employeeId, userId, text.title, text.body);
+  }
+
+  /**
    * Same personal, single-recipient notice pattern as createAttendanceNotice,
    * for anything else addressed to one staff member (TAFSD-429: their notice
    * board post was approved, rejected or edited). `label` names it in the audit log.
    */
-  async createPersonalNotice(employeeId: number, userId: string, title: string, body: string, label: string) {
+  async createPersonalNotice(
+    employeeId: number,
+    userId: string,
+    title: string,
+    body: string,
+    label: string,
+    /** TAFSD-513: extra push data (e.g. a route to open); `type` stays EMPLOYEE_NOTICE. */
+    pushData: Record<string, string> = {},
+  ) {
     const post = await this.prisma.employee_notice_posts.create({
       data: { posted_by: userId, employee_id: employeeId, title, body },
     });
@@ -341,7 +367,7 @@ export class EmployeeNoticeBoardService {
     });
 
     void this.fcmService
-      .sendToUsers([userId], title, body, { type: 'EMPLOYEE_NOTICE', postId: String(post.id) })
+      .sendToUsers([userId], title, body, { ...pushData, type: 'EMPLOYEE_NOTICE', postId: String(post.id) })
       .catch((err) => console.error(`[EmployeeNoticeBoard] ${label} notice FCM send failed:`, err?.message));
 
     return post;

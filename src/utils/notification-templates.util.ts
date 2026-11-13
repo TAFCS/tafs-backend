@@ -74,9 +74,41 @@ export async function resolveTemplate(
 
   try {
     const row = await prisma.app_config.findUnique({ where: { key } });
-    setCache(key, row?.value ?? null);
-    return interpolate(row?.value ?? fallback, vars);
+    // A template saved blank falls back to the default instead of sending an empty push.
+    const value = row?.value?.trim() ? row.value : null;
+    setCache(key, value);
+    return interpolate(value ?? fallback, vars);
   } catch {
     return interpolate(fallback, vars);
   }
 }
+
+/**
+ * TAFSD-513: a notification's title and body from its templates
+ * (`<base>_title`, `<base>_body`), or null when it's switched off on the
+ * Notification Templates page (`<base>_disabled`).
+ */
+export async function renderNotification(
+  prisma: PrismaService,
+  base: string,
+  fallback: { title: string; body: string },
+  vars: Record<string, string> = {},
+): Promise<{ title: string; body: string } | null> {
+  const titleKey = `${base}_title`;
+  if (await isTemplateDisabled(prisma, titleKey)) return null;
+  const [title, body] = await Promise.all([
+    resolveTemplate(prisma, titleKey, fallback.title, vars),
+    resolveTemplate(prisma, `${base}_body`, fallback.body, vars),
+  ]);
+  return { title, body };
+}
+
+/** " Reason: …" (or another label) when there is text, else "", for `{…_clause}` variables. */
+export const clause = (label: string, text: string | null | undefined) =>
+  text?.trim() ? ` ${label}: ${text.trim()}` : '';
+
+/** TAFSD-514: shared by the Saturday schedule and staff calendar paths. */
+export const SATURDAY_CLASH_FALLBACK = {
+  title: 'Attendance Required Despite Day Off',
+  body: 'You have a day off marked for {dates}, but a mandatory Saturday assignment takes priority — please check in as usual.',
+};
