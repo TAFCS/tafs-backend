@@ -50,7 +50,6 @@ export class StudentsController {
     'hr.register_employee',
     'hr.employee_loans',
     'hr.security_deposits',
-    'attendance.quick_check_in',
     'attendance.student_attendance',
     'attendance.teaching_groups',
     'attendance.zk_device_logs',

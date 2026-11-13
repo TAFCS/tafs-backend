@@ -757,13 +757,6 @@ const STUDENT_ATTENDANCE_CYCLE_ACTIONS: TileAction[] = [
 ];
 
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
-const QUICK_CHECK_IN_ACTIONS: TileAction[] = [
-  { id: 'view', label: 'Open Quick Check-In', description: 'Look a student up and see today\'s state', default: true },
-
-  { id: 'scan', label: 'Record a manual check-in or check-out', implies: ['view'] },
-];
-
-// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const ALEVEL_ROLL_CALL_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open A-Level Roll Call', description: 'See roll sessions', default: true },
 
@@ -1042,7 +1035,6 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'attendance.leave_requests', module: 'attendance', label: 'Leave Requests', description: 'Review employee leave applications', href: '/hr/leaves', group: 'Employees', capabilities: ['hr.leave.approve'], actions: LEAVE_REQUESTS_ACTIONS, legacyFullAccessCapabilities: ['hr.leave.approve'] },
   { id: 'attendance.student_attendance', module: 'attendance', label: 'Student Attendance', description: 'Per-class attendance records', href: '/hr/student-attendance-dashboard', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: STUDENT_ATTENDANCE_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
   { id: 'attendance.student_attendance_cycle', module: 'attendance', label: 'Student Attendance by Cycle', description: 'Student lines and punch matrix over a date range', href: '/hr/student-attendance-dashboard/cycle', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: STUDENT_ATTENDANCE_CYCLE_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
-  { id: 'attendance.quick_check_in', module: 'attendance', label: 'Quick Check-In', description: 'Filter, search, and punch students in or out � including default absents', href: '/attendance/quick-check-in', group: 'Students', capabilities: ['attendance.student.rollcall.mark'], actions: QUICK_CHECK_IN_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
   { id: 'attendance.alevel_roll_call', module: 'attendance', label: 'A-Level Roll Call', description: 'A-level section marking', href: '/hr/roll-call', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: ALEVEL_ROLL_CALL_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
   { id: 'attendance.timetables', module: 'attendance', label: 'Timetables', description: 'Weekly schedules and O/A-Level makeup reschedules', href: '/hr/timetables', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'], actions: TIMETABLES_ACTIONS, legacyFullAccessCapabilities: ['hr.timetable.manage'] },
   { id: 'attendance.teaching_groups', module: 'attendance', label: 'Teaching Groups', description: 'Subject classes and student subject enrollment', href: '/hr/teaching-groups', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'], actions: TEACHING_GROUPS_ACTIONS, legacyFullAccessCapabilities: ['hr.timetable.manage'] },

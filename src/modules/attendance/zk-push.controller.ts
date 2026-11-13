@@ -243,7 +243,6 @@ export class ZkLogsController {
     'attendance.employee_attendance_cycle',
     'attendance.student_attendance',
     'attendance.student_attendance_cycle',
-    'attendance.quick_check_in',
   )
   async getDeviceHealth(@CurrentUser() user: IJwtStaffPayload) {
     let campusCodes: string[] | null = null;

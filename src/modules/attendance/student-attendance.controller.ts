@@ -16,7 +16,6 @@ import {
   GetStudentAttendanceMatrixQueryDto,
   BulkManualStudentAttendanceDto,
   GetStudentTimelineQueryDto,
-  ManualStudentScanDto,
   ResolveStudentAttendanceDto,
 } from './dto/student-attendance.dto';
 
@@ -95,34 +94,6 @@ export class StudentAttendanceController {
     return createApiResponse(data, HttpStatus.OK, 'Student attendance timeline retrieved');
   }
 
-  /** Gate-desk panel: today's punch state for one student. */
-  @Get(':studentCc/quick-check')
-  @CheckPolicies((ability) => ability.can(Action.Read, 'RollSession'))
-  @RequireAction('attendance.quick_check_in#view')
-  async getQuickCheckState(
-    @Param('studentCc', ParseIntPipe) studentCc: number,
-    @CurrentUser() user: IJwtStaffPayload,
-  ) {
-    const data = await this.studentAttendanceService.getQuickCheckState(studentCc, user);
-    return createApiResponse(data, HttpStatus.OK, 'Student check-in state retrieved');
-  }
-
-  /** Gate-desk panel: record a check-in or check-out at the current time. */
-  @Post(':studentCc/quick-check')
-  @CheckPolicies((ability) => ability.can(Action.Update, 'RollSession'))
-  @RequireAction('attendance.quick_check_in#scan')
-  async manualScan(
-    @Param('studentCc', ParseIntPipe) studentCc: number,
-    @Body() dto: ManualStudentScanDto,
-    @CurrentUser() user: IJwtStaffPayload,
-  ) {
-    const data = await this.studentAttendanceService.manualScan(studentCc, dto, user);
-    return createApiResponse(
-      data,
-      HttpStatus.CREATED,
-      data.direction === 'IN' ? 'Student checked in' : 'Student checked out',
-    );
-  }
 
   @Put(':studentCc/resolve')
   @CheckPolicies((ability) => ability.can(Action.Update, 'RollSession'))
