@@ -12,7 +12,7 @@ import { applyStudentScope } from '../../common/staff-scope';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 
 const SECTION_ENTITY_TYPES: Record<string, string[]> = {
-  student: ['STUDENT', 'GUARDIAN', 'FAMILY', 'TRANSFER', 'STUDENT_FLAG', 'STUDENT_DOCUMENT'],
+  student: ['STUDENT', 'GUARDIAN', 'FAMILY', 'TRANSFER', 'STUDENT_FLAG', 'STUDENT_DOCUMENT', 'EXAM_SCHEDULE', 'EXAM_DOCUMENT'],
   finance: [
     'VOUCHER',
     'DEPOSIT',
