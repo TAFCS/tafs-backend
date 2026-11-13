@@ -112,7 +112,17 @@ change makes one false, the change is wrong, not the rule.
     false, and what reached fees is `total_amount - excess_amount`. Never sum
     `total_amount` as money without choosing one. See **Rule E**.
     `npm test -- family-credit`.
-14. `npx tsc --noEmit -p tsconfig.build.json` is clean.
+14. **One live voucher per fee head (TAFSD-511)** — `create()` and
+    `splitPartiallyPaid()` both call `_assertHeadsNotOnOtherLiveVoucher` and
+    refuse a head still owed on a live voucher they don't supersede (an
+    earlier fee date issued after a later voucher used to leave both live, so
+    paying one left the other billing the same fees — CC 8144). Deleting a
+    voucher (`forceRemove`, `_destroyVoucherInTx` STEP 6) never resets a head
+    another non-VOID voucher holds; it re-derives it from the allocations left.
+    `npm test -- shared-live-heads`, `scripts/verify-shared-live-heads.ts`
+    (local DB only), `scripts/audit-shared-live-heads.ts` (read-only) lists any
+    old overlaps.
+15. `npx tsc --noEmit -p tsconfig.build.json` is clean.
 
 ---
 

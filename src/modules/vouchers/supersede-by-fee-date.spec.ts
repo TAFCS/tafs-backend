@@ -229,9 +229,11 @@ describe('VouchersService — supersession by fee date', () => {
           updateMany: txVouchersUpdateMany,
         },
         voucher_heads: {
-          findMany: jest
-            .fn()
-            .mockResolvedValue([{ student_fee_id: 4242, student_fees: sf() }]),
+          // TAFSD-511 clash check (filters on the other voucher's status): the
+          // superseded vouchers are excluded by id, so nothing else holds 4242.
+          findMany: jest.fn().mockImplementation((args: any) =>
+            Promise.resolve(args?.where?.vouchers ? [] : [{ student_fee_id: 4242, student_fees: sf() }]),
+          ),
           createMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
         student_fees: {

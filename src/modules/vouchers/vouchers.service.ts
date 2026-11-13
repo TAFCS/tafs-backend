@@ -652,6 +652,58 @@ export class VouchersService {
         return { voidVoucherIds, absorbFeeIds: [...absorb], meta };
     }
 
+    /**
+     * TAFSD-511: a fee head is billed on one live voucher at a time. Refuses when
+     * any of `feeIds` still owed (not PAID / WAIVED / a discount) already sits on
+     * a live voucher (UNPAID / OVERDUE / EXPIRED / PARTIALLY_PAID) outside
+     * `exceptVoucherIds`: the vouchers this issue supersedes, or the voucher
+     * being split.
+     *
+     * Supersession only voids vouchers with fee_date on or before the new one, so
+     * issuing an earlier fee date after a later voucher used to leave both live
+     * with the same heads. Paying one then left the other billing them again
+     * (CC 8144: Dec voucher #14238 kept the Nov heads paid through #14239).
+     */
+    private async _assertHeadsNotOnOtherLiveVoucher(
+        client: Prisma.TransactionClient,
+        feeIds: number[],
+        exceptVoucherIds: number[],
+    ): Promise<void> {
+        if (feeIds.length === 0) return;
+        const clashes = await client.voucher_heads.findMany({
+            where: {
+                student_fee_id: { in: feeIds },
+                ...(exceptVoucherIds.length ? { voucher_id: { notIn: exceptVoucherIds } } : {}),
+                vouchers: { status: { in: ['UNPAID', 'OVERDUE', 'EXPIRED', 'PARTIALLY_PAID'] } },
+                student_fees: { is_discount: false, status: { notIn: ['PAID', 'WAIVED', 'DISCOUNT'] } },
+            },
+            select: {
+                voucher_id: true,
+                student_fees: {
+                    select: { id: true, fee_date: true, target_month: true, academic_year: true, fee_types: { select: { description: true } } },
+                },
+                vouchers: { select: { voucher_number: true, fee_date: true, status: true } },
+            },
+            orderBy: [{ voucher_id: 'asc' }, { student_fee_id: 'asc' }],
+        });
+        if (clashes.length === 0) return;
+
+        const byVoucher = new Map<number, typeof clashes>();
+        for (const c of clashes) byVoucher.set(c.voucher_id, [...(byVoucher.get(c.voucher_id) ?? []), c]);
+        const parts = [...byVoucher.entries()].map(([vid, rows]) => {
+            const v = rows[0].vouchers;
+            const fd = v?.fee_date ? new Date(v.fee_date).toISOString().slice(0, 10) : 'no fee date';
+            const heads = rows
+                .map((r) => `${r.student_fees?.fee_types?.description ?? 'Fee'} ${this.feeHeadPeriodLabel(r.student_fees)}`)
+                .join(', ');
+            return `voucher #${vid} (no. ${v?.voucher_number || 'N/A'}, ${v?.status}, fee date ${fd}) already bills ${heads}`;
+        });
+        throw new BadRequestException(
+            `These fees are already on another unpaid voucher: ${parts.join('; ')}. ` +
+            `Issuing this one would bill them twice. Delete or regenerate that voucher first.`,
+        );
+    }
+
     // PAY IMMEDIATELY frontend enabler — see CLAUDE.md. Gated behind
     // app_config.pay_immediately_enabled so the auto-detection can be
     // deployed dormant (seeded 'false') and switched on later from
@@ -873,6 +925,11 @@ export class VouchersService {
             for (const fid of supersession.absorbFeeIds) {
                 if (!finalOrderedFeeIds.includes(fid)) finalOrderedFeeIds.push(fid);
             }
+
+            // 1.a.iii TAFSD-511: nothing on this voucher may still be owed on a live
+            // voucher that the supersession above leaves standing (one with a
+            // later fee date). Mirrored in splitPartiallyPaid().
+            await this._assertHeadsNotOnOtherLiveVoucher(tx, finalOrderedFeeIds, supersession.voidVoucherIds);
 
             // 1.b Fetch the fees to be included in the voucher
             const feeRecords = await tx.student_fees.findMany({
@@ -5620,6 +5677,14 @@ export class VouchersService {
         if (unpaidHeadRows.length === 0) {
             throw new BadRequestException('No lines could be placed on the unpaid voucher.');
         }
+        // TAFSD-511, mirrors create() step 1.a.iii: the balance voucher may not bill
+        // a head another live voucher still bills. Only the voucher being split
+        // (voided by this split) is allowed to hold them.
+        await this._assertHeadsNotOnOtherLiveVoucher(
+            this.prisma,
+            unpaidHeadRows.map((r) => r.student_fee_id),
+            [voucherId],
+        );
 
         const issueDate = new Date(dto.issue_date);
         let dueDate = new Date(dto.due_date);
@@ -7077,12 +7142,29 @@ export class VouchersService {
 
         // No other status guard — allows deleting PAID/PARTIALLY_PAID
 
+        let keptFeeIds: number[] = [];
         const result = await this.prisma.$transaction(async (tx) => {
             const heads = voucher.voucher_heads || [];
-            const regularFeeIds = heads.map(h => h.student_fee_id);
+            const allFeeIds = heads
+                .map(h => h.student_fee_id)
+                .filter((fid): fid is number => fid != null);
 
-            // 1. Reset regular student_fees to NOT_ISSUED (amount_paid included — a
-            //    "deleted/reversed" fee must not be left NOT_ISSUED with a stale paid amount).
+            // TAFSD-511: heads another non-VOID voucher carries (still billing them,
+            // or PAID for them) are not this voucher's to reset. Resetting them
+            // un-paid fees whose deposit sits on the other voucher.
+            const heldElsewhere = await this._feeIdsHeldElsewhereInTx(tx, id, allFeeIds);
+            keptFeeIds = allFeeIds.filter((fid) => heldElsewhere.has(fid));
+            const regularFeeIds = allFeeIds.filter((fid) => !heldElsewhere.has(fid));
+
+            // 1. Delete deposit_allocations for this voucher
+            await tx.deposit_allocations.deleteMany({
+                where: { voucher_id: id }
+            });
+
+            // 2. Reset this voucher's own student_fees to NOT_ISSUED (amount_paid
+            //    included — a "deleted/reversed" fee must not be left NOT_ISSUED with
+            //    a stale paid amount). Heads held elsewhere are re-derived from the
+            //    allocations that remain instead.
             if (regularFeeIds.length > 0) {
                 await tx.student_fees.updateMany({
                     where: { id: { in: regularFeeIds } },
@@ -7095,11 +7177,7 @@ export class VouchersService {
                     } as any
                 });
             }
-
-            // 2. Delete deposit_allocations for this voucher
-            await tx.deposit_allocations.deleteMany({
-                where: { voucher_id: id }
-            });
+            await this._recomputeFeesFromAllocationsInTx(tx, keptFeeIds);
 
             // 3. Delete voucher_heads
             await tx.voucher_heads.deleteMany({ where: { voucher_id: id } });
@@ -7113,12 +7191,15 @@ export class VouchersService {
             timeout: 15000,
         });
 
-        // Force-delete resets ALL of the voucher's heads (current + arrears) and does
-        // NOT reactivate any superseded voucher — record exactly that.
-        const forcedHeadPeriods = (voucher.voucher_heads || [])
-            .filter((h: any) => h.student_fee_id != null)
+        // Force-delete resets the voucher's heads (current + arrears), except those
+        // another voucher still holds (TAFSD-511), and does NOT reactivate any
+        // superseded voucher — record exactly that.
+        const keptSet = new Set(keptFeeIds);
+        const periodsOf = (keep: boolean) => (voucher.voucher_heads || [])
+            .filter((h: any) => h.student_fee_id != null && keptSet.has(h.student_fee_id) === keep)
             .map((h: any) => this.feeHeadPeriodLabel(h.student_fees ?? { id: h.student_fee_id }))
             .join(', ') || 'none';
+        const resetCount = (voucher.voucher_heads || []).filter((h: any) => h.student_fee_id != null && !keptSet.has(h.student_fee_id)).length;
         await this.auditLogs.log({
             entity_type: 'VOUCHER',
             entity_id: String(id),
@@ -7127,7 +7208,8 @@ export class VouchersService {
             student_id: voucher.student_id,
             note: [
                 `Voucher #${id} (no. ${voucher.voucher_number || 'N/A'}) FORCE-deleted (status guard bypassed; prior status: ${voucher.status ?? 'N/A'}).`,
-                `Reset ${(voucher.voucher_heads || []).length} fee head(s) to Not Issued: ${forcedHeadPeriods}`,
+                `Reset ${resetCount} fee head(s) to Not Issued: ${periodsOf(false)}`,
+                ...(keptSet.size ? [`Left ${keptSet.size} fee head(s) held by another voucher as they were: ${periodsOf(true)}`] : []),
                 `No superseded voucher was reactivated.`,
             ].join(' | '),
         });
@@ -7200,6 +7282,57 @@ export class VouchersService {
         }
 
         return { anyDeposit };
+    }
+
+    /**
+     * TAFSD-511: of `feeIds`, the ones another non-VOID voucher (live, or PAID
+     * for them) carries besides `voucherId`. Deleting `voucherId` must not reset
+     * those to NOT_ISSUED with nothing paid: that voucher still bills them, or
+     * holds the deposit that paid them.
+     */
+    private async _feeIdsHeldElsewhereInTx(tx: any, voucherId: number, feeIds: number[]): Promise<Set<number>> {
+        if (feeIds.length === 0) return new Set();
+        const rows = await tx.voucher_heads.findMany({
+            where: {
+                student_fee_id: { in: feeIds },
+                voucher_id: { not: voucherId },
+                vouchers: { status: { not: 'VOID' } },
+            },
+            select: { student_fee_id: true },
+        });
+        return new Set<number>(rows.map((r: any) => r.student_fee_id).filter((fid: any): fid is number => fid != null));
+    }
+
+    /**
+     * Re-derives student_fees.amount_paid / status from the deposit allocations
+     * that still stand (finance rule 7: reversal recomputes, never zeroes).
+     * Discount and WAIVED rows are left alone.
+     */
+    private async _recomputeFeesFromAllocationsInTx(tx: any, feeIds: number[]): Promise<void> {
+        if (feeIds.length === 0) return;
+        const remainingByFee = await tx.deposit_allocations.groupBy({
+            by: ['student_fee_id'],
+            where: { student_fee_id: { in: feeIds } },
+            _sum: { amount: true },
+        });
+        const remainingMap = new Map<number, Prisma.Decimal>(
+            remainingByFee.map((r: any) => [r.student_fee_id, new Prisma.Decimal(r._sum.amount ?? 0)]),
+        );
+        const fees = await tx.student_fees.findMany({
+            where: { id: { in: feeIds }, is_discount: false },
+            select: { id: true, amount: true, amount_paid: true, status: true },
+        });
+        for (const fee of fees) {
+            if (fee.status === 'WAIVED') continue;
+            const paid = remainingMap.get(fee.id) ?? new Prisma.Decimal(0);
+            const canon = new Prisma.Decimal(fee.amount ?? 0);
+            const status = paid.gte(canon) ? 'PAID' : paid.gt(0) ? 'PARTIALLY_PAID' : 'ISSUED';
+            if (new Prisma.Decimal(fee.amount_paid ?? 0).eq(paid) && fee.status === status) continue;
+            await tx.student_fees.update({
+                where: { id: fee.id },
+                data: { amount_paid: paid, status: status as any },
+            });
+        }
     }
 
     private async _destroyVoucherInTx(id: number, voucher: any, tx: any, reactivate: boolean, auditEvents?: VoucherAuditEvent[]): Promise<any> {
@@ -7492,11 +7625,17 @@ export class VouchersService {
         //         amount_paid must be zeroed too — otherwise a "reversed" fee ends up
         //         NOT_ISSUED while still carrying its old paid amount, corrupting the
         //         very ledger this whole deletion/reversal path exists to restore.
+        //         TAFSD-511: a head another non-VOID voucher still carries (live, or
+        //         PAID for it) is not this voucher's to reset. It is recomputed in
+        //         STEP 6b like a reactivated predecessor's, so a payment made through
+        //         that other voucher survives.
+        const heldElsewhereFeeIds = await this._feeIdsHeldElsewhereInTx(tx, id, allFeeIds);
         const regularCurrentFeeIds: number[] = currentHeads
             .map((h: any) => h.student_fee_id)
             .filter((fid: any): fid is number => fid !== null)
             .filter((fid: number) => !splitPaidFeeIds.includes(fid))
             .filter((fid: number) => !reactivatedHeadFeeIds.has(fid))
+            .filter((fid: number) => !heldElsewhereFeeIds.has(fid))
             .filter((fid: number) => !waivedHeadFeeIds.has(fid));
         if (regularCurrentFeeIds.length > 0) {
             await tx.student_fees.updateMany({
@@ -7517,36 +7656,13 @@ export class VouchersService {
         //          status must be re-derived from the allocations that survive — never left
         //          PAID with nothing behind it (finance rule 7: reversal recomputes). Same
         //          derivation as clearDeposit's recompute branch.
+        //          TAFSD-511: heads held by another non-VOID voucher go the same way.
         const sharedWithPredecessorFeeIds = allFeeIds.filter(
-            (fid) => reactivatedHeadFeeIds.has(fid)
+            (fid) => (reactivatedHeadFeeIds.has(fid) || (heldElsewhereFeeIds.has(fid) && currentFeeIdSet.has(fid)))
                 && !splitPaidFeeIds.includes(fid)
                 && !waivedHeadFeeIds.has(fid),
         );
-        if (sharedWithPredecessorFeeIds.length > 0) {
-            const remainingByFee = await tx.deposit_allocations.groupBy({
-                by: ['student_fee_id'],
-                where: { student_fee_id: { in: sharedWithPredecessorFeeIds } },
-                _sum: { amount: true },
-            });
-            const remainingMap = new Map<number, Prisma.Decimal>(
-                remainingByFee.map((r: any) => [r.student_fee_id, new Prisma.Decimal(r._sum.amount ?? 0)]),
-            );
-            const fees = await tx.student_fees.findMany({
-                where: { id: { in: sharedWithPredecessorFeeIds }, is_discount: false },
-                select: { id: true, amount: true, amount_paid: true, status: true },
-            });
-            for (const fee of fees) {
-                if (fee.status === 'WAIVED') continue;
-                const paid = remainingMap.get(fee.id) ?? new Prisma.Decimal(0);
-                const canon = new Prisma.Decimal(fee.amount ?? 0);
-                const status = paid.gte(canon) ? 'PAID' : paid.gt(0) ? 'PARTIALLY_PAID' : 'ISSUED';
-                if (new Prisma.Decimal(fee.amount_paid ?? 0).eq(paid) && fee.status === status) continue;
-                await tx.student_fees.update({
-                    where: { id: fee.id },
-                    data: { amount_paid: paid, status: status as any },
-                });
-            }
-        }
+        await this._recomputeFeesFromAllocationsInTx(tx, sharedWithPredecessorFeeIds);
 
         // STEP 7: Reactivate superseded VOID vouchers. Its heads and status are re-derived
         //         from the allocations that still stand on it: PARTIALLY_PAID if any payment
