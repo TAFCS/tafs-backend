@@ -16,7 +16,7 @@ export interface SeedSchedule {
     title: string;
     segment_line: string;
     reference_no: string;
-    dues_cleared_through: string;
+    fee_date: string;
     issue_from: string;
     /** class_id -> [date, subject][] ; '-' cells are left out. */
     grid: Record<number, [string, string][]>;
@@ -27,7 +27,8 @@ export interface SeedSchedule {
 const GEJ = 1;
 const YEAR = '2026-2027';
 const TIME = '8:00 – 11:30';
-const DUES = '2026-12-31';
+/** December's fee date: every head dated on or before it must be settled ("dues till December 2026"). */
+const DUES = '2026-12-01';
 const ISSUE = '2026-12-09';
 
 const C = { JR_I: 4, JR_II: 5, JR_III: 6, JR_IV: 7, JR_V: 8, SR_I: 9, SR_II: 10, SR_III: 11, O_I: 12, O_II: 13, O_III: 14, VI: 15, VII: 16, VIII: 17, IX: 18, X: 19 };
@@ -49,7 +50,7 @@ export const DEC_2026_SCHEDULES: SeedSchedule[] = [
         title: 'FIRST SEMESTER ASSESSMENTS',
         segment_line: 'JUNIOR CAMBRIDGE',
         reference_no: 'TAFSAL-0001/214465-234494/10/26',
-        dues_cleared_through: DUES,
+        fee_date: DUES,
         issue_from: ISSUE,
         time_text: TIME,
         grid: {
@@ -129,7 +130,7 @@ export const DEC_2026_SCHEDULES: SeedSchedule[] = [
         title: 'FIRST SEMESTER ASSESSMENTS',
         segment_line: 'SENIOR CAMBRIDGE',
         reference_no: 'TAFSAL-0001/214465-234494/10/26',
-        dues_cleared_through: DUES,
+        fee_date: DUES,
         issue_from: ISSUE,
         time_text: TIME,
         grid: {
@@ -168,7 +169,7 @@ export const DEC_2026_SCHEDULES: SeedSchedule[] = [
         title: 'PRE-MOCK & FIRST SEMESTER ASSESSMENTS',
         segment_line: 'O LEVELS',
         reference_no: 'TAFSAL-0001/214465-234494/10/26',
-        dues_cleared_through: DUES,
+        fee_date: DUES,
         issue_from: ISSUE,
         time_text: TIME,
         grid: {
@@ -209,7 +210,7 @@ export const DEC_2026_SCHEDULES: SeedSchedule[] = [
         title: 'FINAL MIDTERM ASSESSMENTS',
         segment_line: 'SECONDARY SEGMENT',
         reference_no: 'TAFSS-0001/214346-243295/10/26',
-        dues_cleared_through: DUES,
+        fee_date: DUES,
         issue_from: ISSUE,
         time_text: TIME,
         grid: {
@@ -241,7 +242,7 @@ export const DEC_2026_SCHEDULES: SeedSchedule[] = [
         title: 'PRELIMINARY ASSESSMENTS',
         segment_line: 'CLASSES IX & X',
         reference_no: 'TAFSS-0001/214561-2349/10/26',
-        dues_cleared_through: DUES,
+        fee_date: DUES,
         issue_from: ISSUE,
         time_text: TIME,
         grid: {
@@ -279,7 +280,7 @@ export function toUpsertBody(s: SeedSchedule) {
         title: s.title,
         segment_line: s.segment_line,
         reference_no: s.reference_no,
-        dues_cleared_through: s.dues_cleared_through,
+        fee_date: s.fee_date,
         issue_from: s.issue_from,
         notes: s.notes,
         class_ids: classIds,

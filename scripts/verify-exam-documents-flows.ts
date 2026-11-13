@@ -48,8 +48,8 @@ async function rejects(name: string, fn: () => Promise<unknown>, match: RegExp |
 const D = (s: string) => new Date(`${s}T00:00:00Z`);
 
 async function seed() {
-    await prisma.$executeRawUnsafe(`TRUNCATE exam_documents, exam_schedule_papers, exam_schedule_classes, exam_schedules,
-        voucher_arrear_surcharges, vouchers, student_fees, student_guardians, guardians, students, sections, classes, campuses, bank_accounts RESTART IDENTITY CASCADE`);
+    await prisma.$executeRawUnsafe(`TRUNCATE exam_documents, exam_schedule_fee_dates, exam_schedule_papers, exam_schedule_classes, exam_schedules,
+        voucher_arrear_surcharges, vouchers, student_fees, student_admissions, student_guardians, guardians, students, sections, classes, campuses, bank_accounts RESTART IDENTITY CASCADE`);
     await prisma.campuses.createMany({ data: [
         { id: 1, campus_code: 'GEJ', campus_name: 'Gulistan-e-Johar Campus', address: 'C 61-65 block 13 Gulistan e Jauhar' },
         { id: 2, campus_code: 'KNF', campus_name: 'Kaneez Fatima Campus' },
@@ -72,7 +72,9 @@ async function seed() {
         st(106, 'FARAH LEFT', 9, { status: 'LEFT' }),
         st(107, 'GHAZI SR-II', 10),
         st(108, 'HIRA KNF', 9, { campus_id: 2 }),
+        st(109, 'IQRA NOT BILLED', 9, { section_id: 2 }),
     ] });
+    await prisma.student_admissions.create({ data: { student_id: 101, academic_system: 'Cambridge', requested_grade: 'SR-I', discipline: 'Pre-Medical' } });
     await prisma.guardians.create({ data: { id: 1, full_name: 'KAMRAN SALEEM' } });
     await prisma.student_guardians.create({ data: { student_id: 101, guardian_id: 1, relationship: 'Father' } });
 
@@ -96,6 +98,9 @@ async function seed() {
         fee(104, '2026-12-01', 10000, 10000, 'PAID'),
         { ...fee(105, '2026-12-01', 0, 9000, 'PAID'), amount: null, amount_before_discount: 9000 },
         fee(107, '2026-12-01', 10000, 10000, 'PAID'),
+        // 109: November paid; December never put on a voucher. Owes, but only on a head the school hasn't billed.
+        fee(109, '2026-11-01', 10000, 10000, 'PAID'),
+        fee(109, '2026-12-01', 10000, 0, 'NOT_ISSUED'),
     ] });
     const v = await prisma.vouchers.create({ data: {
         student_id: 103, campus_id: 1, class_id: 9, bank_account_id: 1, issue_date: D('2026-12-01'), due_date: D('2026-12-10'),
@@ -112,7 +117,7 @@ async function seed() {
 
 const body = (over: any = {}) => ({
     campus_id: 1, academic_year: '2026-2027', title: 'FIRST SEMESTER ASSESSMENTS', segment_line: 'SENIOR CAMBRIDGE',
-    reference_no: 'TAFSAL-0001', dues_cleared_through: '2026-12-15', issue_from: '2099-01-01',
+    reference_no: 'TAFSAL-0001', fee_date: '2026-12-01', issue_from: '2099-01-01',
     notes: ['  Bring this every day.  ', '', 'No bags.'], class_ids: [9, 18],
     papers: [
         { class_id: 9, paper_date: '2026-12-11', time_text: '8:00 – 11:30', subject: 'CHEMISTRY' },
@@ -129,7 +134,7 @@ async function main() {
 
     console.log('Schedules');
     const s = await svc.createSchedule(body() as any, ADMIN);
-    check('saved as DRAFT, dues month stored as its last day', s.status === 'DRAFT' && s.dues_cleared_through === '2026-12-31', s);
+    check('saved as DRAFT with the exact fee date', s.status === 'DRAFT' && s.fee_date === '2026-12-01' && s.fee_date_label === '1 Dec 2026', s);
     check('blank notes dropped, others trimmed', JSON.stringify(s.notes) === JSON.stringify(['Bring this every day.', 'No bags.']));
     check('classes carry their document type', s.classes.find((c) => c.id === 18)?.doc_type === 'ADMIT_CARD' && s.classes.find((c) => c.id === 9)?.doc_type === 'STATEMENT_OF_ENTRY');
     await rejects('a paper for a class not on the schedule is refused', () => svc.createSchedule(body({ class_ids: [9] }) as any, ADMIN), /does not cover/);
@@ -142,19 +147,33 @@ async function main() {
     await rejects('nothing is issued before the issue date', () => svc.issue(s.id, { student_ids: [101] }, ADMIN), /can be issued from/);
     await svc.updateSchedule(s.id, body({ issue_from: '2026-01-01' }) as any, ADMIN);
 
-    console.log('Dues through December');
-    const dues = await svc.duesThrough([101, 102, 103, 104, 105], '2026-12-31');
+    console.log('Dues through the fee date');
+    const dues = await svc.duesThrough([101, 102, 103, 104, 105, 109], '2026-12-01');
     check('101 cleared: paid, discount and waived rows skipped, January ignored, VOID surcharge ignored', !dues.has(101), dues.get(101));
-    check('102 owes 6,000 + 10,000 (the unbilled December head counts)', dues.get(102)?.heads_outstanding === 16000 && dues.get(102)?.oldest_fee_date === '2026-11-01', dues.get(102));
+    check('102 owes 6,000 + 10,000 (the unbilled December head counts), 10,000 of it never billed', dues.get(102)?.heads_outstanding === 16000 && dues.get(102)?.not_billed_outstanding === 10000 && dues.get(102)?.oldest_fee_date === '2026-11-01', dues.get(102));
+    check('102 owed by month: Nov 6,000 billed, Dec 10,000 not billed', JSON.stringify(dues.get(102)?.months) === JSON.stringify([{ fee_date: '2026-11-01', billed: 6000, not_billed: 0 }, { fee_date: '2026-12-01', billed: 0, not_billed: 10000 }]), dues.get(102)?.months);
+    check('109 owes only on a head never billed', dues.get(109)?.heads_outstanding === 10000 && dues.get(109)?.not_billed_outstanding === 10000);
     check('103 owes only the 1,000 surcharge', dues.get(103)?.heads_outstanding === 0 && dues.get(103)?.surcharge_outstanding === 1000, dues.get(103));
     check('105 with a null amount falls back to amount_before_discount and is cleared', !dues.has(105));
 
     const r1 = await svc.roster(s.id, {}, ADMIN);
-    check('roster: 3 cleared, 2 blocked, 0 issued', r1.counts.CLEARED === 3 && r1.counts.BLOCKED === 2 && r1.counts.ISSUED === 0, r1.counts);
+    check('roster: 3 cleared, 2 blocked, 1 not billed, 0 issued', r1.counts.CLEARED === 3 && r1.counts.BLOCKED === 2 && r1.counts.NOT_BILLED === 1 && r1.counts.ISSUED === 0, r1.counts);
+    const row102 = r1.rows.find((r: any) => r.cc === 102);
+    check('102 is BLOCKED (part of it is billed) and its row splits billed 6,000 / not billed 10,000', row102?.state === 'BLOCKED' && row102?.billed_owed === 6000 && row102?.not_billed_owed === 10000, row102);
+    check('109 is NOT_BILLED with its fee date the schedule\'s', r1.rows.find((r: any) => r.cc === 109)?.state === 'NOT_BILLED' && r1.rows.find((r: any) => r.cc === 109)?.fee_date === '2026-12-01' && r1.rows.find((r: any) => r.cc === 109)?.own_fee_date === null);
+    check('roster not-billed total is 10,000', r1.not_billed_owed_total === 10000, r1.not_billed_owed_total);
     check('roster leaves out a LEFT student, another class and another campus', !r1.rows.some((r: any) => [106, 107, 108].includes(r.cc)));
     check('roster blocked total is 17,000', r1.blocked_owed_total === 17000, r1.blocked_owed_total);
     const r1f = await svc.roster(s.id, { states: ['BLOCKED'], class_ids: [9] } as any, ADMIN);
-    check('class filter narrows the counts; the state filter narrows only the list', r1f.rows.length === 2 && r1f.counts.CLEARED === 1 && r1f.counts.BLOCKED === 2, r1f.counts);
+    check('class filter narrows the counts; the state filter narrows only the list', r1f.rows.length === 2 && r1f.counts.CLEARED === 1 && r1f.counts.BLOCKED === 2 && r1f.counts.NOT_BILLED === 1, r1f.counts);
+    const rd = await svc.roster(s.id, { disciplines: ['Pre-Medical'] } as any, ADMIN);
+    check('discipline filter (Student Directory names) finds 101 only', rd.rows.length === 1 && rd.rows[0].cc === 101, rd.rows.map((r: any) => r.cc));
+    const rn = await svc.roster(s.id, { disciplines: ['none'] } as any, ADMIN);
+    check("'No discipline' finds everyone else", rn.rows.length === 5 && !rn.rows.some((r: any) => r.cc === 101));
+    const rm = await svc.roster(s.id, { missing: ['father'] } as any, ADMIN);
+    check('missing father finds everyone but 101', rm.rows.length === 5 && !rm.rows.some((r: any) => r.cc === 101));
+    const rp = await svc.roster(s.id, { has_photo: 'true' } as any, ADMIN);
+    check('has photo finds nobody here', rp.rows.length === 0);
     const r1q = await svc.roster(s.id, { q: 'bilal' } as any, ADMIN);
     check('server-side search finds by name', r1q.rows.length === 1 && r1q.rows[0].cc === 102);
 
@@ -166,6 +185,7 @@ async function main() {
     await rejects('a batch with a blocked student is refused whole, listing them', () => svc.issue(s.id, { student_ids: [101, 102] }, ADMIN), /DUES_NOT_CLEARED.*C\.C\. 102\) Rs 16,000/s);
     const docA2 = await prisma.exam_documents.findUnique({ where: { id: docA!.id } });
     check('and the refused batch did not reprint 101', docA2?.print_count === 1);
+    await rejects('a student who only owes unbilled fees is refused too, and told to generate the voucher', () => svc.issue(s.id, { student_ids: [109] }, ADMIN), /DUES_NOT_CLEARED.*not billed yet.*generate their vouchers first/s);
     await rejects('a LEFT student is refused', () => svc.issue(s.id, { student_ids: [106] }, ADMIN), /not enrolled/);
     await rejects('a class not on the schedule is refused', () => svc.issue(s.id, { student_ids: [107] }, ADMIN), /not on this schedule/);
     await rejects('another campus is refused', () => svc.issue(s.id, { student_ids: [108] }, ADMIN), /another campus/);
@@ -193,7 +213,41 @@ async function main() {
     await prisma.voucher_arrear_surcharges.updateMany({ where: { vouchers: { student_id: 103 } }, data: { amount_paid: 1000 } });
     const r2 = await svc.roster(s.id, {}, ADMIN);
     check('103 is cleared once the surcharge is paid', r2.rows.find((r: any) => r.cc === 103)?.state === 'CLEARED');
-    check('roster now: 1 cleared, 0 blocked, 4 issued', r2.counts.CLEARED === 1 && r2.counts.BLOCKED === 0 && r2.counts.ISSUED === 4, r2.counts);
+    check('roster now: 1 cleared, 0 blocked, 1 not billed, 4 issued', r2.counts.CLEARED === 1 && r2.counts.BLOCKED === 0 && r2.counts.NOT_BILLED === 1 && r2.counts.ISSUED === 4, r2.counts);
+
+    console.log('Fee dates');
+    const opts = await svc.feeDateOptions(s.id, ADMIN);
+    const dec = opts.options.find((o: any) => o.fee_date === '2026-12-01');
+    check('the picker lists December with its two unbilled heads (102, 109)', dec?.not_billed === 2 && opts.options[0].fee_date === '2027-01-01', opts.options);
+    const pv = await svc.previewFeeDate(s.id, { student_ids: [109, 101], fee_date: '2026-11-01' } as any, ADMIN);
+    check('preview at 1 Nov: 109 would be cleared, holder 101 skipped', pv.counts.CLEARED === 1 && pv.students === 1 && pv.skipped_issued === 1, pv);
+    const set = await svc.setStudentFeeDates(s.id, { student_ids: [109, 101], fee_date: '2026-11-01', reason: 'December voucher not issued yet' } as any, ADMIN);
+    check('setting 109 to 1 Nov saves 1 and skips the holder', set.updated === 1 && set.skipped_issued === 1, set);
+    check('the change is in the activity log with the reason', audits.some((x) => x.field === 'student_fee_date' && x.student_id === 109 && x.new_value === '2026-11-01' && /not issued yet/.test(x.note)));
+    const r4 = await svc.roster(s.id, {}, ADMIN);
+    const row109 = r4.rows.find((r: any) => r.cc === 109);
+    check('109 is now CLEARED against its own date', row109?.state === 'CLEARED' && row109?.fee_date === '2026-11-01' && row109?.own_fee_date?.reason === 'December voucher not issued yet', row109);
+    check('own-date filter finds 109 only', (await svc.roster(s.id, { fee_date_kinds: ['OWN'] } as any, ADMIN)).rows.map((r: any) => r.cc).join() === '109');
+    await svc.issue(s.id, { student_ids: [109] }, ADMIN);
+    const doc109 = await prisma.exam_documents.findUnique({ where: { schedule_id_student_id: { schedule_id: s.id, student_id: 109 } } });
+    check('109 issued, and the document records the 1 Nov fee date it was checked against', doc109?.serial_no === 5 && doc109?.fee_date?.toISOString().slice(0, 10) === '2026-11-01', doc109);
+    check("a holder's roster row shows the date on the document", (await svc.roster(s.id, {}, ADMIN)).rows.find((r: any) => r.cc === 109)?.document?.fee_date === '2026-11-01');
+
+    // 103's surcharge back to unpaid; the schedule's date moves; own dates reset.
+    await prisma.voucher_arrear_surcharges.updateMany({ where: { vouchers: { student_id: 103 } }, data: { amount_paid: 0 } });
+    await svc.setStudentFeeDates(s.id, { student_ids: [103], fee_date: '2027-01-01' } as any, ADMIN);
+    check('103 at a later own date (1 Jan) is blocked by the December surcharge', (await svc.roster(s.id, {}, ADMIN)).rows.find((r: any) => r.cc === 103)?.state === 'BLOCKED');
+    await svc.setStudentFeeDates(s.id, { student_ids: [103], fee_date: null } as any, ADMIN);
+    check('putting 103 back on the schedule date removes its own date', !(await prisma.exam_schedule_fee_dates.findUnique({ where: { schedule_id_student_id: { schedule_id: s.id, student_id: 103 } } })));
+    await svc.setStudentFeeDates(s.id, { student_ids: [103], fee_date: '2026-12-01' } as any, ADMIN);
+    check('an own date equal to the schedule date is not stored', !(await prisma.exam_schedule_fee_dates.findUnique({ where: { schedule_id_student_id: { schedule_id: s.id, student_id: 103 } } })));
+    const moved = await svc.setScheduleFeeDate(s.id, '2026-11-01', ADMIN);
+    check('schedule fee date changed and logged', moved.fee_date === '2026-11-01' && audits.some((x) => x.field === 'fee_date' && x.old_value === '2026-12-01' && x.new_value === '2026-11-01'));
+    check('at 1 Nov the December surcharge no longer blocks 103', (await svc.roster(s.id, {}, ADMIN)).rows.find((r: any) => r.cc === 103)?.state === 'CLEARED');
+    await svc.setScheduleFeeDate(s.id, '2026-12-01', ADMIN);
+    await prisma.voucher_arrear_surcharges.updateMany({ where: { vouchers: { student_id: 103 } }, data: { amount_paid: 1000 } });
+    await rejects('another campus cannot change fee dates', () => svc.setStudentFeeDates(s.id, { student_ids: [103], fee_date: '2026-11-01' } as any, OTHER_CAMPUS), 403);
+    await rejects('a LEFT student cannot be given a date', () => svc.setStudentFeeDates(s.id, { student_ids: [106], fee_date: '2026-11-01' } as any, ADMIN), /not enrolled/);
 
     console.log('Holders who move, and schedule guards');
     await prisma.students.update({ where: { cc: 104 }, data: { class_id: 10 } });
@@ -205,7 +259,7 @@ async function main() {
     await rejects('changing the campus after issuing is refused', () => svc.updateSchedule(s.id, body({ campus_id: 2, issue_from: '2026-01-01' }) as any, ADMIN), 409);
     await rejects('deleting a schedule documents were issued from is refused', () => svc.deleteSchedule(s.id, ADMIN), 409);
     const edited = await svc.updateSchedule(s.id, body({ issue_from: '2026-01-01', papers: [...body().papers, { class_id: 9, paper_date: '2026-12-14', time_text: '8:00 – 11:30', subject: 'MATHEMATICS' }] }) as any, ADMIN);
-    check('papers can still be corrected after issuing', edited.papers.length === 4 && edited.documents_issued === 4);
+    check('papers can still be corrected after issuing', edited.papers.length === 4 && edited.documents_issued === 5);
 
     const empty = await svc.createSchedule(body({ papers: body().papers.filter((p: any) => p.class_id === 9) }) as any, ADMIN);
     await rejects('a class with no papers cannot be published', () => svc.setStatus(empty.id, 'PUBLISHED', ADMIN), /No papers yet for IX/);

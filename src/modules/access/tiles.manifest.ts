@@ -623,8 +623,9 @@ const FAMILY_CREDIT_ACTIONS: TileAction[] = [
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const EXAM_DOCUMENTS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Exam Documents', description: 'See schedules, and which students are cleared, owing or already issued', default: true },
-  { id: 'manage_schedules', label: 'Create and edit exam schedules', description: 'Papers, notes, dues month and issue date; publish or delete', implies: ['view'] },
-  { id: 'issue', label: 'Issue and reprint documents', description: 'Only to students whose dues are cleared', implies: ['view'] },
+  { id: 'manage_schedules', label: 'Create and edit exam schedules', description: 'Papers, notes, fee date and issue date; publish or delete', implies: ['view'] },
+  { id: 'issue', label: 'Issue and reprint documents', description: 'Only to students whose dues are cleared through their fee date', implies: ['view'] },
+  { id: 'change_fee_dates', label: "Change selected students' fee date", description: 'Checks those students against an earlier or later fee date than the schedule. Recorded in the activity log', implies: ['view'] },
   { id: 'override_dues', label: 'Issue to a student who owes dues', description: 'Needs a reason, which is recorded in the activity log', implies: ['issue'] },
 ];
 

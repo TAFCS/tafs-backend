@@ -16,24 +16,28 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { findStudentSearchHits } from '../students/student-search-match';
 import {
+    ExamFeeDatePreviewDto,
     ExamIssueDto,
     ExamOverrideDto,
     ExamRosterQueryDto,
     ExamScheduleListQueryDto,
     ExamScheduleUpsertDto,
+    ExamStudentFeeDatesDto,
 } from './dto/exam-documents.dto';
 import {
     DOC_TYPE_LABEL,
     DuesThrough,
+    MonthOwed,
     NO_DUES,
+    ROSTER_STATES,
     RosterState,
+    billedOwed,
     docTypeForClass,
-    endOfMonth,
+    effectiveFeeDate,
+    feeDateLabel,
     formatSerial,
-    isCleared,
     isSecondaryClass,
     issueWindowOpen,
-    monthLabel,
     rosterState,
     totalOwed,
 } from './exam-document-rules';
@@ -90,7 +94,7 @@ const SCHEDULE_INCLUDE = {
     campuses: { select: { id: true, campus_name: true, address: true } },
     exam_schedule_classes: { include: { classes: { select: { id: true, description: true } } } },
     exam_schedule_papers: { orderBy: [{ paper_date: 'asc' }, { sort_order: 'asc' }, { id: 'asc' }] },
-    _count: { select: { exam_documents: true } },
+    _count: { select: { exam_documents: true, exam_schedule_fee_dates: true } },
 } satisfies Prisma.exam_schedulesInclude;
 
 type ScheduleRow = Prisma.exam_schedulesGetPayload<{ include: typeof SCHEDULE_INCLUDE }>;
@@ -110,6 +114,7 @@ const STUDENT_SELECT = {
     classes: { select: { id: true, description: true, segment_id: true } },
     sections: { select: { id: true, description: true } },
     student_guardians: { select: { relationship: true, guardians: { select: { full_name: true } } } },
+    student_admissions: { select: { discipline: true }, orderBy: { application_date: 'desc' }, take: 1 },
 } satisfies Prisma.studentsSelect;
 
 type StudentRow = Prisma.studentsGetPayload<{ select: typeof STUDENT_SELECT }>;
@@ -148,8 +153,9 @@ export class ExamDocumentsService {
             title: row.title,
             segment_line: row.segment_line,
             reference_no: row.reference_no,
-            dues_cleared_through: iso(row.dues_cleared_through),
-            dues_month_label: monthLabel(iso(row.dues_cleared_through)!),
+            fee_date: iso(row.fee_date)!,
+            fee_date_label: feeDateLabel(iso(row.fee_date)!),
+            students_with_own_fee_date: row._count.exam_schedule_fee_dates,
             issue_from: iso(row.issue_from),
             notes: row.notes,
             status: row.status as ExamScheduleStatus,
@@ -227,10 +233,9 @@ export class ExamDocumentsService {
         const stray = dto.papers.find((p) => !classIds.includes(p.class_id));
         if (stray) throw new BadRequestException(`A paper is set for class ${stray.class_id}, which the schedule does not cover`);
 
-        const [y, m] = dto.dues_cleared_through.slice(0, 10).split('-').map(Number);
-        const duesThrough = endOfMonth(y, m);
+        const feeDate = dto.fee_date.slice(0, 10);
         const notes = dto.notes.map((n) => n.trim()).filter(Boolean);
-        return { classIds, duesThrough, notes };
+        return { classIds, feeDate, notes };
     }
 
     private paperRows(dto: ExamScheduleUpsertDto) {
@@ -246,7 +251,7 @@ export class ExamDocumentsService {
     }
 
     async createSchedule(dto: ExamScheduleUpsertDto, user: Staff) {
-        const { classIds, duesThrough, notes } = await this.validateUpsert(dto, user);
+        const { classIds, feeDate, notes } = await this.validateUpsert(dto, user);
         const created = await this.prisma.exam_schedules.create({
             data: {
                 campus_id: dto.campus_id,
@@ -254,7 +259,7 @@ export class ExamDocumentsService {
                 title: dto.title.trim(),
                 segment_line: dto.segment_line?.trim() || null,
                 reference_no: dto.reference_no?.trim() || null,
-                dues_cleared_through: new Date(`${duesThrough}T00:00:00Z`),
+                fee_date: new Date(`${feeDate}T00:00:00Z`),
                 issue_from: dto.issue_from ? new Date(`${dto.issue_from.slice(0, 10)}T00:00:00Z`) : null,
                 notes,
                 status: 'DRAFT',
@@ -269,7 +274,7 @@ export class ExamDocumentsService {
             entity_type: 'EXAM_SCHEDULE',
             entity_id: String(created.id),
             action: 'CREATED',
-            new_value: `${dto.title.trim()} (${dto.academic_year}), dues through ${duesThrough}`,
+            new_value: `${dto.title.trim()} (${dto.academic_year}), fee date ${feeDate}`,
             changed_by: this.by(user),
         });
         return this.getSchedule(created.id, user);
@@ -277,7 +282,7 @@ export class ExamDocumentsService {
 
     async updateSchedule(id: number, dto: ExamScheduleUpsertDto, user: Staff) {
         const existing = await this.loadSchedule(id, user);
-        const { classIds, duesThrough, notes } = await this.validateUpsert(dto, user);
+        const { classIds, feeDate, notes } = await this.validateUpsert(dto, user);
 
         if (existing._count.exam_documents > 0) {
             if (dto.campus_id !== existing.campus_id) {
@@ -304,7 +309,7 @@ export class ExamDocumentsService {
                     title: dto.title.trim(),
                     segment_line: dto.segment_line?.trim() || null,
                     reference_no: dto.reference_no?.trim() || null,
-                    dues_cleared_through: new Date(`${duesThrough}T00:00:00Z`),
+                    fee_date: new Date(`${feeDate}T00:00:00Z`),
                     issue_from: dto.issue_from ? new Date(`${dto.issue_from.slice(0, 10)}T00:00:00Z`) : null,
                     notes,
                     updated_by: this.by(user),
@@ -318,8 +323,8 @@ export class ExamDocumentsService {
             entity_type: 'EXAM_SCHEDULE',
             entity_id: String(id),
             action: 'UPDATED',
-            old_value: `dues through ${iso(existing.dues_cleared_through)}, ${existing.exam_schedule_papers.length} papers`,
-            new_value: `dues through ${duesThrough}, ${dto.papers.length} papers`,
+            old_value: `fee date ${iso(existing.fee_date)}, ${existing.exam_schedule_papers.length} papers`,
+            new_value: `fee date ${feeDate}, ${dto.papers.length} papers`,
             changed_by: this.by(user),
             note: existing._count.exam_documents > 0 ? `${existing._count.exam_documents} documents already issued` : undefined,
         });
@@ -365,6 +370,184 @@ export class ExamDocumentsService {
         return { id };
     }
 
+    // ─── Fee dates ─────────────────────────────────────────────────────────
+
+    /** Change the schedule's fee date. Students with their own date keep it. */
+    async setScheduleFeeDate(id: number, feeDate: string, user: Staff) {
+        const existing = await this.loadSchedule(id, user);
+        const next = feeDate.slice(0, 10);
+        const prev = iso(existing.fee_date)!;
+        if (prev === next) return this.serializeSchedule(existing);
+        await this.prisma.exam_schedules.update({
+            where: { id },
+            data: { fee_date: new Date(`${next}T00:00:00Z`), updated_by: this.by(user) },
+        });
+        await this.auditLogs.log({
+            entity_type: 'EXAM_SCHEDULE',
+            entity_id: String(id),
+            action: 'UPDATED',
+            field: 'fee_date',
+            old_value: prev,
+            new_value: next,
+            changed_by: this.by(user),
+            note: existing._count.exam_documents > 0 ? `${existing._count.exam_documents} documents already issued keep the date they were checked against` : undefined,
+        });
+        return this.getSchedule(id, user);
+    }
+
+    /**
+     * The fee dates this schedule's students are billed on, with how much of each
+     * is on a voucher, so the picker shows which months the school hasn't billed.
+     */
+    async feeDateOptions(id: number, user: Staff) {
+        const schedule = await this.loadSchedule(id, user);
+        const classIds = schedule.exam_schedule_classes.map((c) => c.class_id);
+        const scopeWhere = this.scope.whereForStudents(user) as Prisma.studentsWhereInput;
+        const ccs = (
+            await this.prisma.students.findMany({
+                where: { AND: [scopeWhere, { status: 'ENROLLED', campus_id: schedule.campus_id, class_id: { in: classIds } }] },
+                select: { cc: true },
+            })
+        ).map((s) => s.cc);
+        if (!ccs.length) return { schedule_fee_date: iso(schedule.fee_date), students: 0, options: [] };
+
+        const rows = await this.prisma.$queryRaw<
+            { fee_date: Date; heads: number; not_billed: number; students: number; unpaid_students: number }[]
+        >(Prisma.sql`
+            SELECT sf.fee_date,
+                   COUNT(*)::int AS heads,
+                   COUNT(*) FILTER (WHERE sf.status::text = 'NOT_ISSUED')::int AS not_billed,
+                   COUNT(DISTINCT sf.student_id)::int AS students,
+                   COUNT(DISTINCT sf.student_id) FILTER (
+                       WHERE COALESCE(sf.status::text, '') NOT IN ('PAID', 'DISCOUNT', 'WAIVED')
+                         AND COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0) > 0
+                   )::int AS unpaid_students
+            FROM public.student_fees sf
+            WHERE sf.student_id IN (${Prisma.join(ccs)})
+              AND sf.fee_date IS NOT NULL
+              AND sf.is_discount = false
+              AND sf.is_arrear_surcharge = false
+            GROUP BY sf.fee_date
+            ORDER BY sf.fee_date DESC
+            LIMIT 36
+        `);
+        return {
+            schedule_fee_date: iso(schedule.fee_date),
+            students: ccs.length,
+            options: rows.map((r) => ({
+                fee_date: iso(r.fee_date)!,
+                label: feeDateLabel(iso(r.fee_date)!),
+                heads: Number(r.heads),
+                not_billed: Number(r.not_billed),
+                students: Number(r.students),
+                unpaid_students: Number(r.unpaid_students),
+            })),
+        };
+    }
+
+    /** Each student's own fee date on this schedule, if any. */
+    private async ownFeeDates(scheduleId: number, ccs?: number[]) {
+        const rows = await this.prisma.exam_schedule_fee_dates.findMany({
+            where: { schedule_id: scheduleId, ...(ccs && { student_id: { in: ccs } }) },
+        });
+        return new Map(rows.map((r) => [r.student_id, r]));
+    }
+
+    /**
+     * Give the selected students their own fee date, or (fee_date null) put them
+     * back on the schedule's. Students who already hold a document are skipped:
+     * theirs was checked when it was issued.
+     */
+    async setStudentFeeDates(id: number, dto: ExamStudentFeeDatesDto, user: Staff) {
+        const schedule = await this.loadSchedule(id, user);
+        const ccs = [...new Set(dto.student_ids)];
+        const students = await this.loadStudents(ccs, user);
+        const problems = ccs
+            .map((cc) => ({ cc, why: this.ineligibility(schedule, students.get(cc)) }))
+            .filter((p) => p.why);
+        if (problems.length) {
+            throw new BadRequestException(
+                `Cannot change: ${problems.slice(0, 5).map((p) => `C.C. ${p.cc} ${p.why}`).join('; ')}${problems.length > 5 ? ` and ${problems.length - 5} more` : ''}`,
+            );
+        }
+        const held = new Set(
+            (await this.prisma.exam_documents.findMany({ where: { schedule_id: id, student_id: { in: ccs } }, select: { student_id: true } })).map(
+                (d) => d.student_id,
+            ),
+        );
+        const targets = ccs.filter((cc) => !held.has(cc));
+        const before = await this.ownFeeDates(id, targets);
+        const scheduleDate = iso(schedule.fee_date)!;
+        const next = dto.fee_date ? dto.fee_date.slice(0, 10) : null;
+        const reason = dto.reason?.trim() || null;
+
+        await this.prisma.$transaction(async (tx) => {
+            if (!next || next === scheduleDate) {
+                // Their own date equal to the schedule's is no date of their own.
+                await tx.exam_schedule_fee_dates.deleteMany({ where: { schedule_id: id, student_id: { in: targets } } });
+                return;
+            }
+            for (const cc of targets) {
+                await tx.exam_schedule_fee_dates.upsert({
+                    where: { schedule_id_student_id: { schedule_id: id, student_id: cc } },
+                    create: { schedule_id: id, student_id: cc, fee_date: new Date(`${next}T00:00:00Z`), reason, set_by: this.by(user) },
+                    update: { fee_date: new Date(`${next}T00:00:00Z`), reason, set_by: this.by(user), set_at: new Date() },
+                });
+            }
+        });
+
+        for (const cc of targets) {
+            const prev = before.get(cc);
+            const old = prev ? iso(prev.fee_date)! : scheduleDate;
+            const now = next ?? scheduleDate;
+            if (old === now) continue;
+            await this.auditLogs.log({
+                entity_type: 'EXAM_SCHEDULE',
+                entity_id: String(id),
+                action: 'UPDATED',
+                field: 'student_fee_date',
+                old_value: prev ? old : `${old} (schedule)`,
+                new_value: next && next !== scheduleDate ? next : `${scheduleDate} (schedule)`,
+                changed_by: this.by(user),
+                student_id: cc,
+                note: [schedule.title, reason].filter(Boolean).join(': '),
+            });
+        }
+        return { updated: targets.length, skipped_issued: ccs.length - targets.length, fee_date: next };
+    }
+
+    /** What the selected students would look like against a fee date, before saving it. */
+    async previewFeeDate(id: number, dto: ExamFeeDatePreviewDto, user: Staff) {
+        const schedule = await this.loadSchedule(id, user);
+        const ccs = [...new Set(dto.student_ids)];
+        const students = await this.loadStudents(ccs, user);
+        const inScope = ccs.filter((cc) => students.has(cc));
+        const held = new Set(
+            (await this.prisma.exam_documents.findMany({ where: { schedule_id: id, student_id: { in: inScope } }, select: { student_id: true } })).map(
+                (d) => d.student_id,
+            ),
+        );
+        const targets = inScope.filter((cc) => !held.has(cc));
+        const feeDate = dto.fee_date.slice(0, 10);
+        const dues = await this.duesThrough(targets, feeDate);
+        const counts = { CLEARED: 0, NOT_BILLED: 0, BLOCKED: 0 } as Record<Exclude<RosterState, 'ISSUED'>, number>;
+        let owed = 0;
+        for (const cc of targets) {
+            const d = dues.get(cc) ?? NO_DUES;
+            counts[rosterState(false, d) as Exclude<RosterState, 'ISSUED'>] += 1;
+            owed += totalOwed(d);
+        }
+        return {
+            fee_date: feeDate,
+            fee_date_label: feeDateLabel(feeDate),
+            is_schedule_date: feeDate === iso(schedule.fee_date),
+            students: targets.length,
+            skipped_issued: held.size,
+            counts,
+            owed_total: Math.round(owed * 100) / 100,
+        };
+    }
+
     // ─── Dues ──────────────────────────────────────────────────────────────
 
     /**
@@ -372,7 +555,8 @@ export class ExamDocumentsService {
      *
      * Heads: the defaulters report's filters (non-discount, not PAID / DISCOUNT /
      * WAIVED, `amount ?? amount_before_discount` minus `amount_paid` above zero),
-     * with `fee_date <= cutoff`, whether or not a voucher was ever issued.
+     * with `fee_date <= cutoff`, whether or not a voucher was ever issued. Heads
+     * still NOT_ISSUED are reported apart: the school has to bill them first.
      * Surcharges: unpaid, unwaived rows on live vouchers dated on or before the cutoff.
      */
     async duesThrough(studentIds: number[], cutoff: string): Promise<Map<number, DuesThrough>> {
@@ -381,12 +565,14 @@ export class ExamDocumentsService {
         const ids = Prisma.join(studentIds);
 
         const heads = await this.prisma.$queryRaw<
-            { student_id: number; outstanding: number; head_count: number; oldest: Date | null }[]
+            { student_id: number; fee_date: Date; outstanding: number; not_billed: number; head_count: number }[]
         >(Prisma.sql`
             SELECT sf.student_id,
+                   sf.fee_date,
                    SUM(COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0))::float8 AS outstanding,
-                   COUNT(*)::int AS head_count,
-                   MIN(sf.fee_date) AS oldest
+                   COALESCE(SUM(COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0))
+                       FILTER (WHERE sf.status::text = 'NOT_ISSUED'), 0)::float8 AS not_billed,
+                   COUNT(*)::int AS head_count
             FROM public.student_fees sf
             WHERE sf.student_id IN (${ids})
               AND sf.fee_date IS NOT NULL
@@ -395,7 +581,8 @@ export class ExamDocumentsService {
               AND sf.is_discount = false
               AND COALESCE(sf.status::text, '') NOT IN ('PAID', 'DISCOUNT', 'WAIVED')
               AND COALESCE(sf.amount, sf.amount_before_discount, 0) - COALESCE(sf.amount_paid, 0) > 0
-            GROUP BY sf.student_id
+            GROUP BY sf.student_id, sf.fee_date
+            ORDER BY sf.student_id, sf.fee_date
         `);
 
         const surcharges = await this.prisma.$queryRaw<{ student_id: number; outstanding: number }[]>(Prisma.sql`
@@ -411,21 +598,35 @@ export class ExamDocumentsService {
             GROUP BY v.student_id
         `);
 
+        const r2 = (n: number) => Math.round(n * 100) / 100;
         for (const h of heads) {
-            out.set(Number(h.student_id), {
-                ...NO_DUES,
-                heads_outstanding: Math.round(Number(h.outstanding) * 100) / 100,
-                head_count: Number(h.head_count),
-                oldest_fee_date: iso(h.oldest),
+            const cc = Number(h.student_id);
+            const prev = out.get(cc) ?? { ...NO_DUES, months: [] as MonthOwed[] };
+            const outstanding = Number(h.outstanding);
+            const notBilled = Number(h.not_billed);
+            const feeDate = iso(h.fee_date)!;
+            prev.months.push({ fee_date: feeDate, billed: r2(outstanding - notBilled), not_billed: r2(notBilled) });
+            out.set(cc, {
+                ...prev,
+                heads_outstanding: r2(prev.heads_outstanding + outstanding),
+                not_billed_outstanding: r2(prev.not_billed_outstanding + notBilled),
+                head_count: prev.head_count + Number(h.head_count),
+                oldest_fee_date: prev.oldest_fee_date && prev.oldest_fee_date < feeDate ? prev.oldest_fee_date : feeDate,
             });
         }
         for (const s of surcharges) {
-            const prev = out.get(Number(s.student_id)) ?? { ...NO_DUES };
-            out.set(Number(s.student_id), {
-                ...prev,
-                surcharge_outstanding: Math.round(Number(s.outstanding) * 100) / 100,
-            });
+            const prev = out.get(Number(s.student_id)) ?? { ...NO_DUES, months: [] };
+            out.set(Number(s.student_id), { ...prev, surcharge_outstanding: r2(Number(s.outstanding)) });
         }
+        return out;
+    }
+
+    /** Dues for students who may each have their own fee date: one query per distinct date. */
+    private async duesForEach(feeDateOf: Map<number, string>): Promise<Map<number, DuesThrough>> {
+        const byDate = new Map<string, number[]>();
+        for (const [cc, d] of feeDateOf) byDate.set(d, [...(byDate.get(d) ?? []), cc]);
+        const out = new Map<number, DuesThrough>();
+        for (const [d, ccs] of byDate) for (const [cc, v] of await this.duesThrough(ccs, d)) out.set(cc, v);
         return out;
     }
 
@@ -435,7 +636,7 @@ export class ExamDocumentsService {
         const schedule = await this.loadSchedule(id, user);
         const scheduleClassIds = schedule.exam_schedule_classes.map((c) => c.class_id);
         const classIds = query.class_ids?.length ? query.class_ids.filter((c) => scheduleClassIds.includes(c)) : scheduleClassIds;
-        const cutoff = iso(schedule.dues_cleared_through)!;
+        const scheduleDate = iso(schedule.fee_date)!;
 
         const docs = await this.prisma.exam_documents.findMany({ where: { schedule_id: id } });
         const docByStudent = new Map(docs.map((d) => [d.student_id, d]));
@@ -443,7 +644,7 @@ export class ExamDocumentsService {
         let searchCcs: number[] | null = null;
         if (query.q?.trim()) {
             searchCcs = (await findStudentSearchHits(this.prisma, query.q, 500)).map((h) => h.cc);
-            if (!searchCcs.length) return this.rosterResponse(schedule, [], cutoff);
+            if (!searchCcs.length) return this.rosterResponse(schedule, []);
         }
 
         const students = await this.prisma.students.findMany({
@@ -468,47 +669,90 @@ export class ExamDocumentsService {
             throw new BadRequestException('Too many students to list at once. Filter by class or section.');
         }
 
-        const dues = await this.duesThrough(students.map((s) => s.cc), cutoff);
-        let rows = students.map((s) => {
-            const d = dues.get(s.cc) ?? NO_DUES;
-            const doc = docByStudent.get(s.cc) ?? null;
-            return {
-                cc: s.cc,
-                gr_number: s.gr_number,
-                full_name: s.full_name,
-                class_id: s.class_id,
-                class_name: s.classes?.description ?? null,
-                section_id: s.section_id,
-                section_name: s.sections?.description ?? null,
-                student_status: s.status,
-                has_photo: Boolean(s.photo_blue_bg_url || s.photograph_url),
-                state: rosterState(Boolean(doc), d),
-                owed: totalOwed(d),
-                heads_outstanding: d.heads_outstanding,
-                surcharge_outstanding: d.surcharge_outstanding,
-                oldest_unpaid_fee_date: d.oldest_fee_date,
-                document: doc
-                    ? {
-                          serial: formatSerial(doc.serial_no),
-                          doc_type: doc.doc_type,
-                          issued_at: doc.issued_at,
-                          issued_by: doc.issued_by,
-                          print_count: doc.print_count,
-                          last_printed_at: doc.last_printed_at,
-                          overridden: Boolean(doc.override_reason),
-                          override_reason: doc.override_reason,
-                          dues_outstanding_at_issue: Number(doc.dues_outstanding),
-                      }
-                    : null,
-            };
-        });
+        const own = await this.ownFeeDates(id, students.map((s) => s.cc));
+        const feeDateOf = new Map(
+            students.map((s) => {
+                const doc = docByStudent.get(s.cc);
+                // A holder is shown against the date they were checked against when issued.
+                const d = doc?.fee_date ? iso(doc.fee_date) : effectiveFeeDate(scheduleDate, own.has(s.cc) ? iso(own.get(s.cc)!.fee_date) : null);
+                return [s.cc, d!];
+            }),
+        );
+        const dues = await this.duesForEach(feeDateOf);
+
+        const wantDisciplines = query.disciplines?.map((d) => d.toLowerCase());
+        const missing = query.missing ?? [];
+        let rows = students
+            .map((s) => {
+                const d = dues.get(s.cc) ?? NO_DUES;
+                const doc = docByStudent.get(s.cc) ?? null;
+                const mine = own.get(s.cc) ?? null;
+                const father = s.student_guardians.find((g) => g.relationship?.toLowerCase() === 'father')?.guardians?.full_name?.trim();
+                return {
+                    cc: s.cc,
+                    gr_number: s.gr_number,
+                    full_name: s.full_name,
+                    class_id: s.class_id,
+                    class_name: s.classes?.description ?? null,
+                    section_id: s.section_id,
+                    section_name: s.sections?.description ?? null,
+                    student_status: s.status,
+                    discipline: s.student_admissions[0]?.discipline?.trim() || null,
+                    has_photo: Boolean(s.photo_blue_bg_url || s.photograph_url),
+                    has_father: Boolean(father),
+                    has_dob: Boolean(s.dob),
+                    fee_date: feeDateOf.get(s.cc)!,
+                    own_fee_date: mine
+                        ? { fee_date: iso(mine.fee_date)!, reason: mine.reason, set_by: mine.set_by, set_at: mine.set_at }
+                        : null,
+                    state: rosterState(Boolean(doc), d),
+                    owed: totalOwed(d),
+                    billed_owed: billedOwed(d),
+                    not_billed_owed: d.not_billed_outstanding,
+                    surcharge_outstanding: d.surcharge_outstanding,
+                    oldest_unpaid_fee_date: d.oldest_fee_date,
+                    months: d.months,
+                    document: doc
+                        ? {
+                              serial: formatSerial(doc.serial_no),
+                              doc_type: doc.doc_type,
+                              issued_at: doc.issued_at,
+                              issued_by: doc.issued_by,
+                              print_count: doc.print_count,
+                              last_printed_at: doc.last_printed_at,
+                              overridden: Boolean(doc.override_reason),
+                              override_reason: doc.override_reason,
+                              dues_outstanding_at_issue: Number(doc.dues_outstanding),
+                              fee_date: iso(doc.fee_date),
+                          }
+                        : null,
+                };
+            })
+            .filter((r) => {
+                if (wantDisciplines?.length) {
+                    const mineD = r.discipline?.toLowerCase() ?? null;
+                    const ok = wantDisciplines.some((w) => (w === 'none' ? !mineD : mineD === w));
+                    if (!ok) return false;
+                }
+                if (query.has_photo === 'true' && !r.has_photo) return false;
+                if (query.has_photo === 'false' && r.has_photo) return false;
+                if (missing.length) {
+                    const gaps = { photo: !r.has_photo, father: !r.has_father, dob: !r.has_dob };
+                    if (!missing.some((m) => gaps[m])) return false;
+                }
+                if (query.fee_date_kinds?.length) {
+                    const kind = r.own_fee_date ? 'OWN' : 'SCHEDULE';
+                    if (!query.fee_date_kinds.includes(kind)) return false;
+                }
+                return true;
+            });
         rows.sort(
             (a, b) =>
                 (a.class_id ?? 0) - (b.class_id ?? 0) ||
                 (a.section_name ?? '').localeCompare(b.section_name ?? '') ||
                 a.full_name.localeCompare(b.full_name),
         );
-        const response = this.rosterResponse(schedule, rows, cutoff);
+        const response = this.rosterResponse(schedule, rows);
         if (query.states?.length) {
             rows = rows.filter((r) => query.states!.includes(r.state));
             response.rows = rows;
@@ -516,19 +760,29 @@ export class ExamDocumentsService {
         return response;
     }
 
-    private rosterResponse<T extends { state: RosterState; owed: number }>(schedule: ScheduleRow, rows: T[], cutoff: string) {
-        const counts = { ISSUED: 0, CLEARED: 0, BLOCKED: 0 } as Record<RosterState, number>;
-        let owedTotal = 0;
+    private rosterResponse<T extends { state: RosterState; owed: number; billed_owed: number; not_billed_owed: number; own_fee_date: unknown }>(
+        schedule: ScheduleRow,
+        rows: T[],
+    ) {
+        const counts = Object.fromEntries(ROSTER_STATES.map((s) => [s, 0])) as Record<RosterState, number>;
+        let blockedOwed = 0;
+        let notBilledOwed = 0;
+        let ownDates = 0;
         for (const r of rows) {
             counts[r.state] += 1;
-            if (r.state === 'BLOCKED') owedTotal += r.owed;
+            if (r.state === 'BLOCKED') blockedOwed += r.owed;
+            if (r.state === 'NOT_BILLED') notBilledOwed += r.not_billed_owed;
+            if (r.own_fee_date) ownDates += 1;
         }
+        const r2 = (n: number) => Math.round(n * 100) / 100;
         return {
             schedule: { ...this.serializeSchedule(schedule), papers: undefined },
-            dues_cleared_through: cutoff,
+            fee_date: iso(schedule.fee_date)!,
             issue_window_open: issueWindowOpen(iso(schedule.issue_from), karachiToday()),
             counts,
-            blocked_owed_total: Math.round(owedTotal * 100) / 100,
+            own_fee_dates: ownDates,
+            blocked_owed_total: r2(blockedOwed),
+            not_billed_owed_total: r2(notBilledOwed),
             rows,
         };
     }
@@ -568,10 +822,17 @@ export class ExamDocumentsService {
         return (max._max.serial_no ?? 0) + 1;
     }
 
+    /** Each student's fee date for a fresh issue: their own, else the schedule's. */
+    private async feeDatesFor(schedule: ScheduleRow, ccs: number[]): Promise<Map<number, string>> {
+        const own = await this.ownFeeDates(schedule.id, ccs);
+        const scheduleDate = iso(schedule.fee_date)!;
+        return new Map(ccs.map((cc) => [cc, effectiveFeeDate(scheduleDate, own.has(cc) ? iso(own.get(cc)!.fee_date) : null)]));
+    }
+
     /**
      * Issue to cleared students and reprint for holders, as one PDF. Refuses the
-     * whole request if any student without a document still owes dues; those go
-     * through `override`.
+     * whole request if any student without a document still owes anything dated on
+     * or before their fee date, billed or not; those go through `override`.
      */
     async issue(id: number, dto: ExamIssueDto, user: Staff) {
         const schedule = await this.loadSchedule(id, user);
@@ -593,18 +854,28 @@ export class ExamDocumentsService {
         const reprintOutOfScope = existing.filter((d) => !students.has(d.student_id));
         if (reprintOutOfScope.length) throw new NotFoundException('A requested student is outside your access');
 
-        const cutoff = iso(schedule.dues_cleared_through)!;
-        const dues = await this.duesThrough(fresh, cutoff);
-        const blocked = fresh.filter((cc) => !isCleared(dues.get(cc) ?? NO_DUES));
+        const feeDateOf = await this.feeDatesFor(schedule, fresh);
+        const dues = await this.duesForEach(feeDateOf);
+        const stateOf = (cc: number) => rosterState(false, dues.get(cc) ?? NO_DUES);
+        const blocked = fresh.filter((cc) => stateOf(cc) !== 'CLEARED');
         if (blocked.length) {
             // The global exception filter passes `message` and `code` through, nothing else.
+            const notBilled = blocked.filter((cc) => stateOf(cc) === 'NOT_BILLED').length;
             const list = blocked
                 .slice(0, 10)
-                .map((cc) => `${students.get(cc)?.full_name ?? 'C.C.'} (C.C. ${cc}) Rs ${totalOwed(dues.get(cc)!).toLocaleString('en-US')}`)
+                .map((cc) => {
+                    const d = dues.get(cc)!;
+                    const tag = stateOf(cc) === 'NOT_BILLED' ? ', not billed yet' : '';
+                    return `${students.get(cc)?.full_name ?? 'C.C.'} (C.C. ${cc}) Rs ${totalOwed(d).toLocaleString('en-US')} through ${feeDateLabel(feeDateOf.get(cc)!)}${tag}`;
+                })
                 .join('; ');
             throw new UnprocessableEntityException({
                 code: 'DUES_NOT_CLEARED',
-                message: `Nothing was issued. ${blocked.length} student(s) still owe dues through ${monthLabel(cutoff)}: ${list}${blocked.length > 10 ? ` and ${blocked.length - 10} more` : ''}. Clear them, or issue with an override.`,
+                message:
+                    `Nothing was issued. ${blocked.length} student(s) still owe fees dated on or before their fee date: ${list}` +
+                    `${blocked.length > 10 ? ` and ${blocked.length - 10} more` : ''}.` +
+                    (notBilled ? ` ${notBilled} of them only owe fees that were never put on a voucher: generate their vouchers first.` : '') +
+                    ' Clear them, or issue with an override.',
             });
         }
 
@@ -627,6 +898,7 @@ export class ExamDocumentsService {
                                 issued_at: now,
                                 issued_by: this.by(user),
                                 last_printed_at: now,
+                                fee_date: new Date(`${feeDateOf.get(cc)!}T00:00:00Z`),
                             },
                         }),
                     );
@@ -651,7 +923,7 @@ export class ExamDocumentsService {
                 entity_id: String(d.id),
                 action: 'CREATED',
                 field: d.doc_type,
-                new_value: `${DOC_TYPE_LABEL[d.doc_type as keyof typeof DOC_TYPE_LABEL]} #${formatSerial(d.serial_no)}, ${schedule.title}`,
+                new_value: `${DOC_TYPE_LABEL[d.doc_type as keyof typeof DOC_TYPE_LABEL]} #${formatSerial(d.serial_no)}, ${schedule.title}, cleared through ${feeDateLabel(iso(d.fee_date)!)}`,
                 changed_by: this.by(user),
                 student_id: d.student_id,
             });
@@ -683,7 +955,7 @@ export class ExamDocumentsService {
         });
         if (already) throw new ConflictException('This student already has a document from this schedule. Reprint it instead.');
 
-        const cutoff = iso(schedule.dues_cleared_through)!;
+        const cutoff = (await this.feeDatesFor(schedule, [dto.student_id])).get(dto.student_id)!;
         const dues = (await this.duesThrough([dto.student_id], cutoff)).get(dto.student_id) ?? NO_DUES;
         const owed = totalOwed(dues);
         if (owed <= 0) throw new BadRequestException('This student has no dues outstanding. Issue normally.');
@@ -702,6 +974,7 @@ export class ExamDocumentsService {
                     issued_by: this.by(user),
                     last_printed_at: now,
                     dues_outstanding: new Prisma.Decimal(owed),
+                    fee_date: new Date(`${cutoff}T00:00:00Z`),
                     override_reason: reason,
                     overridden_by: this.by(user),
                 },
@@ -713,7 +986,7 @@ export class ExamDocumentsService {
             entity_id: String(doc.id),
             action: 'CREATED',
             field: 'DUES_OVERRIDE',
-            new_value: `${DOC_TYPE_LABEL[doc.doc_type as keyof typeof DOC_TYPE_LABEL]} #${formatSerial(doc.serial_no)} issued with Rs ${owed.toLocaleString('en-US')} owed through ${monthLabel(cutoff)}`,
+            new_value: `${DOC_TYPE_LABEL[doc.doc_type as keyof typeof DOC_TYPE_LABEL]} #${formatSerial(doc.serial_no)} issued with Rs ${owed.toLocaleString('en-US')} owed through ${feeDateLabel(cutoff)}${dues.not_billed_outstanding > 0 ? ` (Rs ${dues.not_billed_outstanding.toLocaleString('en-US')} never billed)` : ''}`,
             changed_by: this.by(user),
             student_id: dto.student_id,
             note: reason,

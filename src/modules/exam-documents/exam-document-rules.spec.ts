@@ -1,7 +1,9 @@
 import {
     NO_DUES,
+    billedOwed,
     docTypeForClass,
-    endOfMonth,
+    effectiveFeeDate,
+    feeDateLabel,
     formatSerial,
     isCleared,
     issueWindowOpen,
@@ -16,12 +18,15 @@ describe('TAFSD-510 exam document rules', () => {
         for (const id of [1, 4, 8, 9, 11, 12, 14, 20, 21]) expect(docTypeForClass(id)).toBe('STATEMENT_OF_ENTRY');
     });
 
-    it('stores the dues month as its last day', () => {
-        expect(endOfMonth(2026, 12)).toBe('2026-12-31');
-        expect(endOfMonth(2027, 2)).toBe('2027-02-28');
-        expect(endOfMonth(2028, 2)).toBe('2028-02-29');
-        expect(endOfMonth(2026, 11)).toBe('2026-11-30');
-        expect(monthLabel('2026-12-31')).toBe('DECEMBER 2026');
+    it('labels fee dates and months', () => {
+        expect(monthLabel('2026-12-01')).toBe('DECEMBER 2026');
+        expect(feeDateLabel('2026-12-01')).toBe('1 Dec 2026');
+        expect(feeDateLabel('2027-02-28')).toBe('28 Feb 2027');
+    });
+
+    it("uses a student's own fee date over the schedule's", () => {
+        expect(effectiveFeeDate('2026-12-01', null)).toBe('2026-12-01');
+        expect(effectiveFeeDate('2026-12-01', '2026-11-01')).toBe('2026-11-01');
     });
 
     it('clears a student only when nothing at all is owed, surcharges included', () => {
@@ -34,7 +39,22 @@ describe('TAFSD-510 exam document rules', () => {
     it('keeps a holder ISSUED whatever they owe now', () => {
         expect(rosterState(true, { ...NO_DUES, heads_outstanding: 9000 })).toBe('ISSUED');
         expect(rosterState(false, NO_DUES)).toBe('CLEARED');
+    });
+
+    it('blocks on billed heads or surcharges, and marks heads never billed as NOT_BILLED', () => {
+        // Billed and unpaid: the family has to pay.
         expect(rosterState(false, { ...NO_DUES, heads_outstanding: 9000 })).toBe('BLOCKED');
+        // Only heads never put on a voucher: the school has to bill them first.
+        const onlyUnbilled = { ...NO_DUES, heads_outstanding: 9000, not_billed_outstanding: 9000 };
+        expect(rosterState(false, onlyUnbilled)).toBe('NOT_BILLED');
+        expect(isCleared(onlyUnbilled)).toBe(false);
+        expect(billedOwed(onlyUnbilled)).toBe(0);
+        // Unbilled heads plus a surcharge on a live voucher: the family can pay something now.
+        expect(rosterState(false, { ...onlyUnbilled, surcharge_outstanding: 1000 })).toBe('BLOCKED');
+        // Billed and unbilled together: BLOCKED.
+        const mixed = { ...NO_DUES, heads_outstanding: 15000, not_billed_outstanding: 9000 };
+        expect(rosterState(false, mixed)).toBe('BLOCKED');
+        expect(billedOwed(mixed)).toBe(6000);
     });
 
     it('opens issuing on the issue date, not before', () => {

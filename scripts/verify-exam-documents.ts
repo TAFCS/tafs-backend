@@ -16,7 +16,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { ExamDocumentsService } from '../src/modules/exam-documents/exam-documents.service';
-import { docTypeForClass, endOfMonth } from '../src/modules/exam-documents/exam-document-rules';
+import { NO_DUES, docTypeForClass, rosterState } from '../src/modules/exam-documents/exam-document-rules';
 import { DEC_2026_SCHEDULES, SeedSchedule } from './data/exam-schedules-dec-2026';
 
 const OUT = process.argv[2] || path.join(process.cwd(), 'exam-docs-verify');
@@ -66,27 +66,29 @@ async function scheduleRow(seed: SeedSchedule) {
     );
     return {
         id: 0, campus_id: seed.campus_id, academic_year: seed.academic_year, title: seed.title, segment_line: seed.segment_line,
-        reference_no: seed.reference_no, dues_cleared_through: new Date(`${seed.dues_cleared_through}T00:00:00Z`),
+        reference_no: seed.reference_no, fee_date: new Date(`${seed.fee_date}T00:00:00Z`),
         issue_from: new Date(`${seed.issue_from}T00:00:00Z`), notes: seed.notes, status: 'PUBLISHED',
         created_by: null, updated_by: null, created_at: new Date(), updated_at: new Date(),
         campuses: campus!,
         exam_schedule_classes: classes.map((c) => ({ schedule_id: 0, class_id: c.id, classes: c })),
         exam_schedule_papers: papers,
-        _count: { exam_documents: 0 },
+        _count: { exam_documents: 0, exam_schedule_fee_dates: 0 },
     };
 }
 
 /** Independent of the service's SQL: fetch the rows and add them up in JS. */
-async function independentOwed(cc: number, cutoff: string): Promise<number> {
+async function independentOwed(cc: number, cutoff: string): Promise<{ owed: number; notBilled: number }> {
     const heads = await base.student_fees.findMany({
         where: { student_id: cc, fee_date: { lte: new Date(`${cutoff}T00:00:00Z`) }, is_discount: false, is_arrear_surcharge: false },
         select: { amount: true, amount_before_discount: true, amount_paid: true, status: true },
     });
     let owed = new Prisma.Decimal(0);
+    let notBilled = new Prisma.Decimal(0);
     for (const h of heads) {
         if (['PAID', 'DISCOUNT', 'WAIVED'].includes(String(h.status))) continue;
         const left = new Prisma.Decimal(h.amount ?? h.amount_before_discount ?? 0).sub(h.amount_paid ?? 0);
         if (left.gt(0)) owed = owed.add(left);
+        if (left.gt(0) && String(h.status) === 'NOT_ISSUED') notBilled = notBilled.add(left);
     }
     const sur = await base.voucher_arrear_surcharges.findMany({
         where: {
@@ -99,12 +101,12 @@ async function independentOwed(cc: number, cutoff: string): Promise<number> {
         const left = new Prisma.Decimal(s.amount).sub(s.amount_paid);
         if (left.gt(0)) owed = owed.add(left);
     }
-    return Number(owed.toFixed(2));
+    return { owed: Number(owed.toFixed(2)), notBilled: Number(notBilled.toFixed(2)) };
 }
 
 async function main() {
     fs.mkdirSync(OUT, { recursive: true });
-    const cutoff = endOfMonth(2026, 12);
+    const cutoff = '2026-12-01';
 
     console.log('1. duesThrough vs an independent calculation');
     const sample = await base.$queryRaw<{ cc: number }[]>`
@@ -116,11 +118,19 @@ async function main() {
         const d = dues.get(cc);
         const svcOwed = d ? Math.round((d.heads_outstanding + d.surcharge_outstanding) * 100) / 100 : 0;
         const ind = await independentOwed(cc, cutoff);
-        if (Math.abs(svcOwed - ind) > 0.005) { mismatches++; console.log(`     C.C. ${cc}: service ${svcOwed}, independent ${ind}`); }
+        const svcNotBilled = d ? d.not_billed_outstanding : 0;
+        if (Math.abs(svcOwed - ind.owed) > 0.005 || Math.abs(svcNotBilled - ind.notBilled) > 0.005) {
+            mismatches++;
+            console.log(`     C.C. ${cc}: service ${svcOwed} (${svcNotBilled} not billed), independent ${ind.owed} (${ind.notBilled} not billed)`);
+        }
     }
     check(`${ccs.length} sampled students owe the same through ${cutoff}`, mismatches === 0, `${mismatches} mismatches`);
-    const cleared = ccs.filter((cc) => !dues.get(cc)).length;
-    console.log(`     ${cleared} of ${ccs.length} sampled are cleared through December today`);
+    const tally: Record<string, number> = {};
+    for (const cc of ccs) {
+        const st = rosterState(false, dues.get(cc) ?? NO_DUES);
+        tally[st] = (tally[st] ?? 0) + 1;
+    }
+    console.log(`     against ${cutoff}: ${JSON.stringify(tally)}`);
 
     console.log('2. Sample PDFs from the December schedules');
     for (const [key, classId] of [['sr', 9], ['jr', 6], ['o', 14], ['ix-x', 18], ['vi-viii', 15]] as const) {

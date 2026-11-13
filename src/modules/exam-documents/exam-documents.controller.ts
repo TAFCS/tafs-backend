@@ -23,12 +23,15 @@ import { RequireAction } from '../../decorators/require-action.decorator';
 import { createApiResponse } from '../../utils/serializer.util';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import {
+    ExamFeeDatePreviewDto,
     ExamIssueDto,
     ExamOverrideDto,
     ExamRosterQueryDto,
     ExamScheduleListQueryDto,
     ExamScheduleStatusDto,
+    ExamScheduleFeeDateDto,
     ExamScheduleUpsertDto,
+    ExamStudentFeeDatesDto,
 } from './dto/exam-documents.dto';
 import { ExamDocumentsService } from './exam-documents.service';
 
@@ -92,8 +95,49 @@ export class ExamDocumentsController {
         return createApiResponse(await this.service.deleteSchedule(id, user), HttpStatus.OK, 'Exam schedule deleted');
     }
 
+    @Patch('schedules/:id/fee-date')
+    @ApiOperation({ summary: "Change the schedule's fee date. Students with their own date keep it" })
+    @RequireAction('student.exam_documents#manage_schedules')
+    async feeDate(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ExamScheduleFeeDateDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        return createApiResponse(await this.service.setScheduleFeeDate(id, dto.fee_date, user), HttpStatus.OK, 'Fee date changed');
+    }
+
+    @Get('schedules/:id/fee-dates')
+    @ApiOperation({ summary: "Fee dates this schedule's students are billed on, and how much of each is on a voucher" })
+    @RequireAction('student.exam_documents#view')
+    async feeDates(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.service.feeDateOptions(id, user), HttpStatus.OK, 'Fee dates fetched');
+    }
+
+    @Put('schedules/:id/student-fee-dates')
+    @ApiOperation({ summary: "Give selected students their own fee date, or put them back on the schedule's (fee_date null)" })
+    @RequireAction('student.exam_documents#change_fee_dates')
+    async studentFeeDates(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ExamStudentFeeDatesDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        return createApiResponse(await this.service.setStudentFeeDates(id, dto, user), HttpStatus.OK, 'Fee dates saved');
+    }
+
+    @Post('schedules/:id/student-fee-dates/preview')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'How the selected students would stand against a fee date, before saving it' })
+    @RequireAction('student.exam_documents#view')
+    async previewFeeDate(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ExamFeeDatePreviewDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        return createApiResponse(await this.service.previewFeeDate(id, dto, user), HttpStatus.OK, 'Preview');
+    }
+
     @Get('schedules/:id/students')
-    @ApiOperation({ summary: 'Students on the schedule: cleared, owing (and how much) or already issued' })
+    @ApiOperation({ summary: 'Students on the schedule: cleared, owing, not billed, or already issued, each against their fee date' })
     @RequireAction('student.exam_documents#view')
     async roster(
         @Param('id', ParseIntPipe) id: number,

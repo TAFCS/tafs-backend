@@ -13,7 +13,7 @@ import {
     MinLength,
     ValidateNested,
 } from 'class-validator';
-import { EXAM_SCHEDULE_STATUSES } from '../exam-document-rules';
+import { EXAM_SCHEDULE_STATUSES, ROSTER_STATES } from '../exam-document-rules';
 import type { ExamScheduleStatus, RosterState } from '../exam-document-rules';
 
 /** `campus_ids=1,2` or `campus_ids=1&campus_ids=2` both arrive as [1, 2]. */
@@ -22,6 +22,11 @@ const toIntArray = ({ value }: { value: unknown }) => {
     const parts = (Array.isArray(value) ? value : [value]).flatMap((v) => String(v).split(','));
     return parts.map((p) => p.trim()).filter(Boolean).map(Number);
 };
+export const MISSING_DATA = ['photo', 'father', 'dob'] as const;
+export type MissingData = (typeof MISSING_DATA)[number];
+export const FEE_DATE_KINDS = ['SCHEDULE', 'OWN'] as const;
+export type FeeDateKind = (typeof FEE_DATE_KINDS)[number];
+
 const toStringArray = ({ value }: { value: unknown }) => {
     if (value == null || value === '') return undefined;
     return (Array.isArray(value) ? value : [value]).flatMap((v) => String(v).split(',')).map((s) => s.trim()).filter(Boolean);
@@ -106,9 +111,9 @@ export class ExamScheduleUpsertDto {
     @MaxLength(100)
     reference_no?: string;
 
-    @ApiProperty({ description: 'Any date in the fee month dues must be cleared through; stored as that month\'s last day', example: '2026-12-31' })
+    @ApiProperty({ description: 'Every fee head dated on or before this must be settled', example: '2026-12-01' })
     @IsDateString()
-    dues_cleared_through!: string;
+    fee_date!: string;
 
     @ApiPropertyOptional({ example: '2026-12-09' })
     @IsOptional()
@@ -157,10 +162,10 @@ export class ExamRosterQueryDto {
     @IsInt({ each: true })
     section_ids?: number[];
 
-    @ApiPropertyOptional({ type: [String], enum: ['ISSUED', 'CLEARED', 'BLOCKED'] })
+    @ApiPropertyOptional({ type: [String], enum: ROSTER_STATES })
     @IsOptional()
     @Transform(toStringArray)
-    @IsIn(['ISSUED', 'CLEARED', 'BLOCKED'], { each: true })
+    @IsIn(ROSTER_STATES, { each: true })
     states?: RosterState[];
 
     @ApiPropertyOptional({ description: 'C.C., G.R. or name' })
@@ -168,6 +173,71 @@ export class ExamRosterQueryDto {
     @IsString()
     @MaxLength(100)
     q?: string;
+
+    @ApiPropertyOptional({ type: [String], description: "Discipline names as the Student Directory sends them; 'none' for no discipline" })
+    @IsOptional()
+    @Transform(toStringArray)
+    @IsString({ each: true })
+    @MaxLength(50, { each: true })
+    disciplines?: string[];
+
+    @ApiPropertyOptional({ enum: ['true', 'false'] })
+    @IsOptional()
+    @IsIn(['true', 'false'])
+    has_photo?: 'true' | 'false';
+
+    @ApiPropertyOptional({ type: [String], enum: MISSING_DATA, description: 'Students missing any of these' })
+    @IsOptional()
+    @Transform(toStringArray)
+    @IsIn(MISSING_DATA, { each: true })
+    missing?: MissingData[];
+
+    @ApiPropertyOptional({ type: [String], enum: FEE_DATE_KINDS, description: "SCHEDULE: checked against the schedule's fee date; OWN: given their own" })
+    @IsOptional()
+    @Transform(toStringArray)
+    @IsIn(FEE_DATE_KINDS, { each: true })
+    fee_date_kinds?: FeeDateKind[];
+}
+
+export class ExamScheduleFeeDateDto {
+    @ApiProperty({ example: '2026-12-01' })
+    @IsDateString()
+    fee_date!: string;
+}
+
+export class ExamStudentFeeDatesDto {
+    @ApiProperty({ type: [Number] })
+    @IsArray()
+    @ArrayMinSize(1)
+    @ArrayMaxSize(800)
+    @Type(() => Number)
+    @IsInt({ each: true })
+    student_ids!: number[];
+
+    @ApiProperty({ nullable: true, example: '2026-11-01', description: "null puts them back on the schedule's fee date" })
+    @IsOptional()
+    @IsDateString()
+    fee_date!: string | null;
+
+    @ApiPropertyOptional({ description: 'Why these students get a different fee date' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(500)
+    reason?: string;
+}
+
+export class ExamFeeDatePreviewDto {
+    @ApiProperty({ type: [Number] })
+    @IsArray()
+    @ArrayMinSize(1)
+    @ArrayMaxSize(3000)
+    @Type(() => Number)
+    @IsInt({ each: true })
+    student_ids!: number[];
+
+    @ApiProperty({ example: '2026-11-01' })
+    @IsDateString()
+    fee_date!: string;
 }
 
 export class ExamIssueDto {
