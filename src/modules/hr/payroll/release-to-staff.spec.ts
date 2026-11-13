@@ -53,6 +53,7 @@ describe('TAFSD-478: release to staff', () => {
   it('releases a run and notifies only employees with a finalized line', async () => {
     const { svc, updates } = build(baseRun());
     await svc.releaseRun(79, user);
+    await new Promise((r) => setImmediate(r)); // the notice text is read from the templates first
     expect(updates[0].data.released_to_staff_at).toBeInstanceOf(Date);
     expect(svc.employeeNoticeBoard.createPayrollNotice).toHaveBeenCalledTimes(
       1,

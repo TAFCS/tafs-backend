@@ -37,6 +37,7 @@ describe('notice edit history', () => {
     expect(JSON.parse(entry.old_value)).toEqual({ title: 'Trip', body: 'Friday' });
     expect(JSON.parse(entry.new_value)).toEqual({ title: 'Trip', body: 'Saturday instead' });
     // TAFSD-429: through the author's own notifications (webapp bell + staff app).
+    await new Promise((r) => setImmediate(r)); // the text is read from the templates first (TAFSD-514)
     expect(svc.staffNotifications.notify).toHaveBeenCalledWith(
       'u1',
       expect.objectContaining({ kind: 'NOTICE_EDITED', title: 'Your notice was edited', body: expect.stringContaining('Admin'), link: '/notice-board?post=7' }),

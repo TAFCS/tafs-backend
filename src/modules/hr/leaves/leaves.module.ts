@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
+import { StaffNotificationsModule } from '../../staff-notifications/staff-notifications.module';
 import { FcmModule } from '../../../common/fcm/fcm.module';
 import { AuthModule } from '../../auth/auth.module';
 import { CalendarDayResolverService } from '../calendar/calendar-day-resolver.service';
@@ -10,7 +11,7 @@ import { LeaveRequestsService } from './leave-requests.service';
 import { PermanentEmployeeScheduler } from './permanent-employee.scheduler';
 
 @Module({
-  imports: [AuthModule, FcmModule],
+  imports: [AuthModule, FcmModule, forwardRef(() => StaffNotificationsModule)],
   controllers: [LeaveRequestsSelfController, LeaveRequestsController],
   providers: [
     LeaveRequestsService,

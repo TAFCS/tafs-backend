@@ -10,6 +10,8 @@ import { FcmService } from '../../../common/fcm/fcm.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { auditActorLabel } from '../../../common/utils/audit-actor.util';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
+import { StaffNotificationsService } from '../../staff-notifications/staff-notifications.service';
+import { clause, renderNotification } from '../../../utils/notification-templates.util';
 import { EmployeeProfileResolverService } from '../employee-profile-resolver.service';
 import {
   CreateLeaveRequestDto,
@@ -65,6 +67,7 @@ export class LeaveRequestsService {
     private readonly fcmService: FcmService,
     private readonly auditLogs: AuditLogsService,
     private readonly scope: ScopeService,
+    private readonly staffNotifications: StaffNotificationsService,
   ) {}
 
   async create(userId: string, dto: CreateLeaveRequestDto, changedBy?: string) {
@@ -338,8 +341,9 @@ export class LeaveRequestsService {
 
     void this.notifyEmployeeReview(
       existing,
-      dto.status,
+      dto.status === LeaveRequestStatus.APPROVED ? 'approved' : 'rejected',
       id,
+      dto.reviewReason,
       isSick && isPaid !== null ? `approved (${isPaid ? 'paid' : 'unpaid'})` : undefined,
     );
     return updated;
@@ -384,7 +388,7 @@ export class LeaveRequestsService {
       note: this.leaveRequestNote(existing, reason),
     });
 
-    void this.notifyEmployeeReview(existing, LeaveRequestStatus.REJECTED, id, 'revoked');
+    void this.notifyEmployeeReview(existing, 'revoked', id, reason);
     return updated;
   }
 
@@ -507,11 +511,17 @@ export class LeaveRequestsService {
     throw new ForbiddenException('Your account does not have permission: hr.leave.approve');
   }
 
+  /**
+   * TAFSD-513 (item 68): the decision lands in the staff app's notice inbox
+   * with a push (StaffNotificationsService), not just a bare push, and its
+   * text comes from the Notification Templates page.
+   */
   private async notifyEmployeeReview(
     existing: Prisma.leave_requestsGetPayload<{ include: typeof LEAVE_INCLUDE }>,
-    status: LeaveRequestStatus,
+    outcome: 'approved' | 'rejected' | 'revoked',
     id: number,
-    labelOverride?: string,
+    reason?: string | null,
+    decisionLabel?: string,
   ) {
     const employeeUser = await this.prisma.employee_profiles.findUnique({
       where: { id: existing.employee_id },
@@ -519,15 +529,31 @@ export class LeaveRequestsService {
     });
     if (!employeeUser?.user_id) return;
 
-    const label =
-      labelOverride ??
-      (status === LeaveRequestStatus.APPROVED ? 'approved' : 'rejected');
-    void this.fcmService.sendToUsers(
-      [employeeUser.user_id],
-      `Leave request ${label}`,
-      `Your ${existing.leave_types.name} request was ${label}.`,
-      { type: 'leave_request', leave_request_id: String(id), status },
-    );
+    const fallback = {
+      approved: { title: 'Leave request approved', body: 'Your {leave_type} request for {dates} was {decision}.' },
+      rejected: { title: 'Leave request rejected', body: 'Your {leave_type} request for {dates} was rejected.{reason_clause}' },
+      revoked: { title: 'Leave request revoked', body: 'Your approved {leave_type} for {dates} was revoked.{reason_clause}' },
+    }[outcome];
+    const day = (d: Date) => d.toISOString().slice(0, 10);
+    const start = day(existing.start_date);
+    const end = day(existing.end_date);
+    const text = await renderNotification(this.prisma, `notif_staff_leave_${outcome}`, fallback, {
+      leave_type: existing.leave_types.name,
+      dates: start === end ? start : `${start} to ${end}`,
+      decision: decisionLabel ?? outcome,
+      reason: reason?.trim() ?? '',
+      reason_clause: clause('Reason', reason),
+    });
+    if (!text) return;
+    await this.staffNotifications.notify(employeeUser.user_id, {
+      kind: `LEAVE_${outcome.toUpperCase()}`,
+      title: text.title,
+      body: text.body,
+      link: '/hr/leaves',
+      entityType: 'LEAVE_REQUEST',
+      entityId: String(id),
+      pushData: { leave_request_id: String(id), status: outcome.toUpperCase() },
+    });
   }
 
   private async notifyApprovers(
@@ -578,11 +604,14 @@ export class LeaveRequestsService {
     if (userIds.length === 0) return;
 
     const dateLabel = startDate.toISOString().slice(0, 10);
-    await this.fcmService.sendToUsers(
-      userIds,
-      'New leave request',
-      `${employeeName} submitted ${leaveTypeName} starting ${dateLabel}`,
-      { type: 'leave_request', date: dateLabel },
+    // TAFSD-514: text from the Notification Templates page.
+    const text = await renderNotification(
+      this.prisma,
+      'notif_staff_leave_new',
+      { title: 'New leave request', body: '{employee_name} submitted {leave_type} starting {date}' },
+      { employee_name: employeeName, leave_type: leaveTypeName, date: dateLabel },
     );
+    if (!text) return;
+    await this.fcmService.sendToUsers(userIds, text.title, text.body, { type: 'leave_request', date: dateLabel });
   }
 }

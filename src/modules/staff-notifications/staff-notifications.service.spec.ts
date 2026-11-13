@@ -32,7 +32,7 @@ describe('StaffNotificationsService', () => {
       data: expect.objectContaining({ user_id: 'u1', kind: 'NOTICE_APPROVED', link: '/notice-board?post=7' }),
     });
     expect(gateway.emitToStaff).toHaveBeenCalledWith('u1', 'staffNotification', row);
-    expect(notices.createPersonalNotice).toHaveBeenCalledWith(42, 'u1', input.title, input.body, 'NOTICE_APPROVED');
+    expect(notices.createPersonalNotice).toHaveBeenCalledWith(42, 'u1', input.title, input.body, 'NOTICE_APPROVED', input.pushData);
     expect(fcm.sendToUsers).not.toHaveBeenCalled();
   });
 

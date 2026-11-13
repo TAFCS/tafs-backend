@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { StaffNotificationsModule } from '../staff-notifications/staff-notifications.module';
 import { AuthModule } from '../auth/auth.module';
 import { HrModule } from '../hr/hr.module';
 import { ChatModule } from '../chat/chat.module';
@@ -46,6 +47,7 @@ import { ZkDeviceResendSchedulerService } from './zk-device-resend-scheduler.ser
     FcmModule,
     TimetablesModule,
     EmployeeNoticeBoardModule,
+    forwardRef(() => StaffNotificationsModule),
   ],
   controllers: [
     RollSessionsController,
