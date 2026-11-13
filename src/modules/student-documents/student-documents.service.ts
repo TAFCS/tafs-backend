@@ -21,7 +21,6 @@ import {
 } from './dto/student-documents.dto';
 import {
   checkUploadBatch,
-  DEFAULT_MISSING_STATUSES,
   missingFor,
   prepareUpload,
   requiredSlotCount,
@@ -357,10 +356,10 @@ export class StudentDocumentsService {
   // ─── Missing documents report ───────────────────────────────────────────
 
   async missingReport(query: MissingQueryDto, user: IJwtStaffPayload) {
-    const statuses = (query.statuses?.length ? query.statuses : [...DEFAULT_MISSING_STATUSES]) as student_status[];
+    // Empty means every status (webapp Rule 1); the page pre-selects current students.
     const where: Prisma.studentsWhereInput = {
       deleted_at: null,
-      status: { in: statuses },
+      ...(query.statuses?.length ? { status: { in: query.statuses as student_status[] } } : {}),
       ...(query.campus_ids?.length ? { campus_id: { in: query.campus_ids } } : {}),
       ...(query.class_ids?.length ? { class_id: { in: query.class_ids } } : {}),
       ...(query.section_ids?.length ? { section_id: { in: query.section_ids } } : {}),
@@ -629,7 +628,7 @@ export class StudentDocumentsService {
   }
 
   /** The document, if the caller's scope reaches any student it belongs to. Returns that student's cc. */
-  private async scopedDocument(documentId: number, user: IJwtStaffPayload) {
+  private async scopedDocument(documentId: number, user: IJwtStaffPayload, preferCc?: number) {
     const doc = await this.prisma.student_documents.findUnique({
       where: { id: documentId },
       include: { type: true },
@@ -646,21 +645,31 @@ export class StudentDocumentsService {
       cc = s?.cc ?? null;
       ownerLabel = s?.full_name ?? '';
     } else if (doc.guardian_id != null) {
+      // A parent's document belongs to every child of that parent. Log against
+      // the child the caller had open when that child is one of them.
       const link = await this.prisma.student_guardians.findFirst({
         where: { guardian_id: doc.guardian_id, students: { deleted_at: null, ...scopeWhere } },
+        orderBy: { student_id: 'asc' },
         select: { student_id: true, relationship: true, guardians: { select: { full_name: true } } },
       });
-      cc = link?.student_id ?? null;
-      ownerLabel = link ? `${link.guardians?.full_name ?? 'Guardian'} (${link.relationship})` : '';
+      const preferred = preferCc
+        ? await this.prisma.student_guardians.findFirst({
+            where: { guardian_id: doc.guardian_id, student_id: preferCc, students: { deleted_at: null, ...scopeWhere } },
+            select: { student_id: true, relationship: true, guardians: { select: { full_name: true } } },
+          })
+        : null;
+      const chosen = preferred ?? link;
+      cc = chosen?.student_id ?? null;
+      ownerLabel = chosen ? `${chosen.guardians?.full_name ?? 'Guardian'} (${chosen.relationship})` : '';
     }
     if (cc == null) throw new NotFoundException('Document not found');
     return { doc, cc, ownerLabel };
   }
 
-  async link(versionId: number, disposition: 'inline' | 'attachment', user: IJwtStaffPayload, perms: VaultPerms) {
+  async link(versionId: number, disposition: 'inline' | 'attachment', user: IJwtStaffPayload, perms: VaultPerms, preferCc?: number) {
     const version = await this.prisma.student_document_versions.findUnique({ where: { id: versionId } });
     if (!version) throw new NotFoundException('Document not found');
-    const { doc, cc, ownerLabel } = await this.scopedDocument(version.document_id, user);
+    const { doc, cc, ownerLabel } = await this.scopedDocument(version.document_id, user, preferCc);
     if (doc.type.restricted && !perms.viewRestricted) throw new NotFoundException('Document not found');
 
     const ext = version.mime_type === 'application/pdf' ? 'pdf' : version.mime_type === 'image/png' ? 'png' : 'jpg';
@@ -683,8 +692,8 @@ export class StudentDocumentsService {
   }
 
   /** Copies an older version forward as the newest one. Nothing is overwritten. */
-  async makeCurrent(documentId: number, versionId: number, user: IJwtStaffPayload, perms: VaultPerms) {
-    const { doc, cc, ownerLabel } = await this.scopedDocument(documentId, user);
+  async makeCurrent(documentId: number, versionId: number, user: IJwtStaffPayload, perms: VaultPerms, preferCc?: number) {
+    const { doc, cc, ownerLabel } = await this.scopedDocument(documentId, user, preferCc);
     if (doc.type.restricted && !perms.viewRestricted) throw new NotFoundException('Document not found');
     if (doc.archived_at) throw new BadRequestException('Restore the document first');
     const by = user.username || user.sub;
@@ -725,8 +734,8 @@ export class StudentDocumentsService {
     return created;
   }
 
-  async archive(documentId: number, reason: string, user: IJwtStaffPayload, perms: VaultPerms) {
-    const { doc, cc, ownerLabel } = await this.scopedDocument(documentId, user);
+  async archive(documentId: number, reason: string, user: IJwtStaffPayload, perms: VaultPerms, preferCc?: number) {
+    const { doc, cc, ownerLabel } = await this.scopedDocument(documentId, user, preferCc);
     if (doc.type.restricted && !perms.viewRestricted) throw new NotFoundException('Document not found');
     if (doc.archived_at) throw new BadRequestException('Already archived');
     if (doc.type.origin === 'GENERATED') {
@@ -749,8 +758,8 @@ export class StudentDocumentsService {
     return { ok: true };
   }
 
-  async restore(documentId: number, user: IJwtStaffPayload, perms: VaultPerms) {
-    const { doc, cc, ownerLabel } = await this.scopedDocument(documentId, user);
+  async restore(documentId: number, user: IJwtStaffPayload, perms: VaultPerms, preferCc?: number) {
+    const { doc, cc, ownerLabel } = await this.scopedDocument(documentId, user, preferCc);
     if (doc.type.restricted && !perms.viewRestricted) throw new NotFoundException('Document not found');
     if (!doc.archived_at) throw new BadRequestException('Not archived');
     if (!doc.type.allow_multiple) {

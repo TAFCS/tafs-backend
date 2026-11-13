@@ -14,9 +14,6 @@ export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 export const MAX_FILES_PER_UPLOAD = 20;
 
-/** Statuses the missing-documents report looks at unless told otherwise. */
-export const DEFAULT_MISSING_STATUSES = ['ENROLLED', 'SOFT_ADMISSION', 'QUICK_ADMISSION'] as const;
-
 const IMAGE_MIMES = new Set(['image/jpeg', 'image/png']);
 const PDF_MIME = 'application/pdf';
 

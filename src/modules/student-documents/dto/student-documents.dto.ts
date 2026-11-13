@@ -164,7 +164,16 @@ export class ArchiveDocumentDto {
   reason: string;
 }
 
-export class LinkQueryDto {
+/** The student the caller has open, so a parent's document is logged against that child. */
+export class ContextQueryDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  cc?: number;
+}
+
+export class LinkQueryDto extends ContextQueryDto {
   @ApiPropertyOptional({ enum: ['inline', 'attachment'] })
   @IsOptional()
   @IsIn(['inline', 'attachment'])

@@ -29,6 +29,7 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import {
   ActivityQueryDto,
   ArchiveDocumentDto,
+  ContextQueryDto,
   CreateDocumentTypeDto,
   LinkQueryDto,
   MissingQueryDto,
@@ -147,7 +148,7 @@ export class StudentDocumentsController {
     @Query() query: LinkQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.service.link(id, query.disposition ?? 'inline', user, this.perms(user));
+    const data = await this.service.link(id, query.disposition ?? 'inline', user, this.perms(user), query.cc);
     return createApiResponse(data, HttpStatus.OK, 'Link ready');
   }
 
@@ -176,9 +177,10 @@ export class StudentDocumentsController {
   async makeCurrent(
     @Param('id', ParseIntPipe) id: number,
     @Param('versionId', ParseIntPipe) versionId: number,
+    @Query() ctx: ContextQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.service.makeCurrent(id, versionId, user, this.perms(user));
+    const data = await this.service.makeCurrent(id, versionId, user, this.perms(user), ctx.cc);
     return createApiResponse(data, HttpStatus.OK, 'Version made current');
   }
 
@@ -189,9 +191,10 @@ export class StudentDocumentsController {
   async archive(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: ArchiveDocumentDto,
+    @Query() ctx: ContextQueryDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    await this.service.archive(id, dto.reason, user, this.perms(user));
+    await this.service.archive(id, dto.reason, user, this.perms(user), ctx.cc);
     return createApiResponse(null, HttpStatus.OK, 'Document archived');
   }
 
@@ -199,8 +202,12 @@ export class StudentDocumentsController {
   @ApiOperation({ summary: 'Bring an archived document back' })
   @CheckPolicies(canRead)
   @RequireAction(vaultAction('archive'))
-  async restore(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
-    await this.service.restore(id, user, this.perms(user));
+  async restore(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() ctx: ContextQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    await this.service.restore(id, user, this.perms(user), ctx.cc);
     return createApiResponse(null, HttpStatus.OK, 'Document restored');
   }
 }
