@@ -485,12 +485,16 @@ const FINANCIAL_REPORTS_ACTIONS: TileAction[] = [
   { id: 'deposits.view', label: 'Deposits tab', description: 'Deposits (cash) report', default: true, implies: ['view'] },
   { id: 'fee_matrix.view', label: 'Fee Matrix tab', description: 'Student x month fee matrix', default: true, implies: ['view'] },
   { id: 'defaulters.view', label: 'Defaulters tab', description: 'Defaulters list', default: true, implies: ['view'] },
+  // UBL Collections: every UBL payment matched against UBL's settlement statements.
+  // Off by default: bank reconciliation is for whoever handles the UBL account.
+  { id: 'ubl.view', label: 'UBL Collections tab', description: 'UBL payments matched against UBL settlements (needs all-campus access)', implies: ['view'] },
 
   { id: 'export', label: 'Export a report to Excel', description: 'Only from the tabs they can open', implies: ['view'] },
   { id: 'snapshot.manage', label: 'Create or delete a fee-heads snapshot', implies: ['fee_heads.view'] },
   { id: 'snapshot.finalize', label: 'Finalize a snapshot', implies: ['fee_heads.view'] },
   // TAFSD-384: posts a notice-board notice to one defaulting student's family.
   { id: 'defaulters.notify', label: 'Notify a defaulter through the app', implies: ['defaulters.view'] },
+  { id: 'ubl.settlements.manage', label: 'Upload or remove a UBL settlement statement', implies: ['ubl.view'] },
 ];
 
 // GET /by-class is shared with Student Overrides (default-fee suggestions)

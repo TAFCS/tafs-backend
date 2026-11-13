@@ -97,8 +97,12 @@ describe('UblService', () => {
         ...over,
     });
 
-    const build = (v: any = voucher(), existingDeposit: any = null) => {
+    const build = (v: any = voucher(), existingDeposit: any = null, logged: any = null) => {
         const prisma: any = {
+            ubl_transactions: {
+                findUnique: jest.fn().mockResolvedValue(logged),
+                create: jest.fn().mockResolvedValue({}),
+            },
             students: { findUnique: jest.fn().mockResolvedValue({ cc: 8088, full_name: 'TEST', gr_number: '1', campuses: null, classes: null }) },
             vouchers: { findFirst: jest.fn().mockResolvedValue({ id: v.id }) },
             deposits: {
@@ -200,6 +204,46 @@ describe('UblService', () => {
         expect(res.response_code).toBe('08');
         expect(res.tafs_receipt_id).toBe('41');
         expect(vouchers.recordDeposit).not.toHaveBeenCalled();
+    });
+
+    it('logs every booked payment for the settlement reconciliation', async () => {
+        const { svc, prisma } = build();
+        await svc.billPayment(pay({ payer_bank_code: 'HBL' }));
+        const data = prisma.ubl_transactions.create.mock.calls[0][0].data;
+        expect(data).toMatchObject({
+            transaction_id: 'T1',
+            consumer_number: '100000000008088',
+            student_id: 8088,
+            voucher_id: 500,
+            channel: 'ONEBILL',
+            payment_method: 'ACCOUNT_TRANSFER',
+            payer_bank_code: 'HBL',
+            deposit_id: 77,
+        });
+        expect(Number(data.amount_received)).toBe(90053);
+        expect(Number(data.amount_booked)).toBe(90000);
+        expect(Number(data.channel_fee)).toBe(53);
+        expect(data.transaction_at.toISOString()).toBe('2026-10-05T06:00:00.000Z');
+    });
+
+    it('still succeeds when the log write fails, since the payment is already booked', async () => {
+        const { svc, prisma } = build();
+        prisma.ubl_transactions.create.mockRejectedValue(new Error('table missing'));
+        expect(((await svc.billPayment(pay())) as any).response_code).toBe('00');
+    });
+
+    it('treats a retry of a payment the school has since reversed as a duplicate, never a second booking', async () => {
+        const { svc, vouchers } = build(voucher(), null, { deposit_id: 41 });
+        const res: any = await svc.billPayment(pay());
+        expect(res.response_code).toBe('08');
+        expect(res.tafs_receipt_id).toBe('41');
+        expect(vouchers.recordDeposit).not.toHaveBeenCalled();
+    });
+
+    it('keeps taking payments before the log table exists', async () => {
+        const { svc, prisma } = build();
+        prisma.ubl_transactions.findUnique.mockRejectedValue(new Error('relation "ubl_transactions" does not exist'));
+        expect(((await svc.billPayment(pay())) as any).response_code).toBe('00');
     });
 
     it('refuses when a newer voucher replaced the one inquired', async () => {
