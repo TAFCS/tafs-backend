@@ -12,6 +12,7 @@ import {
   UploadedFile,
   ParseIntPipe,
 } from '@nestjs/common';
+import { toNumberArray } from '../../common/transforms/query-array.transform';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NoticeBoardService } from './notice-board.service';
@@ -71,13 +72,26 @@ export class NoticeBoardController {
   @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Chat'))
   @RequireAction('communication.notice_board#view')
-  @ApiOperation({ summary: 'Admin: list all posts, optionally searched by text, poster, C.C., GR, student, family or class (q)' })
+  @ApiOperation({
+    summary:
+      'Admin: list all posts, optionally searched (q: text, poster, C.C., GR, student, family or class), ' +
+      'only the caller\'s own (mine=true), or only those that reached given campuses / classes / sections',
+  })
   adminList(
     @Query('cursor') cursor: string | undefined,
     @Query('q') q: string | undefined,
+    @Query('mine') mine: string | undefined,
+    @Query('campus_id') campusId: string | string[] | undefined,
+    @Query('class_id') classId: string | string[] | undefined,
+    @Query('section_id') sectionId: string | string[] | undefined,
     @CurrentUser() user: any,
   ) {
-    return this.service.getAllPosts(cursor ? parseInt(cursor) : undefined, user, q);
+    return this.service.getAllPosts(cursor ? parseInt(cursor) : undefined, user, q, {
+      mine: mine === 'true' || mine === '1',
+      campusIds: toNumberArray({ value: campusId }),
+      classIds: toNumberArray({ value: classId }),
+      sectionIds: toNumberArray({ value: sectionId }),
+    });
   }
 
   @Post('admin/notice-board')

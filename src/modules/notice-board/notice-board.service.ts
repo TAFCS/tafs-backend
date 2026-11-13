@@ -47,6 +47,15 @@ const REVIEW_STATUSES: NoticePostStatus[] = [
   NoticePostStatus.REJECTED,
 ];
 
+/** TAFSD-507: the admin board's list filters, besides the free-text search. */
+export interface NoticeListFilters {
+  /** Only the caller's own posts ("My sent"). */
+  mine?: boolean;
+  campusIds?: number[];
+  classIds?: number[];
+  sectionIds?: number[];
+}
+
 @Injectable()
 export class NoticeBoardService {
   constructor(
@@ -222,7 +231,12 @@ export class NoticeBoardService {
   // The feed shows live posts plus the caller's own pending / rejected ones
   // (badged in the UI). Other people's pending posts live on the review page
   // only — superadmins included.
-  async getAllPosts(cursor: number | undefined, user: IJwtStaffPayload, q?: string) {
+  async getAllPosts(
+    cursor: number | undefined,
+    user: IJwtStaffPayload,
+    q?: string,
+    filters: NoticeListFilters = {},
+  ) {
     // A scoped caller sees posts that reached at least one of their students,
     // plus their own. Most posts reach one campus or one family, so batches are
     // read until a full page is visible (bounded, so a narrow scope can't scan
@@ -235,17 +249,26 @@ export class NoticeBoardService {
     const reach = await this._scopeReach(user);
     // TAFSD-497: an optional search narrows every batch; scope and paging stay as they are.
     const search = await this._searchWhere(q);
+    // TAFSD-507: "My sent" is a plain where; campus / class / section keep posts
+    // that reached a student placed there, the same way scope does.
+    const where: Prisma.notice_board_postsWhereInput[] = [
+      ...(search ? [search] : []),
+      ...(filters.mine ? [{ posted_by: user.sub }] : []),
+    ];
+    const placed = await this._placementReach(filters);
+    const visible = (p: Parameters<NonNullable<typeof reach>['reaches']>[0]) =>
+      (!reach || reach.reaches(p)) && (!placed || placed.reaches(p));
     const PAGE = 30;
-    const BATCH = reach ? 150 : PAGE;
+    const BATCH = reach || placed ? 150 : PAGE;
     const fetchedPosts: Awaited<ReturnType<typeof this._postBatch>> = [];
     if (!cursor) {
-      const pinned = await this._postBatch(undefined, user, true, 0, undefined, search);
-      fetchedPosts.push(...(reach ? pinned.filter((p) => reach.reaches(p)) : pinned));
+      const pinned = await this._postBatch(undefined, user, true, 0, undefined, where);
+      fetchedPosts.push(...pinned.filter(visible));
     }
     const unpinned: typeof fetchedPosts = [];
     for (let skip = 0; unpinned.length < PAGE && skip < BATCH * 8; skip += BATCH) {
-      const batch = await this._postBatch(cursor, user, false, skip, BATCH, search);
-      unpinned.push(...(reach ? batch.filter((p) => reach.reaches(p)) : batch));
+      const batch = await this._postBatch(cursor, user, false, skip, BATCH, where);
+      unpinned.push(...batch.filter(visible));
       if (batch.length < BATCH) break;
     }
     fetchedPosts.push(...unpinned.slice(0, PAGE));
@@ -274,7 +297,8 @@ export class NoticeBoardService {
     const holidays: (typeof allHolidays[number] & { viewer_can_manage: boolean })[] = [];
     for (const h of allHolidays) {
       const audience = { posted_by: h.created_by, ...this._holidayAudience(h), student_ccs: [] };
-      if (reach && !reach.reaches(audience)) continue;
+      if (!visible(audience)) continue;
+      if (filters.mine && h.created_by !== user.sub) continue;
       holidays.push({ ...h, viewer_can_manage: !reach || (await this._canManagePost(user, audience)) });
     }
 
@@ -351,7 +375,7 @@ export class NoticeBoardService {
     pinned: boolean,
     skip: number,
     take: number | undefined,
-    search: Prisma.notice_board_postsWhereInput | null = null,
+    where: Prisma.notice_board_postsWhereInput[] = [],
   ) {
     return this.prisma.notice_board_posts.findMany({
       where: {
@@ -359,7 +383,7 @@ export class NoticeBoardService {
         is_pinned: pinned,
         OR: [{ status: NoticePostStatus.APPROVED }, { posted_by: user.sub }],
         ...(cursor ? { id: { lt: cursor } } : {}),
-        ...(search ? { AND: [search] } : {}),
+        ...(where.length ? { AND: where } : {}),
       },
       orderBy: pinned ? { posted_at: 'desc' } : { id: 'desc' },
       include: POST_LIST_INCLUDE,
@@ -424,9 +448,31 @@ export class NoticeBoardService {
     if (this.scope.isExempt(user)) return null;
     const inScope = this.scope.whereForStudents(user);
     if (Object.keys(inScope).length === 0) return null;
+    return this._reachAmong({ deleted_at: null, ...inScope }, user.sub);
+  }
 
+  /**
+   * TAFSD-507: the board's campus / class / section filters. A post matches
+   * when it reached a student placed there now: sent to that campus, class or
+   * section, sent school-wide, or sent to named students who are there. null
+   * when no placement filter is set. Unlike scope, being the poster doesn't
+   * make a post match.
+   */
+  private async _placementReach(filters: NoticeListFilters) {
+    const where: Prisma.studentsWhereInput = {
+      deleted_at: null,
+      ...(filters.campusIds?.length ? { campus_id: { in: filters.campusIds } } : {}),
+      ...(filters.classIds?.length ? { class_id: { in: filters.classIds } } : {}),
+      ...(filters.sectionIds?.length ? { section_id: { in: filters.sectionIds } } : {}),
+    };
+    if (Object.keys(where).length === 1) return null;
+    return this._reachAmong(where, null);
+  }
+
+  /** Which posts reached at least one of these students (plus `ownerSub`'s own posts). */
+  private async _reachAmong(studentsWhere: Prisma.studentsWhereInput, ownerSub: string | null) {
     const students = await this.prisma.students.findMany({
-      where: { deleted_at: null, ...inScope },
+      where: studentsWhere,
       select: { cc: true, campus_id: true, class_id: true, section_id: true },
     });
     const ccs = new Set(students.map((st) => st.cc));
@@ -444,7 +490,7 @@ export class NoticeBoardService {
         section_ids: unknown;
         student_ccs: unknown;
       }) => {
-        if (post.posted_by === user.sub) return true;
+        if (ownerSub && post.posted_by === ownerSub) return true;
         // Student targeting is exclusive, as in _resolveAudienceFamilyIds.
         const targeted = (post.student_ccs as number[]) ?? [];
         if (targeted.length) return targeted.some((cc) => ccs.has(cc));
