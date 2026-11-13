@@ -255,6 +255,21 @@ const SEGMENTS_ACTIONS: TileAction[] = [
 ];
 
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+// TAFSD-498: the student document vault -- the Student Documents page and the
+// Documents tab of the student panel. No legacy bridge on purpose: B-Forms,
+// CNICs and medical records are only seen by people granted this tile.
+const STUDENT_DOCUMENTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'View documents and the missing-documents report', default: true },
+
+  { id: 'upload', label: 'File new documents', implies: ['view'] },
+  { id: 'replace', label: 'Upload a clearer copy, or bring an older version back', implies: ['view'] },
+  { id: 'archive', label: 'Archive or restore a document', implies: ['view'] },
+  { id: 'view_restricted', label: 'See restricted documents (medical records)', implies: ['view'] },
+  { id: 'export', label: 'Export the missing-documents report', implies: ['view'] },
+  { id: 'manage_types', label: 'Manage document types', implies: ['view'] },
+];
+
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 // TAFSD-475: the special categories list (Fee Endowment, Complementary, …).
 // Giving a category to a student stays on the student tiles (flags.edit).
 const SPECIAL_CATEGORIES_ACTIONS: TileAction[] = [
@@ -993,6 +1008,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'student.registration', module: 'student', label: 'Registration', description: 'New student intake', href: '/identity/register', capabilities: ['students.registration.view'], actions: REGISTRATION_ACTIONS, legacyFullAccessCapabilities: ['students.registration.create', 'students.enrollment.complete', 'students.directory.edit'] },
   { id: 'student.enrollments', module: 'student', label: 'Enrollments', description: 'Class and section assignment', href: '/enrollments', capabilities: ['students.enrollment.view'], actions: ENROLLMENTS_ACTIONS, legacyFullAccessCapabilities: ['students.enrollment.complete'] },
   { id: 'student.directory', module: 'student', label: 'Student Directory', description: 'Search all students', href: '/identity/students', capabilities: ['students.directory.view'], actions: STUDENT_DIRECTORY_ACTIONS, legacyFullAccessCapabilities: ['students.directory.edit'] },
+  { id: 'student.documents', module: 'student', label: 'Student Documents', description: 'Every document on a student, with old versions kept', href: '/identity/documents', capabilities: ['students.directory.view'], actions: STUDENT_DOCUMENTS_ACTIONS },
   { id: 'student.families', module: 'student', label: 'Families', description: 'Guardian and contact info', href: '/families', capabilities: ['students.families.view'], actions: FAMILIES_ACTIONS, legacyFullAccessCapabilities: ['students.families.edit'] },
   { id: 'student.parent_change_requests', module: 'student', label: 'Parent Change Requests', description: 'Profile update approvals', href: '/parent-change-requests', capabilities: ['students.families.view'], actions: PARENT_CHANGE_REQUESTS_ACTIONS, legacyFullAccessCapabilities: ['students.families.edit'] },
   { id: 'student.transfers', module: 'student', label: 'Transfers', description: 'Inter-school movements', href: '/transfers', capabilities: ['academic.transfers.view'], actions: TRANSFERS_ACTIONS, legacyFullAccessCapabilities: ['academic.transfers.execute'] },

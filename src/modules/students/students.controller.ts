@@ -37,6 +37,7 @@ export class StudentsController {
   @Get('search-simple')
   @RequireAnyTile(
     'student.directory',
+    'student.documents',
     'student.academic_actions',
     'finance.vouchers',
     'finance.single_voucher',
