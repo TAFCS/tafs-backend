@@ -768,12 +768,11 @@ describe('Scope on the policy tiles', () => {
 });
 
 
-// ── Student attendance tiles, Quick Check-In, A-Level Roll Call ───────────────
+// ── Student attendance tiles and A-Level Roll Call (Quick Check-In retired, TAFSD-508) ──
 describe('Student attendance tiles', () => {
   const STUDENT_TILES = [
     'attendance.student_attendance',
     'attendance.student_attendance_cycle',
-    'attendance.quick_check_in',
     'attendance.alevel_roll_call',
   ];
 
@@ -800,12 +799,10 @@ describe('Student attendance tiles', () => {
     expect(meta(p, 'resolveAttendance')?.actionKeys).toEqual([actionKey('attendance.student_attendance', 'resolve')]);
     expect(meta(p, 'getAttendanceMatrix')?.actionKeys).toEqual([actionKey('attendance.student_attendance_cycle', 'view')]);
     expect(meta(p, 'exportAttendanceMatrix')?.actionKeys).toEqual([actionKey('attendance.student_attendance_cycle', 'export')]);
-    expect(meta(p, 'getQuickCheckState')?.actionKeys).toEqual([actionKey('attendance.quick_check_in', 'view')]);
-    expect(meta(p, 'manualScan')?.actionKeys).toEqual([actionKey('attendance.quick_check_in', 'scan')]);
     assertEveryRouteAccountedFor(StudentAttendanceController, {});
     const guards: unknown[] = Reflect.getMetadata('__guards__', StudentAttendanceController) ?? [];
     expect(guards).toContain(TileActionGuard);
-    keysExist(['getSummary', 'bulkManualMark', 'resolveAttendance', 'getAttendanceMatrix', 'exportAttendanceMatrix', 'getQuickCheckState', 'manualScan'].flatMap((h) => meta(p, h)!.actionKeys));
+    keysExist(['getSummary', 'bulkManualMark', 'resolveAttendance', 'getAttendanceMatrix', 'exportAttendanceMatrix'].flatMap((h) => meta(p, h)!.actionKeys));
   });
 
   it('keeps the roll-session routes open to the Timetables page that shares them, and skip to A-Level Roll Call alone', () => {
@@ -918,5 +915,14 @@ describe('ZK Device Logs', () => {
       await expect(c.previewUnlink({} as any, scoped)).rejects.toBeInstanceOf(ForbiddenException);
       expect(res.resolve).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('Quick Check-In (TAFSD-508)', () => {
+  it('is retired: no tile and no gate-desk routes', () => {
+    expect(TILES_MANIFEST.some((t) => t.id === 'attendance.quick_check_in')).toBe(false);
+    const p = StudentAttendanceController.prototype as unknown as Record<string, unknown>;
+    expect(p.getQuickCheckState).toBeUndefined();
+    expect(p.manualScan).toBeUndefined();
   });
 });

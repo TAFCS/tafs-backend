@@ -8,7 +8,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { RollRecordStatus, ScanDirection } from '@prisma/client';
+import { RollRecordStatus } from '@prisma/client';
 
 export class GetStudentAttendanceQueryDto {
   @IsDateString()
@@ -117,12 +117,3 @@ export class BulkManualStudentAttendanceDto {
   records: BulkManualStudentAttendanceRecordDto[];
 }
 
-/**
- * Manual gate-desk check-in/check-out — the operator picks the direction
- * explicitly instead of it being derived from scan order (see
- * ZkAttendanceProcessorService.recordManualStudentScan).
- */
-export class ManualStudentScanDto {
-  @IsEnum(ScanDirection)
-  direction: ScanDirection;
-}

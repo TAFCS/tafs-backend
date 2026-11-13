@@ -85,7 +85,6 @@ const EMPLOYEE_SEARCH_TILES = [
 ];
 const STUDENT_SEARCH_TILES = [
   'attendance.teaching_groups', // 196
-  'attendance.quick_check_in', // 200
   'attendance.student_attendance', // 201
   'communication.notice_board', // 202
   'student.families', // 203
