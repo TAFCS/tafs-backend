@@ -23,6 +23,8 @@ const permissionsList = [
     { key: 'students.directory.edit', module: 'Student Management', description: 'Edit student details' },
     { key: 'students.families.view', module: 'Student Management', description: 'View families directory' },
     { key: 'students.families.edit', module: 'Student Management', description: 'Edit family/guardian details' },
+    // TAFSD-510: granted with the Exam Documents tile, per person.
+    { key: 'students.exam_documents.view', module: 'Student Management', description: 'Open Exam Documents' },
 
     // Fee Administration
     { key: 'fee_admin.fee_types.view', module: 'Fee Administration', description: 'View fee types' },

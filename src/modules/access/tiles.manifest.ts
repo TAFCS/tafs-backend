@@ -615,6 +615,20 @@ const FAMILY_CREDIT_ACTIONS: TileAction[] = [
   { id: 'export', label: 'Export the list to Excel', implies: ['view'] },
 ];
 
+// TAFSD-510: Exam Documents. Schedules, and the admit cards (VI–X) / statements
+// of entry (every other class) issued from them to students whose dues are
+// cleared through the schedule's fee month. Overriding the dues check is its own
+// grant because it hands a document to a student who still owes money. Like
+// every web tile it is default-deny and granted per person.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EXAM_DOCUMENTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Exam Documents', description: 'See schedules, and which students are cleared, owing or already issued', default: true },
+  { id: 'manage_schedules', label: 'Create and edit exam schedules', description: 'Papers, notes, fee date and issue date; publish or delete', implies: ['view'] },
+  { id: 'issue', label: 'Issue and reprint documents', description: 'Only to students whose dues are cleared through their fee date', implies: ['view'] },
+  { id: 'change_fee_dates', label: "Change selected students' fee date", description: 'Checks those students against an earlier or later fee date than the schedule. Recorded in the activity log', implies: ['view'] },
+  { id: 'override_dues', label: 'Issue to a student who owes dues', description: 'Needs a reason, which is recorded in the activity log', implies: ['issue'] },
+];
+
 // Transfers had NO guard of any kind: TransferController carried no
 // @UseGuards, so every route -- including the one that rewrites a student's
 // class, campus and GR number -- was reachable without a login. It is now
@@ -998,6 +1012,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'student.transfers', module: 'student', label: 'Transfers', description: 'Inter-school movements', href: '/transfers', capabilities: ['academic.transfers.view'], actions: TRANSFERS_ACTIONS, legacyFullAccessCapabilities: ['academic.transfers.execute'] },
   { id: 'student.academic_actions', module: 'student', label: 'Academic Actions', description: 'Bulk promotions and actions', href: '/bulk-promote', capabilities: ['academic.bulk_promote.execute'], actions: ACADEMIC_ACTIONS_ACTIONS, legacyFullAccessCapabilities: ['academic.bulk_promote.execute'] },
   { id: 'student.section_allocation', module: 'student', label: 'Section Allocation Rules', description: 'Capacity and gender limits per campus/class/section', href: '/campuses/allocation-rules', capabilities: ['academic.campuses.view'], actions: SECTION_ALLOCATION_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
+  { id: 'student.exam_documents', module: 'student', label: 'Exam Documents', description: 'Exam schedules, admit cards and statements of entry for students with dues cleared', href: '/exam-documents', capabilities: ['students.exam_documents.view'], actions: EXAM_DOCUMENTS_ACTIONS },
   { id: 'student.house_balancer', module: 'student', label: 'House Balancer', description: 'Random evenly balanced house redistribution', href: '/house-balancer', capabilities: ['academic.campuses.view'], actions: HOUSE_BALANCER_ACTIONS, legacyFullAccessCapabilities: ['academic.campuses.edit'] },
 
   // ── Finance ──────────────────────────────────────────────────────────────

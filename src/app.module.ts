@@ -24,6 +24,7 @@ import { StaffEditingModule } from './modules/staff-editing/staff-editing.module
 import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module';
 import { StudentCategoriesModule } from './modules/student-categories/student-categories.module';
 import { FamilyCreditModule } from './modules/family-credit/family-credit.module';
+import { ExamDocumentsModule } from './modules/exam-documents/exam-documents.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { BulkVoucherJobsModule } from './modules/bulk-voucher-jobs/bulk-voucher-jobs.module';
 import { EnrollmentModule } from './modules/enrollments/enrollment.module';
@@ -85,6 +86,7 @@ import { HierarchyModule } from './common/hierarchy/hierarchy.module';
     BankAccountsModule,
     StudentCategoriesModule,
     FamilyCreditModule,
+    ExamDocumentsModule,
     VouchersModule,
     BulkVoucherJobsModule,
     EnrollmentModule,
