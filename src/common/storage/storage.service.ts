@@ -165,6 +165,33 @@ export class StorageService {
     }
 
     /**
+     * Upload a PRIVATE object and return its key (not a URL). For anything that
+     * must not sit at a public address -- the student document vault holds
+     * B-Forms, CNICs and medical records. Read it back with `getSignedUrl()`.
+     */
+    async uploadPrivate(key: string, body: Buffer, mime: string): Promise<string> {
+        if (!this.client) {
+            this.logger.log(`Mocking private upload for ${key} (storage not configured)`);
+            return key;
+        }
+        try {
+            await this.client.send(
+                new PutObjectCommand({
+                    Bucket: this.bucket,
+                    Key: key,
+                    Body: body,
+                    ContentType: mime,
+                    ACL: 'private',
+                }),
+            );
+            return key;
+        } catch (err: any) {
+            this.logger.error(`Failed to upload ${key}`, err?.message, err?.stack);
+            throw new InternalServerErrorException('File upload to storage failed');
+        }
+    }
+
+    /**
      * Delete an object from DigitalOcean Spaces by its full CDN/public URL.
      * Silently ignores errors (best-effort cleanup).
      */
@@ -214,7 +241,11 @@ export class StorageService {
     /**
      * Generate a signed URL for temporary access to a private object.
      */
-    async getSignedUrl(key: string, expiresIn = 900): Promise<string> {
+    async getSignedUrl(
+        key: string,
+        expiresIn = 900,
+        response?: { disposition?: 'inline' | 'attachment'; filename?: string; contentType?: string },
+    ): Promise<string> {
         if (!this.client) {
             throw new InternalServerErrorException('Storage not configured');
         }
@@ -225,6 +256,14 @@ export class StorageService {
             const command = new GetObjectCommand({
                 Bucket: this.bucket,
                 Key: key,
+                ...(response?.disposition
+                    ? {
+                          ResponseContentDisposition: response.filename
+                              ? `${response.disposition}; filename="${response.filename.replace(/["\\\r\n]/g, '_')}"`
+                              : response.disposition,
+                      }
+                    : {}),
+                ...(response?.contentType ? { ResponseContentType: response.contentType } : {}),
                 // Explicitly disable checksum mode which can cause "SignatureDoesNotMatch" on DO Spaces
                 ChecksumMode: undefined,
             });

@@ -23,6 +23,7 @@ import { CampusesModule } from './modules/campuses/campuses.module';
 import { StaffEditingModule } from './modules/staff-editing/staff-editing.module';
 import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module';
 import { StudentCategoriesModule } from './modules/student-categories/student-categories.module';
+import { StudentDocumentsModule } from './modules/student-documents/student-documents.module';
 import { FamilyCreditModule } from './modules/family-credit/family-credit.module';
 import { ExamDocumentsModule } from './modules/exam-documents/exam-documents.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
@@ -85,6 +86,7 @@ import { HierarchyModule } from './common/hierarchy/hierarchy.module';
     StaffEditingModule,
     BankAccountsModule,
     StudentCategoriesModule,
+    StudentDocumentsModule,
     FamilyCreditModule,
     ExamDocumentsModule,
     VouchersModule,

@@ -378,6 +378,7 @@ model guardians {
   additional_phones          Json?
   parent_change_requests     parent_change_requests[]
   student_guardians          student_guardians[]
+  student_documents          student_documents[]
   tickets_closed             support_tickets[]        @relation("TicketClosedByGuardian")
   tickets_opened             support_tickets[]        @relation("TicketOpenedByGuardian")
   ticket_events              ticket_events[]          @relation("TicketEventActorGuardian")
@@ -878,6 +879,7 @@ model students {
   houses                        houses?                        @relation(fields: [house_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   sections                      sections?                      @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   student_photo_history         student_photo_history[]
+  student_documents             student_documents[]
   support_tickets               support_tickets[]
   voucher_notifications         voucher_notifications[]
   vouchers                      vouchers[]
@@ -3249,6 +3251,73 @@ model student_photo_history {
 
   @@index([student_id])
   @@index([student_id, uploaded_at])
+}
+
+/// Student document vault (Academics plan §5). Kinds of document, managed in
+/// School Setup. `owner` GUARDIAN types hang off the guardian and are shared by
+/// siblings; `origin` GENERATED types are filed by the system, never uploaded.
+model student_document_types {
+  id                    Int                 @id @default(autoincrement())
+  code                  String              @unique @db.VarChar(40)
+  name                  String              @db.VarChar(100)
+  description           String?             @db.VarChar(300)
+  owner                 String              @default("STUDENT") @db.VarChar(10)
+  origin                String              @default("PROVIDED") @db.VarChar(10)
+  allow_multiple        Boolean             @default(false)
+  required_at_admission Boolean             @default(false)
+  restricted            Boolean             @default(false)
+  visible_to_parents    Boolean             @default(false)
+  is_system             Boolean             @default(false)
+  is_active             Boolean             @default(true)
+  display_order         Int                 @default(0)
+  created_at            DateTime            @default(now()) @db.Timestamp(6)
+  updated_at            DateTime            @default(now()) @updatedAt @db.Timestamp(6)
+  student_documents     student_documents[]
+}
+
+/// One logical document. Exactly one of student_id / guardian_id is set. The
+/// current file is the highest version_no; versions are never edited or deleted.
+model student_documents {
+  id             Int                         @id @default(autoincrement())
+  type_id        Int
+  student_id     Int?
+  guardian_id    Int?
+  title          String?                     @db.VarChar(150)
+  academic_year  String?                     @db.VarChar(20)
+  source_ref     String?                     @db.VarChar(80)
+  archived_at    DateTime?                   @db.Timestamp(6)
+  archived_by    String?                     @db.VarChar(255)
+  archive_reason String?                     @db.VarChar(500)
+  created_by     String                      @db.VarChar(255)
+  created_at     DateTime                    @default(now()) @db.Timestamp(6)
+  updated_at     DateTime                    @default(now()) @updatedAt @db.Timestamp(6)
+  type           student_document_types      @relation(fields: [type_id], references: [id], onDelete: Restrict)
+  students       students?                   @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+  guardians      guardians?                  @relation(fields: [guardian_id], references: [id], onDelete: Cascade)
+  versions       student_document_versions[]
+
+  @@unique([type_id, source_ref])
+  @@index([student_id])
+  @@index([guardian_id])
+}
+
+model student_document_versions {
+  id                Int               @id @default(autoincrement())
+  document_id       Int
+  version_no        Int
+  storage_key       String            @db.Text
+  mime_type         String            @db.VarChar(100)
+  size_bytes        Int
+  sha256            String            @db.VarChar(64)
+  original_filename String?           @db.VarChar(255)
+  page_count        Int?
+  channel           String            @default("DESK_UPLOAD") @db.VarChar(20)
+  note              String?           @db.VarChar(500)
+  uploaded_by       String            @db.VarChar(255)
+  uploaded_at       DateTime          @default(now()) @db.Timestamp(6)
+  document          student_documents @relation(fields: [document_id], references: [id], onDelete: Cascade)
+
+  @@unique([document_id, version_no])
 }
 
 /// TAFSD-510: an assessment's schedule on one campus (e.g. "First Semester
