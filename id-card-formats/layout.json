@@ -1,0 +1,1998 @@
+{
+ "pre-primary-nnn": {
+  "category": "students",
+  "source": "PRIMARY_NNN_CARD",
+  "front": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "name": {
+     "x0": 8.0,
+     "x1": 168.0,
+     "cx": 130.41,
+     "base": 119.09,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "MUHAMMAD MUSTAFA"
+    },
+    "classLine": {
+     "x0": 68.99,
+     "x1": 188.99,
+     "cx": 128.99,
+     "base": 126.95,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "EARLY YEAR 2"
+    },
+    "gr": {
+     "x0": 67.75,
+     "x1": 187.75,
+     "cx": 127.75,
+     "base": 133.94,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "GR. # 3414"
+    }
+   },
+   "frame": {
+    "x0": 100.14,
+    "y0": 44.37,
+    "x1": 157.74,
+    "y1": 107.4,
+    "width": 2.5
+   },
+   "photo": {
+    "x0": 101.39,
+    "y0": 45.62,
+    "x1": 156.49,
+    "y1": 106.15
+   }
+  },
+  "back": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "father": {
+     "x0": 77.34,
+     "x1": 228.24,
+     "cx": 152.79,
+     "base": 37.21,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 38.8,
+     "sample": "MUHAMMAD MISBAH SHAHAB"
+    },
+    "address": {
+     "x0": 55.18,
+     "x1": 228.26,
+     "cx": 141.72,
+     "base": 52.49,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 54.45,
+     "sample": "B - 306, RUFI GREEN CITY , BLOCK - 13, G-E-J"
+    },
+    "residence": {
+     "x0": 67.14,
+     "x1": 123.18,
+     "cx": 95.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0345-2864577"
+    },
+    "cellular": {
+     "x0": 180.09,
+     "x1": 228.24,
+     "cx": 204.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0333-3941307"
+    },
+    "contact": {
+     "x0": 60.2,
+     "x1": 123.18,
+     "cx": 91.69,
+     "base": 84.09,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "0300-8253321"
+    },
+    "nearest": {
+     "x0": 175.99,
+     "x1": 228.24,
+     "cx": 202.12,
+     "base": 84.1,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "-"
+    },
+    "house": {
+     "x0": 45.2,
+     "x1": 123.97,
+     "cx": 84.58,
+     "base": 99.7,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.34,
+     "sample": "SIR SYED"
+    },
+    "colour": {
+     "x0": 167.03,
+     "x1": 228.24,
+     "cx": 197.63,
+     "base": 99.7,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.55,
+     "sample": "YELLOW"
+    },
+    "validUpto": {
+     "x0": 178.41,
+     "x1": 228.24,
+     "cx": 203.32,
+     "base": 115.41,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.26,
+     "sample": "JULY 31, 2027"
+    },
+    "issueDate": {
+     "x0": 73.73,
+     "x1": 123.97,
+     "cx": 98.85,
+     "base": 115.49,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.05,
+     "sample": "AUGUST 03, 2026"
+    }
+   }
+  }
+ },
+ "pre-primary-gkf": {
+  "category": "students",
+  "source": "PRIMARY_GKF_CARD",
+  "front": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "name": {
+     "x0": 8.0,
+     "x1": 168.0,
+     "cx": 122.16,
+     "base": 119.09,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "MUHAMMAD MUSTAFA"
+    },
+    "classLine": {
+     "x0": 61.86,
+     "x1": 181.86,
+     "cx": 121.86,
+     "base": 127.28,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "EARLY YEAR 2"
+    },
+    "gr": {
+     "x0": 61.86,
+     "x1": 181.86,
+     "cx": 121.86,
+     "base": 134.13,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "GR. # 3414"
+    }
+   },
+   "frame": {
+    "x0": 100.14,
+    "y0": 44.37,
+    "x1": 157.74,
+    "y1": 107.4,
+    "width": 2.5
+   },
+   "photo": {
+    "x0": 101.39,
+    "y0": 45.62,
+    "x1": 156.49,
+    "y1": 106.15
+   }
+  },
+  "back": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "father": {
+     "x0": 77.34,
+     "x1": 228.24,
+     "cx": 152.79,
+     "base": 37.21,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 38.8,
+     "sample": "MUHAMMAD MISBAH SHAHAB"
+    },
+    "address": {
+     "x0": 55.18,
+     "x1": 228.26,
+     "cx": 141.72,
+     "base": 52.49,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 54.45,
+     "sample": "B - 306, RUFI GREEN CITY , BLOCK - 13, G-E-J"
+    },
+    "residence": {
+     "x0": 67.14,
+     "x1": 123.18,
+     "cx": 95.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0345-2864577"
+    },
+    "cellular": {
+     "x0": 180.09,
+     "x1": 228.24,
+     "cx": 204.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0333-3941307"
+    },
+    "contact": {
+     "x0": 60.2,
+     "x1": 123.18,
+     "cx": 91.69,
+     "base": 84.09,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "0300-8253321"
+    },
+    "nearest": {
+     "x0": 175.99,
+     "x1": 228.24,
+     "cx": 202.12,
+     "base": 84.1,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "-"
+    },
+    "house": {
+     "x0": 45.2,
+     "x1": 123.97,
+     "cx": 84.58,
+     "base": 99.7,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.34,
+     "sample": "SIR SYED"
+    },
+    "colour": {
+     "x0": 167.03,
+     "x1": 228.24,
+     "cx": 197.63,
+     "base": 99.7,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.55,
+     "sample": "YELLOW"
+    },
+    "issueDate": {
+     "x0": 73.73,
+     "x1": 123.97,
+     "cx": 98.85,
+     "base": 115.49,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.05,
+     "sample": "AUGUST 03, 2026"
+    },
+    "validUpto": {
+     "x0": 178.41,
+     "x1": 228.24,
+     "cx": 203.32,
+     "base": 115.41,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.26,
+     "sample": "JULY 31, 2027"
+    }
+   }
+  }
+ },
+ "pre-primary-jauhar": {
+  "category": "students",
+  "source": "PRIMARY_GKF_CARD",
+  "front": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "name": {
+     "x0": 8.0,
+     "x1": 168.0,
+     "cx": 122.16,
+     "base": 119.09,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "MUHAMMAD MUSTAFA"
+    },
+    "classLine": {
+     "x0": 61.86,
+     "x1": 181.86,
+     "cx": 121.86,
+     "base": 127.28,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "EARLY YEAR 2"
+    },
+    "gr": {
+     "x0": 61.86,
+     "x1": 181.86,
+     "cx": 121.86,
+     "base": 134.13,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "GR. # 3414"
+    }
+   },
+   "frame": {
+    "x0": 100.14,
+    "y0": 44.37,
+    "x1": 157.74,
+    "y1": 107.4,
+    "width": 2.5
+   },
+   "photo": {
+    "x0": 101.39,
+    "y0": 45.62,
+    "x1": 156.49,
+    "y1": 106.15
+   }
+  },
+  "back": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "father": {
+     "x0": 77.34,
+     "x1": 228.24,
+     "cx": 152.79,
+     "base": 37.21,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 38.8,
+     "sample": "GHULAM MUHAMMAD HUB"
+    },
+    "address": {
+     "x0": 55.18,
+     "x1": 228.26,
+     "cx": 141.72,
+     "base": 52.49,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 54.45,
+     "sample": "B - 306, RUFI GREEN  , BLK - 13, GULISTAN-E-JAUHAR."
+    },
+    "residence": {
+     "x0": 67.14,
+     "x1": 123.18,
+     "cx": 95.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0334-3036155"
+    },
+    "cellular": {
+     "x0": 180.09,
+     "x1": 228.24,
+     "cx": 204.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0336-3546814"
+    },
+    "contact": {
+     "x0": 60.2,
+     "x1": 123.18,
+     "cx": 91.69,
+     "base": 84.09,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "-"
+    },
+    "nearest": {
+     "x0": 175.99,
+     "x1": 228.24,
+     "cx": 202.12,
+     "base": 84.1,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "-"
+    },
+    "house": {
+     "x0": 45.2,
+     "x1": 123.97,
+     "cx": 84.58,
+     "base": 99.7,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.34,
+     "sample": "SIR SYED"
+    },
+    "colour": {
+     "x0": 167.03,
+     "x1": 228.24,
+     "cx": 197.63,
+     "base": 99.7,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.55,
+     "sample": "YELLOW"
+    },
+    "issueDate": {
+     "x0": 73.73,
+     "x1": 123.97,
+     "cx": 98.85,
+     "base": 115.37,
+     "size": 6.21,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.05,
+     "sample": "AUGUST 03, 2026"
+    },
+    "validUpto": {
+     "x0": 178.41,
+     "x1": 228.24,
+     "cx": 203.32,
+     "base": 115.39,
+     "size": 6.74,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.26,
+     "sample": "JULY 31, 2027"
+    }
+   }
+  }
+ },
+ "junior-cambridge-jauhar": {
+  "category": "students",
+  "source": "ID_CARD_FORMAT",
+  "front": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "name": {
+     "x0": 8.0,
+     "x1": 168.0,
+     "cx": 117.22,
+     "base": 116.99,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "FAHIM ALI HUB"
+    },
+    "classLine": {
+     "x0": 56.91,
+     "x1": 176.91,
+     "cx": 116.91,
+     "base": 125.18,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "JR - II D"
+    },
+    "gr": {
+     "x0": 56.91,
+     "x1": 176.91,
+     "cx": 116.91,
+     "base": 132.03,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "GR. # 2550"
+    }
+   },
+   "frame": {
+    "x0": 87.99,
+    "y0": 42.27,
+    "x1": 145.59,
+    "y1": 105.3,
+    "width": 2.5
+   },
+   "photo": {
+    "x0": 89.24,
+    "y0": 43.52,
+    "x1": 144.34,
+    "y1": 104.05
+   }
+  },
+  "back": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "father": {
+     "x0": 77.34,
+     "x1": 228.24,
+     "cx": 152.79,
+     "base": 37.21,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 38.8,
+     "sample": "GHULAM MUHAMMAD HUB"
+    },
+    "address": {
+     "x0": 55.18,
+     "x1": 228.26,
+     "cx": 141.72,
+     "base": 52.49,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 54.45,
+     "sample": "B - 306, RUFI GREEN  , BLK - 13, GULISTAN-E-JAUHAR."
+    },
+    "residence": {
+     "x0": 67.14,
+     "x1": 123.18,
+     "cx": 95.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0334-3036155"
+    },
+    "cellular": {
+     "x0": 180.09,
+     "x1": 228.24,
+     "cx": 204.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0336-3546814"
+    },
+    "contact": {
+     "x0": 60.2,
+     "x1": 123.18,
+     "cx": 91.69,
+     "base": 84.09,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "-"
+    },
+    "nearest": {
+     "x0": 175.99,
+     "x1": 228.24,
+     "cx": 202.12,
+     "base": 84.1,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "-"
+    },
+    "house": {
+     "x0": 45.2,
+     "x1": 123.97,
+     "cx": 84.58,
+     "base": 99.7,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.34,
+     "sample": "SIR SYED"
+    },
+    "colour": {
+     "x0": 167.03,
+     "x1": 228.24,
+     "cx": 197.63,
+     "base": 99.7,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.55,
+     "sample": "YELLOW"
+    },
+    "issueDate": {
+     "x0": 73.73,
+     "x1": 123.97,
+     "cx": 98.85,
+     "base": 115.37,
+     "size": 6.21,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.05,
+     "sample": "AUGUST 03, 2026"
+    },
+    "validUpto": {
+     "x0": 178.41,
+     "x1": 228.24,
+     "cx": 203.32,
+     "base": 115.39,
+     "size": 6.74,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.26,
+     "sample": "JULY 31, 2027"
+    }
+   }
+  }
+ },
+ "senior-cambridge-jauhar": {
+  "category": "students",
+  "source": "SENIOR_CARD",
+  "front": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "name": {
+     "x0": 8.0,
+     "x1": 168.0,
+     "cx": 125.54,
+     "base": 119.09,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "ANUSHA ASHRAF"
+    },
+    "classLine": {
+     "x0": 66.69,
+     "x1": 186.69,
+     "cx": 126.69,
+     "base": 127.08,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "SR - III B"
+    },
+    "gr": {
+     "x0": 66.81,
+     "x1": 186.81,
+     "cx": 126.81,
+     "base": 134.13,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "GR. # 1469"
+    }
+   },
+   "frame": {
+    "x0": 97.31,
+    "y0": 44.09,
+    "x1": 154.91,
+    "y1": 107.12,
+    "width": 2.5
+   },
+   "photo": {
+    "x0": 98.56,
+    "y0": 45.34,
+    "x1": 153.66,
+    "y1": 105.87
+   }
+  },
+  "back": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "father": {
+     "x0": 77.34,
+     "x1": 228.24,
+     "cx": 152.79,
+     "base": 37.21,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 38.8,
+     "sample": "MUHAMMAD ASHRAF"
+    },
+    "address": {
+     "x0": 55.18,
+     "x1": 228.26,
+     "cx": 141.72,
+     "base": 52.49,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 54.45,
+     "sample": "B - 306, RUFI GREEN , BLK - 13, GULISTAN-E-JAUHAR."
+    },
+    "residence": {
+     "x0": 67.14,
+     "x1": 123.18,
+     "cx": 95.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0333-3876465"
+    },
+    "cellular": {
+     "x0": 180.09,
+     "x1": 228.24,
+     "cx": 204.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0343-2803260"
+    },
+    "contact": {
+     "x0": 60.2,
+     "x1": 123.18,
+     "cx": 91.69,
+     "base": 84.09,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "34021521"
+    },
+    "nearest": {
+     "x0": 175.99,
+     "x1": 228.24,
+     "cx": 202.12,
+     "base": 84.1,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "-"
+    },
+    "house": {
+     "x0": 45.2,
+     "x1": 123.97,
+     "cx": 84.58,
+     "base": 99.7,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.34,
+     "sample": "SIR SYED"
+    },
+    "colour": {
+     "x0": 167.03,
+     "x1": 228.24,
+     "cx": 197.63,
+     "base": 99.7,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.55,
+     "sample": "YELLOW"
+    },
+    "issueDate": {
+     "x0": 73.73,
+     "x1": 123.97,
+     "cx": 98.85,
+     "base": 115.52,
+     "size": 6.21,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.05,
+     "sample": "AUGUST 05, 2026"
+    },
+    "validUpto": {
+     "x0": 178.41,
+     "x1": 228.24,
+     "cx": 203.32,
+     "base": 115.41,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.26,
+     "sample": "JULY 31, 2027"
+    }
+   }
+  }
+ },
+ "o-level-jauhar": {
+  "category": "students",
+  "source": "PRIMARY_NNN_CARD",
+  "front": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "name": {
+     "x0": 8.0,
+     "x1": 168.0,
+     "cx": 130.41,
+     "base": 119.09,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "MUHAMMAD MUSTAFA"
+    },
+    "classLine": {
+     "x0": 68.99,
+     "x1": 188.99,
+     "cx": 128.99,
+     "base": 126.95,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "EARLY YEAR 2"
+    },
+    "gr": {
+     "x0": 67.75,
+     "x1": 187.75,
+     "cx": 127.75,
+     "base": 133.94,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "GR. # 3414"
+    }
+   },
+   "frame": {
+    "x0": 100.14,
+    "y0": 44.37,
+    "x1": 157.74,
+    "y1": 107.4,
+    "width": 2.5
+   },
+   "photo": {
+    "x0": 101.39,
+    "y0": 45.62,
+    "x1": 156.49,
+    "y1": 106.15
+   }
+  },
+  "back": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "father": {
+     "x0": 77.34,
+     "x1": 228.24,
+     "cx": 152.79,
+     "base": 37.21,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 38.8,
+     "sample": "MUHAMMAD ASHRAF"
+    },
+    "address": {
+     "x0": 55.18,
+     "x1": 228.26,
+     "cx": 141.72,
+     "base": 52.49,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 54.45,
+     "sample": "B - 306, RUFI GREEN , BLK - 13, GULISTAN-E-JAUHAR."
+    },
+    "residence": {
+     "x0": 67.14,
+     "x1": 123.18,
+     "cx": 95.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0333-3876465"
+    },
+    "cellular": {
+     "x0": 180.09,
+     "x1": 228.24,
+     "cx": 204.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0343-2803260"
+    },
+    "contact": {
+     "x0": 60.2,
+     "x1": 123.18,
+     "cx": 91.69,
+     "base": 84.09,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "34021521"
+    },
+    "nearest": {
+     "x0": 175.99,
+     "x1": 228.24,
+     "cx": 202.12,
+     "base": 84.1,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "-"
+    },
+    "house": {
+     "x0": 45.2,
+     "x1": 123.97,
+     "cx": 84.58,
+     "base": 99.7,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.34,
+     "sample": "SIR SYED"
+    },
+    "colour": {
+     "x0": 167.03,
+     "x1": 228.24,
+     "cx": 197.63,
+     "base": 99.7,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.55,
+     "sample": "YELLOW"
+    },
+    "issueDate": {
+     "x0": 73.73,
+     "x1": 123.97,
+     "cx": 98.85,
+     "base": 115.52,
+     "size": 6.21,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.05,
+     "sample": "AUGUST 05, 2026"
+    },
+    "validUpto": {
+     "x0": 178.41,
+     "x1": 228.24,
+     "cx": 203.32,
+     "base": 115.41,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.26,
+     "sample": "JULY 31, 2027"
+    }
+   }
+  }
+ },
+ "secondary-jauhar": {
+  "category": "students",
+  "source": "SECONDARY_CARD",
+  "front": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "name": {
+     "x0": 8.0,
+     "x1": 168.0,
+     "cx": 122.16,
+     "base": 119.09,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "MEHWISH QADIR"
+    },
+    "classLine": {
+     "x0": 63.27,
+     "x1": 183.27,
+     "cx": 123.27,
+     "base": 127.28,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "X"
+    },
+    "gr": {
+     "x0": 61.86,
+     "x1": 181.86,
+     "cx": 121.86,
+     "base": 134.13,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "GR. # 949"
+    }
+   },
+   "frame": {
+    "x0": 91.95,
+    "y0": 44.25,
+    "x1": 149.55,
+    "y1": 107.28,
+    "width": 2.5
+   },
+   "photo": {
+    "x0": 93.2,
+    "y0": 45.5,
+    "x1": 148.3,
+    "y1": 106.03
+   }
+  },
+  "back": {
+   "width": 243.0,
+   "height": 153.0,
+   "fields": {
+    "father": {
+     "x0": 77.34,
+     "x1": 228.24,
+     "cx": 152.79,
+     "base": 37.21,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 38.8,
+     "sample": "ABDUL QADIR"
+    },
+    "address": {
+     "x0": 55.18,
+     "x1": 228.26,
+     "cx": 141.72,
+     "base": 52.49,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 54.45,
+     "sample": "B - 306, RUFI GREEN CITY , BLOCK - 13, G-E-J"
+    },
+    "residence": {
+     "x0": 67.14,
+     "x1": 123.18,
+     "cx": 95.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "0345-2864577"
+    },
+    "cellular": {
+     "x0": 180.09,
+     "x1": 228.24,
+     "cx": 204.16,
+     "base": 68.5,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 70.1,
+     "sample": "-"
+    },
+    "contact": {
+     "x0": 60.2,
+     "x1": 123.18,
+     "cx": 91.69,
+     "base": 84.09,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "0300-8253321"
+    },
+    "nearest": {
+     "x0": 175.99,
+     "x1": 228.24,
+     "cx": 202.12,
+     "base": 84.1,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 85.71,
+     "sample": "0323-3360608"
+    },
+    "house": {
+     "x0": 45.2,
+     "x1": 123.97,
+     "cx": 84.58,
+     "base": 99.7,
+     "size": 6.69,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.34,
+     "sample": "SIR SYED"
+    },
+    "colour": {
+     "x0": 167.03,
+     "x1": 228.24,
+     "cx": 197.63,
+     "base": 99.7,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 101.55,
+     "sample": "YELLOW"
+    },
+    "issueDate": {
+     "x0": 73.73,
+     "x1": 123.97,
+     "cx": 98.85,
+     "base": 115.41,
+     "size": 6.21,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.05,
+     "sample": "APRIL 29, 2026"
+    },
+    "validUpto": {
+     "x0": 178.41,
+     "x1": 228.24,
+     "cx": 203.32,
+     "base": 115.32,
+     "size": 6.8,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.26,
+     "sample": "MARCH 31, 2027"
+    }
+   }
+  }
+ },
+ "a-level-jauhar": {
+  "category": "students",
+  "source": "TAFSAL_CARD_FORMAT_2026",
+  "front": {
+   "width": 153.0,
+   "height": 243.0,
+   "fields": {
+    "name": {
+     "x0": 6.75,
+     "x1": 147.75,
+     "cx": 77.25,
+     "base": 172.12,
+     "size": 11.24,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "SYED M. ZAIN ABBAS ZAIDI"
+    },
+    "levelLine": {
+     "x0": 16.53,
+     "x1": 136.53,
+     "cx": 76.53,
+     "base": 180.61,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "LEVEL : AS SECTION : C"
+    },
+    "gr": {
+     "x0": 16.57,
+     "x1": 136.57,
+     "cx": 76.57,
+     "base": 188.1,
+     "size": 7.5,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "G.R. # 0182"
+    }
+   },
+   "frame": {
+    "x0": 48.6,
+    "y0": 88.14,
+    "x1": 104.76,
+    "y1": 160.98,
+    "width": 2.16,
+    "over_artwork": true
+   },
+   "photo": {
+    "x0": 49.68,
+    "y0": 89.22,
+    "x1": 103.68,
+    "y1": 159.9
+   }
+  },
+  "back": {
+   "width": 153.0,
+   "height": 243.0,
+   "fields": {
+    "father": {
+     "x0": 54.7,
+     "x1": 142.34,
+     "cx": 98.52,
+     "base": 47.86,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 49.44,
+     "sample": "SYED BAQAR HASNAIN ZAIDI"
+    },
+    "residence": {
+     "x0": 46.06,
+     "x1": 140.54,
+     "cx": 93.3,
+     "base": 64.04,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 66.36,
+     "sample": "021-36992268"
+    },
+    "cellular": {
+     "x0": 43.18,
+     "x1": 140.54,
+     "cx": 91.86,
+     "base": 80.77,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 83.28,
+     "sample": "0316-2333409"
+    },
+    "contact": {
+     "x0": 41.38,
+     "x1": 140.54,
+     "cx": 90.96,
+     "base": 97.23,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 100.32,
+     "sample": "0332-2676637"
+    },
+    "nearest": {
+     "x0": 40.66,
+     "x1": 140.54,
+     "cx": 90.6,
+     "base": 113.94,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 117.06,
+     "sample": "0334-3867217"
+    },
+    "email": {
+     "x0": 55.42,
+     "x1": 140.54,
+     "cx": 97.98,
+     "base": 131.57,
+     "size": 5.66,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 133.8,
+     "sample": "somethingabbas@gmail.com"
+    },
+    "house": {
+     "x0": 31.3,
+     "x1": 69.5,
+     "cx": 50.4,
+     "base": 148.61,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 150.72,
+     "sample": "JINNAH"
+    },
+    "colour": {
+     "x0": 103.42,
+     "x1": 144.5,
+     "cx": 123.96,
+     "base": 148.61,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 150.72,
+     "sample": "BLUE"
+    },
+    "group": {
+     "x0": 29.5,
+     "x1": 140.54,
+     "cx": 85.02,
+     "base": 164.38,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 167.64,
+     "sample": "COMMERCE"
+    },
+    "issueDate": {
+     "x0": 51.1,
+     "x1": 145.58,
+     "cx": 98.34,
+     "base": 181.12,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 184.56,
+     "sample": "AUGUST 10, 2026"
+    },
+    "validUpto": {
+     "x0": 44.98,
+     "x1": 145.94,
+     "cx": 95.46,
+     "base": 199.8,
+     "size": 5.63,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 201.48,
+     "sample": "JULY 31, 2027"
+    }
+   }
+  }
+ },
+ "parent-kaneez-fatima": {
+  "category": "parents",
+  "source": "PARENTS_CARD",
+  "front": {
+   "width": 260.41,
+   "height": 162.0,
+   "fields": {
+    "childName": {
+     "x0": 115.21,
+     "x1": 252.64,
+     "cx": 183.92,
+     "base": 118.91,
+     "size": 9.36,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 120.47,
+     "sample": "MUHAMMAD HUSSAIN SIDDIQUI"
+    },
+    "level": {
+     "x0": 76.09,
+     "x1": 100.92,
+     "cx": 88.51,
+     "base": 131.78,
+     "size": 9.76,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "E.Y.1"
+    },
+    "section": {
+     "x0": 137.04,
+     "x1": 154.04,
+     "cx": 145.54,
+     "base": 131.78,
+     "size": 9.82,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "-"
+    },
+    "gr": {
+     "x0": 216.65,
+     "x1": 241.81,
+     "cx": 229.23,
+     "base": 131.92,
+     "size": 9.76,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "129"
+    }
+   },
+   "photo": {
+    "x0": 10.02,
+    "y0": 44.31,
+    "x1": 63.57,
+    "y1": 107.11
+   }
+  },
+  "back": {
+   "width": 260.41,
+   "height": 162.0,
+   "fields": {
+    "issueDate": {
+     "x0": 78.75,
+     "x1": 140.0,
+     "cx": 109.38,
+     "base": 121.09,
+     "size": 7.02,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 123.03,
+     "sample": "NOVEMBER 05,2026"
+    },
+    "validUpto": {
+     "x0": 196.43,
+     "x1": 240.14,
+     "cx": 218.28,
+     "base": 121.09,
+     "size": 7.66,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 123.03,
+     "sample": "MAY 31, 2027"
+    }
+   }
+  }
+ },
+ "parent-north-nazimabad": {
+  "category": "parents",
+  "source": "PARENTS_CARD",
+  "front": {
+   "width": 259.77,
+   "height": 162.0,
+   "fields": {
+    "childName": {
+     "x0": 114.93,
+     "x1": 252.01,
+     "cx": 183.47,
+     "base": 118.91,
+     "size": 9.35,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 120.47,
+     "sample": "NOOR-UL-HUDA"
+    },
+    "level": {
+     "x0": 75.91,
+     "x1": 100.67,
+     "cx": 88.29,
+     "base": 131.78,
+     "size": 9.75,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "E.Y.2"
+    },
+    "section": {
+     "x0": 136.71,
+     "x1": 153.65,
+     "cx": 145.18,
+     "base": 131.78,
+     "size": 9.81,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "-"
+    },
+    "gr": {
+     "x0": 216.12,
+     "x1": 241.22,
+     "cx": 228.67,
+     "base": 131.65,
+     "size": 9.75,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "167"
+    }
+   },
+   "photo": {
+    "x0": 9.99,
+    "y0": 44.31,
+    "x1": 63.41,
+    "y1": 107.11
+   }
+  },
+  "back": {
+   "width": 259.77,
+   "height": 162.0,
+   "fields": {
+    "issueDate": {
+     "x0": 78.57,
+     "x1": 139.65,
+     "cx": 109.11,
+     "base": 121.09,
+     "size": 7.53,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 123.03,
+     "sample": "AUGUST 17, 2026"
+    },
+    "validUpto": {
+     "x0": 195.95,
+     "x1": 239.54,
+     "cx": 217.75,
+     "base": 121.09,
+     "size": 7.65,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 123.03,
+     "sample": "MAY 31, 2027"
+    }
+   }
+  }
+ },
+ "parent-jauhar": {
+  "category": "parents",
+  "source": "PARENTS_CARD",
+  "front": {
+   "width": 270.0,
+   "height": 162.0,
+   "fields": {
+    "childName": {
+     "x0": 119.36,
+     "x1": 262.03,
+     "cx": 190.7,
+     "base": 118.91,
+     "size": 9.53,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 120.47,
+     "sample": "MUHAMMAD MAHAD QURESHI"
+    },
+    "level": {
+     "x0": 78.8,
+     "x1": 104.73,
+     "cx": 91.77,
+     "base": 131.76,
+     "size": 9.94,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "E.Y.3"
+    },
+    "section": {
+     "x0": 142.0,
+     "x1": 159.8,
+     "cx": 150.9,
+     "base": 131.78,
+     "size": 10.0,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "A"
+    },
+    "gr": {
+     "x0": 224.53,
+     "x1": 250.81,
+     "cx": 237.67,
+     "base": 131.65,
+     "size": 9.94,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 132.97,
+     "sample": "6503"
+    }
+   },
+   "photo": {
+    "x0": 10.35,
+    "y0": 44.31,
+    "x1": 65.95,
+    "y1": 107.11
+   }
+  },
+  "back": {
+   "width": 270.0,
+   "height": 162.0,
+   "fields": {
+    "issueDate": {
+     "x0": 81.56,
+     "x1": 145.25,
+     "cx": 113.41,
+     "base": 121.04,
+     "size": 7.68,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 123.03,
+     "sample": "AUGUST 10, 2026"
+    },
+    "validUpto": {
+     "x0": 203.57,
+     "x1": 249.07,
+     "cx": 226.32,
+     "base": 121.09,
+     "size": 7.8,
+     "color": "#ed1c24",
+     "font": "arial",
+     "rule": 123.03,
+     "sample": "MAY 31, 2027"
+    }
+   }
+  }
+ },
+ "staff-administration": {
+  "category": "staff",
+  "source": "ID_CARD_ADMIN_FACULTY_FORMAT",
+  "front": {
+   "width": 153.0,
+   "height": 243.0,
+   "fields": {
+    "name": {
+     "x0": 6.43,
+     "x1": 147.43,
+     "cx": 76.93,
+     "base": 172.12,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "MRS. SHAKERA SHAKEEL"
+    },
+    "designation": {
+     "x0": 6.03,
+     "x1": 147.03,
+     "cx": 76.53,
+     "base": 180.61,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "PRINCIPAL"
+    },
+    "cnic": {
+     "x0": 6.18,
+     "x1": 147.18,
+     "cx": 76.68,
+     "base": 187.91,
+     "size": 7.5,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "CNIC # 42501-9568781-2"
+    },
+    "employeeNo": {
+     "x0": 6.14,
+     "x1": 147.14,
+     "cx": 76.64,
+     "base": 194.68,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "EMPLOYEE # 03-00556"
+    }
+   },
+   "photo": {
+    "x0": 45.75,
+    "y0": 89.25,
+    "x1": 107.25,
+    "y1": 159.75
+   }
+  },
+  "back": {
+   "width": 153.0,
+   "height": 243.0,
+   "fields": {
+    "relation": {
+     "x0": 72.26,
+     "x1": 143.66,
+     "cx": 107.96,
+     "base": 34.96,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 36.07,
+     "sample": "SHAKEEL AHMED"
+    },
+    "joiningDate": {
+     "x0": 70.76,
+     "x1": 143.66,
+     "cx": 107.21,
+     "base": 51.59,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 52.9,
+     "sample": "JULY 03, 2023"
+    },
+    "address": {
+     "x0": 62.8,
+     "x1": 143.66,
+     "cx": 103.23,
+     "base": 69.73,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 71.27,
+     "sample": "FLAT-2, PLOT# 26-C, STREET-5,"
+    },
+    "residence": {
+     "x0": 58.05,
+     "x1": 143.64,
+     "cx": 100.84,
+     "base": 104.53,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 105.8,
+     "sample": "-"
+    },
+    "mobile": {
+     "x0": 47.06,
+     "x1": 143.64,
+     "cx": 95.35,
+     "base": 121.97,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 123.39,
+     "sample": "0336-2211016"
+    },
+    "nearest": {
+     "x0": 51.08,
+     "x1": 142.66,
+     "cx": 96.87,
+     "base": 138.95,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 140.68,
+     "sample": "0333-2102505"
+    },
+    "issueDate": {
+     "x0": 64.05,
+     "x1": 143.58,
+     "cx": 103.82,
+     "base": 156.56,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 158.03,
+     "sample": "OCTOBER 01, 2024"
+    },
+    "validUpto": {
+     "x0": 53.11,
+     "x1": 146.05,
+     "cx": 99.58,
+     "base": 173.92,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 175.39,
+     "sample": "JULY 31, 2025"
+    },
+    "addressLine2": {
+     "x0": 8.71,
+     "x1": 143.64,
+     "cx": 76.17,
+     "base": 87.06,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 89.04,
+     "sample": "BADAR COM. PH-5, EXT. DHA, KARACHI"
+    },
+    "relationLabel": {
+     "x": 6.2,
+     "base": 35.98,
+     "size": 6.5,
+     "color": "#2e3092",
+     "sample": "HUSBAND\u2019S NAME :"
+    }
+   }
+  }
+ },
+ "staff-faculty-jauhar": {
+  "category": "staff",
+  "source": "ID_CARD_ADMIN_FACULTY_FORMAT",
+  "front": {
+   "width": 153.0,
+   "height": 243.0,
+   "fields": {
+    "name": {
+     "x0": 6.42,
+     "x1": 147.42,
+     "cx": 76.92,
+     "base": 172.12,
+     "size": 12.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "MS. MADIHA SHOAIB"
+    },
+    "designation": {
+     "x0": 6.11,
+     "x1": 147.11,
+     "cx": 76.61,
+     "base": 180.61,
+     "size": 9.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "TEACHER"
+    },
+    "cnic": {
+     "x0": 6.18,
+     "x1": 147.18,
+     "cx": 76.68,
+     "base": 187.91,
+     "size": 7.5,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "CNIC # 42101-3944449-6"
+    },
+    "employeeNo": {
+     "x0": 6.14,
+     "x1": 147.14,
+     "cx": 76.64,
+     "base": 194.68,
+     "size": 7.0,
+     "color": "#231f20",
+     "font": "calibri",
+     "rule": null,
+     "sample": "EMPLOYEE # 02-01355"
+    }
+   },
+   "photo": {
+    "x0": 45.75,
+    "y0": 89.25,
+    "x1": 107.25,
+    "y1": 159.75
+   }
+  },
+  "back": {
+   "width": 153.0,
+   "height": 243.0,
+   "fields": {
+    "relation": {
+     "x0": 72.26,
+     "x1": 143.66,
+     "cx": 107.96,
+     "base": 34.79,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 36.07,
+     "sample": "MUHAMMAD SHOAIB KHAN"
+    },
+    "joiningDate": {
+     "x0": 70.76,
+     "x1": 143.66,
+     "cx": 107.21,
+     "base": 51.64,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 52.9,
+     "sample": "SEPTEMBER 02, 2024"
+    },
+    "address": {
+     "x0": 62.8,
+     "x1": 143.66,
+     "cx": 103.23,
+     "base": 69.8,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 71.27,
+     "sample": "H-G3/B-92, QUETTA TOWN,"
+    },
+    "residence": {
+     "x0": 58.05,
+     "x1": 143.64,
+     "cx": 100.84,
+     "base": 104.49,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 105.8,
+     "sample": "0325-2114412"
+    },
+    "mobile": {
+     "x0": 47.06,
+     "x1": 143.64,
+     "cx": 95.35,
+     "base": 122.02,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 123.39,
+     "sample": "0319-2447969"
+    },
+    "nearest": {
+     "x0": 51.08,
+     "x1": 142.66,
+     "cx": 96.87,
+     "base": 138.95,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 140.68,
+     "sample": "-"
+    },
+    "issueDate": {
+     "x0": 64.05,
+     "x1": 143.58,
+     "cx": 103.82,
+     "base": 156.56,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 158.03,
+     "sample": "OCTOBER 01, 2024"
+    },
+    "validUpto": {
+     "x0": 53.11,
+     "x1": 146.05,
+     "cx": 99.58,
+     "base": 173.92,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 175.39,
+     "sample": "MAY 31, 2025"
+    },
+    "addressLine2": {
+     "x0": 8.71,
+     "x1": 143.64,
+     "cx": 76.17,
+     "base": 87.06,
+     "size": 6.0,
+     "color": "#231f20",
+     "font": "arial",
+     "rule": 89.04,
+     "sample": "AL MUSTAFA VILLAS, KARACHI"
+    },
+    "relationLabel": {
+     "x": 6.2,
+     "base": 35.98,
+     "size": 6.5,
+     "color": "#2e3092",
+     "sample": "HUSBAND\u2019S NAME :"
+    }
+   }
+  }
+ }
+}
