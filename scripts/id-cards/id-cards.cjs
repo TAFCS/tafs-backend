@@ -70,8 +70,10 @@ const FORMAT_TITLES = {
  */
 const WRAP = {
   'a-level-jauhar': {
-    // inset keeps the name a few points clear of the red border.
-    front: { name: { leading: 0.95, inset: 5, pushDown: ['levelLine', 'gr'] } },
+    // inset keeps the name a few points clear of the red border; maxShift is how far
+    // the level and G.R. lines can drop before the G.R. line meets the signature
+    // (signature ink starts at y 207, the G.R. baseline is at 188).
+    front: { name: { leading: 0.95, inset: 5, maxLines: 3, maxShift: 17, pushDown: ['levelLine', 'gr'] } },
   },
 };
 
@@ -143,7 +145,7 @@ function fieldValues(format, p) {
 function drawField(page, font, field, text, ox, oy, faceH) {
   if (!text) return;
   const boxW = field.x1 - field.x0;
-  const squeezeBase = field.font === 'calibri' ? 0.9 : 1;
+  const squeezeBase = field.squeeze || (field.font === 'calibri' ? 0.9 : 1);
   let size = field.size;
   let squeeze = squeezeBase;
   const widthAt = (s, q) => font.widthOfTextAtSize(text, s) * q;
@@ -160,25 +162,43 @@ function drawField(page, font, field, text, ox, oy, faceH) {
   page.pushOperators(popGraphicsState());
 }
 
+/** Every way of breaking `words` into `n` lines, each line at least one word. */
+function* splits(words, n) {
+  if (n === 1) { yield [words.join(' ')]; return; }
+  for (let i = 1; i <= words.length - n + 1; i++) {
+    for (const rest of splits(words.slice(i), n - 1)) yield [words.slice(0, i).join(' '), ...rest];
+  }
+}
+
 /**
- * Splits a value into two lines when it will not fit on one at (nearly) its full size.
- * The break is the one that leaves the longer line shortest, so the two lines balance.
- * Returns the lines and the common size they are drawn at.
+ * Breaks a value over up to `rule.maxLines` lines when it will not fit on one at (nearly)
+ * its full size. For each line count the most even break is used, and the count that
+ * lets the name be drawn largest wins (an extra line only when it is clearly larger),
+ * limited by how far the fields below may move (`rule.maxShift`). Every line gets the
+ * same size and the same narrowing, so the lines match.
  */
-function wrapLines(font, field, text) {
+function wrapLines(font, field, text, rule) {
   const boxW = field.x1 - field.x0;
   const q = field.font === 'calibri' ? 0.9 : 1;
   const widthAt = (t, s) => font.widthOfTextAtSize(t, s) * q;
   const words = String(text).split(/\s+/).filter(Boolean);
   if (words.length < 2 || widthAt(text, field.size * 0.95) <= boxW) return { lines: [text], size: field.size };
   let best = null;
-  for (let i = 1; i < words.length; i++) {
-    const lines = [words.slice(0, i).join(' '), words.slice(i).join(' ')];
-    const widest = Math.max(...lines.map((l) => widthAt(l, field.size)));
-    if (!best || widest < best.widest) best = { lines, widest };
+  for (let n = 2; n <= Math.min(rule.maxLines || 2, words.length); n++) {
+    let even = null;
+    for (const lines of splits(words, n)) {
+      const widest = Math.max(...lines.map((l) => widthAt(l, field.size)));
+      if (!even || widest < even.widest) even = { lines, widest };
+    }
+    const byWidth = field.size * (boxW / even.widest);
+    const byHeight = rule.maxShift != null ? rule.maxShift / ((n - 1) * rule.leading) : Infinity;
+    const size = Math.min(field.size, byWidth, byHeight);
+    if (!best || size > best.size * 1.1) best = { lines: even.lines, size, fit: byWidth };
   }
-  const size = Math.max(field.size * 0.72, Math.min(field.size, field.size * (boxW / best.widest)));
-  return { lines: best.lines, size };
+  // Below 72% of the size, keep the size and narrow the letters instead, equally on every line.
+  const floor = field.size * 0.72;
+  if (best.size >= floor) return { lines: best.lines, size: best.size };
+  return { lines: best.lines, size: floor, squeeze: q * Math.min(1, best.fit / floor) };
 }
 
 function drawLabel(page, font, field, text, ox, oy, faceH) {
@@ -246,7 +266,7 @@ async function drawFace(doc, page, ctx, format, side, person, ox, oy) {
     const f = face.fields[key];
     if (!f || !values[key]) continue;
     const field = rule.inset ? { ...f, x0: f.x0 + rule.inset, x1: f.x1 - rule.inset } : f;
-    const w = wrapLines(ctx.font, field, values[key]);
+    const w = wrapLines(ctx.font, field, values[key], rule);
     wrapped[key] = { ...w, step: w.size * rule.leading, x0: field.x0, x1: field.x1 };
     for (const k of rule.pushDown || []) shift[k] = (shift[k] || 0) + (w.lines.length - 1) * wrapped[key].step;
   }
@@ -259,8 +279,8 @@ async function drawFace(doc, page, ctx, format, side, person, ox, oy) {
       continue;
     }
     if (wrapped[key]) {
-      const { lines, size, step, x0, x1 } = wrapped[key];
-      lines.forEach((line, i) => drawField(page, ctx.font, { ...field, x0, x1, size, base: field.base + i * step }, line, ox, oy, H));
+      const { lines, size, squeeze, step, x0, x1 } = wrapped[key];
+      lines.forEach((line, i) => drawField(page, ctx.font, { ...field, x0, x1, size, squeeze, base: field.base + i * step }, line, ox, oy, H));
       continue;
     }
     drawField(page, ctx.font, field, values[key], ox, oy, H);
