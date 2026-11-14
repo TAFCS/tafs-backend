@@ -62,6 +62,19 @@ const FORMAT_TITLES = {
   'staff-faculty-jauhar': 'Staff, Faculty (Campus III)',
 };
 
+/**
+ * Fields that go onto a second line when the value is too wide for one, and the
+ * fields below them that move down to make room. The A Level name sits between the
+ * photo and the level line with clear space under the G.R. line, so a long name
+ * breaks in two (balanced) and the level and G.R. lines drop by one line.
+ */
+const WRAP = {
+  'a-level-jauhar': {
+    // inset keeps the name a few points clear of the red border.
+    front: { name: { leading: 0.95, inset: 5, pushDown: ['levelLine', 'gr'] } },
+  },
+};
+
 const DASH = '-';
 
 function hex(c) {
@@ -147,6 +160,27 @@ function drawField(page, font, field, text, ox, oy, faceH) {
   page.pushOperators(popGraphicsState());
 }
 
+/**
+ * Splits a value into two lines when it will not fit on one at (nearly) its full size.
+ * The break is the one that leaves the longer line shortest, so the two lines balance.
+ * Returns the lines and the common size they are drawn at.
+ */
+function wrapLines(font, field, text) {
+  const boxW = field.x1 - field.x0;
+  const q = field.font === 'calibri' ? 0.9 : 1;
+  const widthAt = (t, s) => font.widthOfTextAtSize(t, s) * q;
+  const words = String(text).split(/\s+/).filter(Boolean);
+  if (words.length < 2 || widthAt(text, field.size * 0.95) <= boxW) return { lines: [text], size: field.size };
+  let best = null;
+  for (let i = 1; i < words.length; i++) {
+    const lines = [words.slice(0, i).join(' '), words.slice(i).join(' ')];
+    const widest = Math.max(...lines.map((l) => widthAt(l, field.size)));
+    if (!best || widest < best.widest) best = { lines, widest };
+  }
+  const size = Math.max(field.size * 0.72, Math.min(field.size, field.size * (boxW / best.widest)));
+  return { lines: best.lines, size };
+}
+
 function drawLabel(page, font, field, text, ox, oy, faceH) {
   page.drawText(text, { x: ox + field.x, y: oy + faceH - field.base, size: field.size, font, color: hex(field.color) });
 }
@@ -204,10 +238,29 @@ async function drawFace(doc, page, ctx, format, side, person, ox, oy) {
       borderColor: hex(house ? house.frame : '#221e1f'), borderWidth: width,
     });
   }
-  for (const [key, field] of Object.entries(face.fields)) {
+  // Long values that wrap onto a second line push the fields under them down.
+  const wraps = (WRAP[format] && WRAP[format][side]) || {};
+  const shift = {};
+  const wrapped = {};
+  for (const [key, rule] of Object.entries(wraps)) {
+    const f = face.fields[key];
+    if (!f || !values[key]) continue;
+    const field = rule.inset ? { ...f, x0: f.x0 + rule.inset, x1: f.x1 - rule.inset } : f;
+    const w = wrapLines(ctx.font, field, values[key]);
+    wrapped[key] = { ...w, step: w.size * rule.leading, x0: field.x0, x1: field.x1 };
+    for (const k of rule.pushDown || []) shift[k] = (shift[k] || 0) + (w.lines.length - 1) * wrapped[key].step;
+  }
+
+  for (const [key, f] of Object.entries(face.fields)) {
+    const field = shift[key] ? { ...f, base: f.base + shift[key] } : f;
     if (key.endsWith('Label')) {
       const text = values[key];
       if (text) drawLabel(page, ctx.font, field, text, ox, oy, H);
+      continue;
+    }
+    if (wrapped[key]) {
+      const { lines, size, step, x0, x1 } = wrapped[key];
+      lines.forEach((line, i) => drawField(page, ctx.font, { ...field, x0, x1, size, base: field.base + i * step }, line, ox, oy, H));
       continue;
     }
     drawField(page, ctx.font, field, values[key], ox, oy, H);
