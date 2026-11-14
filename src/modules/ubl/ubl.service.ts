@@ -208,6 +208,22 @@ export class UblService {
                 select: { id: true },
             });
             if (existing) return reply('DUPLICATE', { transaction_id: dto.transaction_id, tafs_receipt_id: String(existing.id) });
+            // The log outlives a reversed deposit, so a retry of a transaction the
+            // school has since reversed is still a duplicate, never a second booking.
+            // Read defensively (CLAUDE.md rule 11): before the migration lands the
+            // table is missing, and that must not stop UBL payments.
+            const logged = await this.prisma.ubl_transactions
+                .findUnique({ where: { transaction_id: dto.transaction_id }, select: { deposit_id: true } })
+                .catch((err) => {
+                    this.logger.warn(`UBL transaction log unavailable: ${(err as Error)?.message ?? err}`);
+                    return null;
+                });
+            if (logged) {
+                return reply('DUPLICATE', {
+                    transaction_id: dto.transaction_id,
+                    tafs_receipt_id: logged.deposit_id != null ? String(logged.deposit_id) : null,
+                });
+            }
 
             const txnAt = new Date(dto.transaction_datetime);
             const txnDate = pktDate(txnAt);
@@ -288,6 +304,33 @@ export class UblService {
                         bank_name: dto.payer_bank_name ?? (oneBill ? null : 'UBL'),
                     },
                 });
+            }
+
+            // The settlement reconciliation reads this log. The payment is already
+            // booked, so a failure here is logged, not returned to UBL as an error.
+            try {
+                await this.prisma.ubl_transactions.create({
+                    data: {
+                        transaction_id: dto.transaction_id,
+                        consumer_number: dto.consumer_number,
+                        student_id: cc,
+                        voucher_id: voucher.id,
+                        voucher_number: voucher.voucher_number ?? null,
+                        channel,
+                        payment_method: dto.payment_method,
+                        amount_received: received,
+                        amount_booked: booked,
+                        channel_fee: channelFee,
+                        transaction_at: txnAt,
+                        branch_code: dto.branch_code ?? null,
+                        payer_bank_code: dto.payer_bank_code ?? null,
+                        payer_bank_name: dto.payer_bank_name ?? null,
+                        instrument_number: dto.instrument_number ?? null,
+                        deposit_id: deposit?.id ?? null,
+                    },
+                });
+            } catch (err) {
+                this.logger.error(`UBL transaction log write failed for ${dto.transaction_id}`, err as any);
             }
 
             await this.auditLogs.log({
