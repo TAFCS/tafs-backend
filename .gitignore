@@ -64,3 +64,7 @@ pids
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
+
+# Python bytecode (scripts/id-cards/build-blanks.py)
+__pycache__/
+*.pyc
