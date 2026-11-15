@@ -15,7 +15,11 @@ What it does to each face, starting from the first card on the school's sheet:
   3. Removes the coloured house frame round the photo (the generator draws it in the
      right house colour) and any sample photo.
   4. Removes text the designer left hidden under the artwork.
-  5. Crops the face to the card outline, keeping the artwork as vectors.
+  5. Centres what was meant to be centred. The cards were laid out by hand and their
+     headings and photo frames sit up to 8pt (13pt on one parent card) off the card's
+     centre line. Each heading line is moved, as it is, onto the centre line, and the
+     photo slot and the lines under it are placed on it in the layout.
+  6. Crops the face to the card outline, keeping the artwork as vectors.
 
 Two formats exist only as CorelDRAW files, with no PDF export. They are composed from
 the PDFs of their sister formats, with the headings drawn in the school's own Cooper
@@ -367,6 +371,163 @@ def is_hidden(doc, R, span):
     return before == after
 
 
+# ---------------------------------------------------------------- centring
+
+# Where the centred lines are on each kind of face, in points from the card's top-left.
+# Landscape student fronts: the three heading lines, between the logo (ends by x 46)
+# and the wing artwork (starts at x 200), above the photo frame (starts at y 42).
+# Parent fronts: the school name, address block and "PARENTS / GUARDIAN CARD", above
+# the "Your Presence Is Our Pride" swoosh; the photo beside them is left out.
+# The backs, the staff cards and the A Level card are already centred to within 0.5pt.
+CENTRE_REGIONS = {
+    "students-landscape": (48, 1, 198, 43),
+    "parents": (2, 2, -2, 66),
+}
+CENTRE_TOLERANCE = 0.3  # points; anything closer than this is left where it is
+CENTRE_DPI = 1200
+
+
+def ink_lines(page, region, skip=None, dpi=CENTRE_DPI, gap_pt=0.8):
+    """Lines of visible ink in a region: rows of dark or strongly coloured pixels, split
+    where at least gap_pt of blank rows separate them. Light artwork (the wing, the
+    faint watermark) does not count. Returns each line's ink box, in page points."""
+    k = 72 / dpi
+    pix = page.get_pixmap(dpi=dpi, clip=region)
+    w, h, n, sam = pix.width, pix.height, pix.n, pix.samples
+    sx0 = sx1 = sy0 = None
+    if skip is not None:
+        sx0, sx1 = (skip.x0 - region.x0) / k, (skip.x1 - region.x0) / k
+        sy0 = (skip.y0 - region.y0) / k
+    rows = []
+    for y in range(h):
+        base = y * w * n
+        first = last = None
+        for x in range(w):
+            if sx0 is not None and y >= sy0 and sx0 <= x <= sx1:
+                continue
+            i = base + x * n
+            r, g, b = sam[i], sam[i + 1], sam[i + 2]
+            hi, lo = max(r, g, b), min(r, g, b)
+            if r + g + b < 330 or (hi - lo > 90 and lo < 120):
+                if first is None:
+                    first = x
+                last = x
+        rows.append((first, last))
+    lines, cur, blank = [], None, 0
+    for y, (a, b) in enumerate(rows):
+        if a is None:
+            blank += 1
+            if cur and blank * k >= gap_pt:
+                lines.append(cur)
+                cur = None
+            continue
+        blank = 0
+        if cur is None:
+            cur = [y, y, a, b]
+        else:
+            cur[1], cur[2], cur[3] = y, min(cur[2], a), max(cur[3], b)
+    if cur:
+        lines.append(cur)
+    return [pymupdf.Rect(region.x0 + L[2] * k, region.y0 + L[0] * k,
+                         region.x0 + (L[3] + 1) * k, region.y0 + (L[1] + 1) * k) for L in lines]
+
+
+def move_band(doc, page, R, band, dx):
+    """Moves the line of lettering inside `band` sideways by dx, keeping it as vectors and
+    text: the line is copied from a snapshot of the page cut down to that line alone,
+    and the original (its paths, and the text whose baseline is in the band) is removed."""
+    def in_band(s):
+        return band.y0 <= s["base"] <= band.y1 + 0.6 and band.x0 <= (s["bbox"].x0 + s["bbox"].x1) / 2 <= band.x1
+
+    # Outlined lettering (the Cooper headings are filled and stroked) counts as covered
+    # only when the area its stroke could reach at a sharp corner is covered too: with
+    # the default miter limit that is 10 x the stroke width past the outline (5pt for a
+    # 0.5pt stroke). So the removal area is widened round this line's own paths, and
+    # nothing else may lie wholly inside it.
+    drawings = page.get_drawings()
+    own = [dr for dr in drawings if band.contains(dr["rect"])]
+    cover = pymupdf.Rect(band)
+    margin = 0.1
+    for dr in own:
+        e = (dr.get("width") or 0) * 10 + 0.5 if "s" in dr["type"] else 0.1
+        cover |= dr["rect"] + (-e, -e, e, e)
+        margin = max(margin, e)
+    strays = [dr["rect"] for dr in drawings if dr not in own and cover.contains(dr["rect"])]
+    if strays:
+        raise SystemExit(f"moving the line at {band} would also remove {strays}")
+
+    # The copy: everything but this line is taken out of the snapshot (images, so a
+    # watermark under the line is not copied with it; other paths and text, so the copy
+    # carries nothing hidden). Paths reaching past the line's own margin are other
+    # artwork; text is kept only when its baseline is in the band.
+    snap = pymupdf.open("pdf", doc.tobytes())
+    sp = snap[0]
+    outer = band + (-margin, -margin, margin, margin)
+    big = sp.rect + (-5, -5, 5, 5)
+    for rr in (pymupdf.Rect(big.x0, big.y0, big.x1, outer.y0), pymupdf.Rect(big.x0, outer.y1, big.x1, big.y1),
+               pymupdf.Rect(big.x0, outer.y0, outer.x0, outer.y1), pymupdf.Rect(outer.x1, outer.y0, big.x1, outer.y1)):
+        sp.add_redact_annot(rr, fill=False)
+    sp.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_REMOVE,
+                        graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED,
+                        text=pymupdf.PDF_REDACT_TEXT_NONE)
+    sp.add_redact_annot(outer, fill=False)
+    sp.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_REMOVE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
+                        text=pymupdf.PDF_REDACT_TEXT_NONE)
+    others = [s for s in spans_in(sp, big) if not in_band(s)]
+    for s in others:
+        sp.add_redact_annot(tight(s), fill=False)
+    if others:
+        sp.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
+                            text=pymupdf.PDF_REDACT_TEXT_REMOVE)
+
+    # The original goes.
+    page.add_redact_annot(cover, fill=False)
+    page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
+                          graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
+                          text=pymupdf.PDF_REDACT_TEXT_NONE)
+    texts = [s for s in spans_in(page, R) if in_band(s)]
+    for s in texts:
+        page.add_redact_annot(tight(s), fill=False)
+    if texts:
+        page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
+                              text=pymupdf.PDF_REDACT_TEXT_REMOVE)
+    page.show_pdf_page(band + (dx, 0, dx, 0), snap, 0, clip=band)
+
+
+def centre_lines(doc, page, R, region_key, photo_rect=None):
+    """Puts every line of ink in the face's centring region on the card's centre line.
+    Returns [(text of the line's ink box, how far it moved)]."""
+    x0, y0, x1, y1 = CENTRE_REGIONS[region_key]
+    region = pymupdf.Rect(R.x0 + x0, R.y0 + y0, (R.x1 + x1) if x1 < 0 else R.x0 + x1, R.y0 + y1)
+    skip = None
+    if photo_rect is not None:
+        skip = pymupdf.Rect(R.x0, photo_rect.y0 - 3, photo_rect.x1 + 3, R.y1)
+    centre = R.x0 + R.width / 2
+    lines = ink_lines(page, region, skip)
+    moved = []
+    for i, L in enumerate(lines):
+        dx = centre - (L.x0 + L.x1) / 2
+        if abs(dx) < CENTRE_TOLERANCE:
+            continue
+        # The band reaches halfway into the blank rows on either side, never into a neighbour.
+        above = lines[i - 1].y1 if i else region.y0
+        below = lines[i + 1].y0 if i + 1 < len(lines) else region.y1
+        band = pymupdf.Rect(L.x0 - 0.6, max(L.y0 - 0.4, (above + L.y0) / 2),
+                            L.x1 + 0.6, min(L.y1 + 0.4, (L.y1 + below) / 2))
+        move_band(doc, page, R, band, dx)
+        moved.append((L, dx))
+    # Check: every line is now centred and kept its width (nothing left behind or lost).
+    after = ink_lines(page, region, skip)
+    if len(after) != len(lines):
+        raise SystemExit(f"centring changed the number of lines in {region_key}: {len(lines)} -> {len(after)}")
+    for a, b in zip(lines, after):
+        off = (b.x0 + b.x1) / 2 - centre
+        if abs(b.width - a.width) > 0.25 or (abs((a.x0 + a.x1) / 2 - centre) >= CENTRE_TOLERANCE and abs(off) > 0.2):
+            raise SystemExit(f"centring failed for the line at y {a.y0 - R.y0:.1f}: width {a.width:.2f} -> "
+                             f"{b.width:.2f}, now {off:+.2f} off centre")
+    return [(f"y {L.y0 - R.y0:.1f}-{L.y1 - R.y0:.1f}", round(dx, 2)) for L, dx in moved]
+
+
 # ---------------------------------------------------------------- one face
 
 def blank_face(fmt_key, cfg, side, out_doc):
@@ -487,7 +648,14 @@ def blank_face(fmt_key, cfg, side, out_doc):
         draw_cooper(page, "O - LEVEL SECTION", a["size"], a["base"], (a["bbox"].x0 + a["bbox"].x1) / 2, a["color"])
         draw_cooper(page, "TAFSAL", b["size"], b["base"], (b["bbox"].x0 + b["bbox"].x1) / 2, b["color"])
 
-    # 5. Crop to the card.
+    # 5. Centre the headings on the card (after composing, so composed headings are centred too).
+    centred = []
+    if side == "front" and cfg["category"] == "students" and R.width > R.height:
+        centred = centre_lines(doc, page, R, "students-landscape")
+    elif side == "front" and cfg["category"] == "parents":
+        centred = centre_lines(doc, page, R, "parents", photo["rect"] if photo else None)
+
+    # 6. Crop to the card.
     out_page = out_doc.new_page(width=R.width, height=R.height)
     out_page.show_pdf_page(out_page.rect, doc, 0, clip=R)
 
@@ -499,6 +667,28 @@ def blank_face(fmt_key, cfg, side, out_doc):
         # The vector rules in this file belong to an older layout hidden under the
         # artwork; the visible ones are in the image.
         lines = raster_hlines(page, R)
+
+    raster_fr = None
+    if cfg.get("raster_frame") and side == "front":
+        # The house frame is painted into the artwork (this sheet's first card is
+        # Jinnah, blue). Find its bars across the middle of the photo box; the
+        # generator paints over it in the card's own house colour. It is centred in
+        # the artwork, so it stays where it is.
+        raster_fr = raster_frame(page, R, photo["rect"])
+        frame = None
+        photo = dict(rect=pymupdf.Rect(raster_fr.x0, raster_fr.y0, raster_fr.x1, raster_fr.y1),
+                     width=raster_fr.width_pt, border=False)
+    if frame and R.width > R.height:
+        # Landscape student cards: the photo frame goes on the card's centre line (the
+        # school's files have it up to 7.4pt to one side).
+        fdx = R.x0 + R.width / 2 - (frame["rect"].x0 + frame["rect"].x1) / 2
+        frame["rect"] = frame["rect"] + (fdx, 0, fdx, 0)
+        if photo:
+            photo["rect"] = photo["rect"] + (fdx, 0, fdx, 0)
+    # Values written under the photo (name, class, G.R., designation...) are centred on it.
+    photo_cx = None
+    if side == "front" and photo and cfg["category"] in ("students", "staff"):
+        photo_cx = (photo["rect"].x0 + photo["rect"].x1) / 2
 
     fields = {}
     unlabelled = []
@@ -529,8 +719,9 @@ def blank_face(fmt_key, cfg, side, out_doc):
             L = min(cand, key=lambda L: L["y"] - s["base"])
             x0, x1 = L["x0"] + 2.5, L["x1"] - 2.5
             rule = round(L["y"] - O[1], 2)
+            center = (x0 + x1) / 2
         else:
-            cx = (bb.x0 + bb.x1) / 2
+            cx = photo_cx if photo_cx is not None else (bb.x0 + bb.x1) / 2
             half = (R.width / 2 - 6) if cfg["category"] != "students" or R.width < R.height else 80
             if key in ("classLine", "gr", "levelLine"):
                 half = min(half, 60)
@@ -541,7 +732,7 @@ def blank_face(fmt_key, cfg, side, out_doc):
                 # about 170pt), so a long name may move left rather than run into it.
                 x0, x1 = R.x0 + 8, R.x0 + 168
             rule = None
-        center = (x0 + x1) / 2 if rule is not None else (bb.x0 + bb.x1) / 2
+            center = cx
         out_fields[key] = dict(x0=rel(x0, 0)[0], x1=rel(x1, 0)[0], cx=rel(center, 0)[0], base=rel(0, s["base"])[1],
                                size=round(s["size"], 2), color=hexcol(s["color"]),
                                font="calibri" if s["font"].startswith("Calibri") else "arial",
@@ -551,15 +742,10 @@ def blank_face(fmt_key, cfg, side, out_doc):
                                          color=hexcol(s["color"]), sample=s["text"])
 
     face = dict(width=round(R.width, 2), height=round(R.height, 2), fields=out_fields)
-    if cfg.get("raster_frame") and side == "front":
-        # The house frame is painted into the artwork (this sheet's first card is
-        # Jinnah, blue). Find its bars across the middle of the photo box; the
-        # generator paints over it in the card's own house colour.
-        frame = None
-        fr = raster_frame(page, R, photo["rect"])
+    if raster_fr is not None:
+        fr = raster_fr
         face["frame"] = dict(x0=rel(fr.x0, 0)[0], y0=rel(0, fr.y0)[1], x1=rel(fr.x1, 0)[0], y1=rel(0, fr.y1)[1],
                              width=round(fr.width_pt, 2), over_artwork=True)
-        photo = dict(rect=pymupdf.Rect(fr.x0, fr.y0, fr.x1, fr.y1), width=fr.width_pt, border=False)
     if frame:
         fr = frame["rect"]
         face["frame"] = dict(x0=rel(fr.x0, 0)[0], y0=rel(0, fr.y0)[1], x1=rel(fr.x1, 0)[0], y1=rel(0, fr.y1)[1],
@@ -570,6 +756,7 @@ def blank_face(fmt_key, cfg, side, out_doc):
         face["photo"] = dict(x0=rel(pr.x0 + inset, 0)[0], y0=rel(0, pr.y0 + inset)[1],
                              x1=rel(pr.x1 - inset, 0)[0], y1=rel(0, pr.y1 - inset)[1])
     face["_removed"] = [s["text"] for s in removed]
+    face["_centred"] = centred
     return face
 
 
@@ -597,8 +784,11 @@ for key, cfg in FORMATS.items():
     print(f"   removed B: {faces['back']['_removed']}")
     print(f"   text left F: {left[0]}")
     print(f"   text left B: {left[1]}")
+    if faces["front"]["_centred"]:
+        print(f"   centred F: {faces['front']['_centred']}")
     for side in ("front", "back"):
         faces[side].pop("_removed")
+        faces[side].pop("_centred")
 
 with open(os.path.join(OUT, "layout.json"), "w") as f:
     json.dump(layout, f, indent=1)

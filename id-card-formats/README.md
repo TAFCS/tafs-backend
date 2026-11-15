@@ -34,6 +34,14 @@ The script removes everything outside the card and every sample value, photo and
 leftover, so no real person's details travel inside a blank. Check its "text left" output:
 only the card's own printed wording should remain.
 
+The school's cards were laid out by hand, and their headings and photo frames sit a few
+points off the card's centre line (up to 8pt on the student cards, 13pt for "PARENTS /
+GUARDIAN CARD" on the Jauhar parent card). The script moves each heading line onto the
+centre line as it is, still as vectors, and puts the photo slot and the lines under it
+there in `layout.json`. Its "centred F" output lists each line it moved and by how much;
+it stops if a moved line leaves anything behind. Backs, staff cards and the A Level card
+are already centred to within 0.5pt and are not touched.
+
 ## Samples
 
 ```
