@@ -6,8 +6,10 @@ import {
     feeDateLabel,
     formatSerial,
     isCleared,
+    isSessionLabel,
     issueWindowOpen,
     monthLabel,
+    notOfferedClasses,
     rosterState,
     totalOwed,
 } from './exam-document-rules';
@@ -66,5 +68,18 @@ describe('TAFSD-510 exam document rules', () => {
     it('pads serials to four digits', () => {
         expect(formatSerial(7)).toBe('0007');
         expect(formatSerial(12345)).toBe('12345');
+    });
+
+    it('accepts only consecutive-year sessions (TAFSD-522)', () => {
+        expect(isSessionLabel('2026-2027')).toBe(true);
+        expect(isSessionLabel(' 2026-2027 ')).toBe(true);
+        for (const bad of ['2026-27', '2026-2028', '2026 - 2027', '2027-2026', 'next year', '']) {
+            expect(isSessionLabel(bad)).toBe(false);
+        }
+    });
+
+    it('lists the classes a campus does not offer (TAFSD-523)', () => {
+        expect(notOfferedClasses([15, 16, 17], [15, 16, 17, 18])).toEqual([]);
+        expect(notOfferedClasses([18, 21, 4], [18])).toEqual([21, 4]);
     });
 });

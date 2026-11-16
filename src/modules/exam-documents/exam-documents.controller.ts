@@ -59,6 +59,22 @@ export class ExamDocumentsController {
         return createApiResponse(await this.service.getSchedule(id, user), HttpStatus.OK, 'Exam schedule fetched');
     }
 
+    // TAFSD-524: a read-only copy of a schedule the user can already open, so it
+    // sits under #view like the schedule itself.
+    @Get('schedules/:id/export')
+    @ApiOperation({ summary: "The schedule as an Excel sheet in the school's own layout" })
+    @RequireAction('student.exam_documents#view')
+    async export(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload, @Res() res: Response) {
+        const { buffer, filename } = await this.service.exportSchedule(id, user);
+        res.set({
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': `attachment; filename="${filename}"`,
+            'Content-Length': buffer.length,
+            'Access-Control-Expose-Headers': 'Content-Disposition',
+        });
+        res.send(buffer);
+    }
+
     @Post('schedules')
     @ApiOperation({ summary: 'Create a schedule (as a draft)' })
     @RequireAction('student.exam_documents#manage_schedules')

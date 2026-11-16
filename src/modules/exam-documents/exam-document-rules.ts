@@ -118,3 +118,15 @@ export function formatSerial(n: number): string {
 export function issueWindowOpen(issueFrom: string | null, today: string): boolean {
     return !issueFrom || issueFrom.slice(0, 10) <= today.slice(0, 10);
 }
+
+/** TAFSD-522: "2026-2027", two consecutive years. */
+export function isSessionLabel(y: string): boolean {
+    const m = /^(\d{4})-(\d{4})$/.exec(y?.trim() ?? '');
+    return !!m && Number(m[2]) === Number(m[1]) + 1;
+}
+
+/** TAFSD-523: the schedule's classes the campus does not offer, in the order given. */
+export function notOfferedClasses(classIds: number[], offeredAtCampus: number[]): number[] {
+    const offered = new Set(offeredAtCampus);
+    return classIds.filter((id) => !offered.has(id));
+}
