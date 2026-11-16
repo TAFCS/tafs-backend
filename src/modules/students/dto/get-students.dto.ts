@@ -102,6 +102,11 @@ export class GetStudentsDto {
   @IsEnum(['true', 'false'])
   had_quick_admission?: 'true' | 'false';
 
+  /** TAFSD-527: `pending` lists students still waiting for a school uniform photo. */
+  @IsOptional()
+  @IsEnum(['pending'])
+  uniform_photo?: 'pending';
+
   @IsOptional()
   @IsString()
   columns?: string;
