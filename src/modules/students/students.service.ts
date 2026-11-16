@@ -755,6 +755,7 @@ export class StudentsService {
       selectArgs.house_id  = true;
       selectArgs.status = true;
       selectArgs.photograph_url = true;
+      selectArgs.uniform_photo_pending = true;
       Object.assign(selectArgs, BENEFIT_SELECT);
       selectArgs.fee_start_term = true;
       selectArgs.campuses  = { select: { campus_name: true, campus_code: true } };
@@ -1015,6 +1016,7 @@ export class StudentsService {
           graduated_from_class_description: s.graduated_from_class?.description,
           graduated_at: s.graduated_at,
           photograph_url: s.photograph_url,
+          uniform_photo_pending: s.uniform_photo_pending ?? false,
           academic_system: latestAdmission?.academic_system,
           requested_grade: latestAdmission?.requested_grade,
           discipline: latestAdmission?.discipline ?? null,
