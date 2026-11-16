@@ -120,6 +120,9 @@ const STUDENT_DIRECTORY_ACTIONS: TileAction[] = [
   { id: 'status.change', label: 'Change status', description: 'Expel, mark left, return, unexpel, undo left', implies: ['view'] },
   { id: 'promote', label: 'Promote', description: 'Single and bulk promotion, and GR suggestions for it', implies: ['view'] },
   { id: 'export', label: 'Export to Excel', implies: ['view'] },
+  // TAFSD-527: a tick here is also the sign-up for the 9 AM reminder. Only an
+  // explicit tick (person or pack) is reminded, not the legacy edit bridge.
+  { id: 'uniform_photo', label: 'Uniform photo reminders', description: 'A reminder every morning while new students at your campuses still have only their admission photo, and marking a photo as already in uniform', implies: ['view'] },
 ];
 
 /**

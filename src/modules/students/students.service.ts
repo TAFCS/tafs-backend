@@ -1,3 +1,4 @@
+import { UNIFORM_PHOTO_FROM_CC, UNIFORM_PHOTO_STATUSES } from '../uniform-photos/uniform-photo.constants';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   BENEFIT_SELECT,
@@ -425,6 +426,16 @@ export class StudentsService {
       });
     }
 
+    if (query.uniform_photo === 'pending') {
+      // TAFSD-527: the same set the 9 AM reminder counts.
+      if (!where.AND) where.AND = [];
+      (where.AND as any).push({
+        uniform_photo_pending: true,
+        cc: { gte: UNIFORM_PHOTO_FROM_CC },
+        status: { in: UNIFORM_PHOTO_STATUSES },
+      });
+    }
+
     if (had_quick_admission === 'true') {
       if (!where.AND) where.AND = [];
       (where.AND as any).push({
@@ -488,6 +499,7 @@ export class StudentsService {
     // bails rather than seeing unconfirmed rows from every class.
     if (user && this.scope.scopeOf(user).classes.length > 0) return null;
     if (query.had_quick_admission === 'false') return null;
+    if (query.uniform_photo) return null;
 
     const where: Prisma.unconfirmed_admissionsWhereInput = {};
     const and: Prisma.unconfirmed_admissionsWhereInput[] = [];
@@ -686,6 +698,7 @@ export class StudentsService {
             enrollment_status: s.status,
             class_id: s.class_id,
             photograph_url: s.photograph_url ?? null,
+            uniform_photo_pending: s.uniform_photo_pending ?? false,
             academic_system: adm?.academic_system ?? null,
             requested_grade: adm?.requested_grade ?? null,
             discipline: adm?.discipline ?? null,

@@ -828,6 +828,10 @@ model students {
   graduated_at                  DateTime?                      @db.Date
   complementary_reason          String?                        @db.VarChar(500)
   complementary_until           DateTime?                      @db.Date
+  /// TAFSD-527: new student (CC > 7525) still on the photo taken at admission,
+  /// usually in house clothes. A DB trigger sets it on insert and clears it when
+  /// a new photo replaces that one after admission. See migration for the rules.
+  uniform_photo_pending         Boolean                        @default(false)
   fee_endowment_reason          String?                        @db.VarChar(500)
   fee_endowment_until           DateTime?                      @db.Date
   /// TAFSD-455: more benefit categories, and when the home reminder starts for each.

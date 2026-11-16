@@ -39,6 +39,7 @@ import { AppPortalModule } from './modules/app-portal/app-portal.module';
 import { InstallmentsModule } from './modules/installments/installments.module';
 import { MeezanModule } from './modules/meezan/meezan.module';
 import { UblModule } from './modules/ubl/ubl.module';
+import { UniformPhotosModule } from './modules/uniform-photos/uniform-photos.module';
 import { DiscountPresetsModule } from './modules/discount-presets/discount-presets.module';
 import { ScholarshipPresetsModule } from './modules/scholarship-presets/scholarship-presets.module';
 import { ParentChangeRequestsModule } from './modules/parent-change-requests/parent-change-requests.module';
@@ -102,6 +103,7 @@ import { HierarchyModule } from './common/hierarchy/hierarchy.module';
     InstallmentsModule,
     MeezanModule,
     UblModule,
+    UniformPhotosModule,
     DiscountPresetsModule,
     ScholarshipPresetsModule,
     ParentChangeRequestsModule,

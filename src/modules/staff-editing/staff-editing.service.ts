@@ -1816,6 +1816,8 @@ export class StaffEditingService {
       medical_info: s.medical_info,
       interests: s.interests,
       photograph_url: s.photograph_url,
+      // TAFSD-527: still on the admission photo, needs one in school uniform.
+      uniform_photo_pending: s.uniform_photo_pending ?? false,
       first_photo_url: photoHistory?.first_photo_url ?? s.photograph_url ?? null,
       first_photo_date: photoHistory?.first_photo_date ?? null,
       latest_photo_url: photoHistory?.latest_photo_url ?? s.photograph_url ?? null,
