@@ -63,6 +63,8 @@ const MONTHS = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 
 
 /** Signed at the foot of every schedule the school sends. */
 const SIGNATORY = ['Mrs. Sayeeda Asad,', 'Academic Directress,'];
+/** The signature's size on the sheet, in pixels (the scan is 338 × 294). */
+const SIGNATURE_SIZE: [number, number] = [76, 66];
 
 const parts = (isoDate: string) => isoDate.slice(0, 10).split('-').map(Number) as [number, number, number];
 
@@ -377,14 +379,18 @@ export async function buildScheduleWorkbook(input: ScheduleSheetInput): Promise<
     ws.getRow(r++).height = 8;
 
     // ── Signature ─────────────────────────────────────────────────────────
-    const signatureRow = r;
     if (spec.regards) {
         ws.getCell(r, 1).value = 'Regards,';
         ws.getCell(r, 1).font = font(spec.signatoryFont);
         ws.getRow(r).height = spec.signatoryFont.size + 5;
         r++;
-        ws.getRow(r++).height = 22;
     }
+    // The signature sits in a space of its own above the signatory's name,
+    // clear of the text (ExcelJS anchors are 0-based rows).
+    const sigH = SIGNATURE_SIZE[1];
+    ws.getRow(r).height = Math.round(sigH * 0.75) + 4;
+    image(SCHEDULE_IMAGES.signature, 0.15, r - 1 + 0.05, SIGNATURE_SIZE);
+    r++;
     for (const line of [...SIGNATORY, spec.signatureSchool]) {
         ws.mergeCells(r, 1, r, Math.min(nCols, 3));
         const c = ws.getCell(r, 1);
@@ -393,8 +399,6 @@ export async function buildScheduleWorkbook(input: ScheduleSheetInput): Promise<
         ws.getRow(r).height = spec.signatoryFont.size + 5;
         r++;
     }
-    // The signature, signed across the names as on the school's sheets.
-    image(SCHEDULE_IMAGES.signature, 0.25, Math.max(0, signatureRow - 1) - 0.1, [96, 84]);
     ws.getRow(r++).height = 6;
 
     // ── Footer ────────────────────────────────────────────────────────────
