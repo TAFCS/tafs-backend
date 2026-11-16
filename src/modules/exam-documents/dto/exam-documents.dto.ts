@@ -7,6 +7,7 @@ import {
     IsDateString,
     IsIn,
     IsInt,
+    IsObject,
     IsOptional,
     IsString,
     Matches,
@@ -16,6 +17,8 @@ import {
 } from 'class-validator';
 import { EXAM_SCHEDULE_STATUSES, ROSTER_STATES } from '../exam-document-rules';
 import type { ExamScheduleStatus, RosterState } from '../exam-document-rules';
+import { SCHEDULE_LAYOUTS } from '../exam-schedule-layouts';
+import type { ScheduleLayout } from '../exam-schedule-layouts';
 
 /** `campus_ids=1,2` or `campus_ids=1&campus_ids=2` both arrive as [1, 2]. */
 const toIntArray = ({ value }: { value: unknown }) => {
@@ -112,6 +115,12 @@ export class ExamScheduleUpsertDto {
     @MaxLength(100)
     reference_no?: string;
 
+    /** TAFSD-525: which of the school's sheets the Excel export copies. Left out: taken from the classes. */
+    @ApiPropertyOptional({ enum: SCHEDULE_LAYOUTS })
+    @IsOptional()
+    @IsIn(SCHEDULE_LAYOUTS)
+    layout?: ScheduleLayout;
+
     @ApiProperty({ description: 'Every fee head dated on or before this must be settled', example: '2026-12-01' })
     @IsDateString()
     fee_date!: string;
@@ -142,6 +151,70 @@ export class ExamScheduleUpsertDto {
     @ValidateNested({ each: true })
     @Type(() => ExamPaperDto)
     papers!: ExamPaperDto[];
+}
+
+/** TAFSD-525: one paper row of a preset, without a date. */
+export class ExamPresetRowDto {
+    @ApiProperty({ example: '8:00 – 11:30' })
+    @IsString()
+    @MaxLength(60)
+    time!: string;
+
+    @ApiProperty({ description: 'class id → subject', example: { '18': 'PHYSICS PRACTICAL' } })
+    @IsObject()
+    cells!: Record<string, string>;
+
+    @ApiPropertyOptional({ description: "class id → that class's own time (O Levels)" })
+    @IsOptional()
+    @IsObject()
+    times?: Record<string, string>;
+}
+
+/** TAFSD-525: save a schedule's layout, classes, subjects and notes as a preset. */
+export class ExamPresetCreateDto {
+    @ApiProperty({ example: 'First Semester — Senior Cambridge' })
+    @IsString()
+    @MinLength(2)
+    @MaxLength(150)
+    name!: string;
+
+    @ApiProperty({ enum: SCHEDULE_LAYOUTS })
+    @IsIn(SCHEDULE_LAYOUTS)
+    layout!: ScheduleLayout;
+
+    @ApiProperty()
+    @IsString()
+    @MinLength(2)
+    @MaxLength(150)
+    title!: string;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    @MaxLength(150)
+    segment_line?: string;
+
+    @ApiProperty({ type: [Number] })
+    @IsArray()
+    @ArrayMinSize(1)
+    @ArrayMaxSize(25)
+    @Type(() => Number)
+    @IsInt({ each: true })
+    class_ids!: number[];
+
+    @ApiProperty({ type: [ExamPresetRowDto] })
+    @IsArray()
+    @ArrayMaxSize(60)
+    @ValidateNested({ each: true })
+    @Type(() => ExamPresetRowDto)
+    rows!: ExamPresetRowDto[];
+
+    @ApiProperty({ type: [String] })
+    @IsArray()
+    @ArrayMaxSize(30)
+    @IsString({ each: true })
+    @MaxLength(600, { each: true })
+    notes!: string[];
 }
 
 export class ExamScheduleStatusDto {

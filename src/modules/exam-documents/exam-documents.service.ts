@@ -19,6 +19,7 @@ import {
     ExamFeeDatePreviewDto,
     ExamIssueDto,
     ExamOverrideDto,
+    ExamPresetCreateDto,
     ExamRosterQueryDto,
     ExamScheduleListQueryDto,
     ExamScheduleUpsertDto,
@@ -45,7 +46,8 @@ import {
 } from './exam-document-rules';
 import type { ExamScheduleStatus } from './exam-document-rules';
 import { EXAM_LOGO, ExamDocPage, ExamDocumentsPDF } from './ExamDocumentPDF';
-import { ScheduleSheetRow, buildScheduleWorkbook } from './exam-schedule-export';
+import { buildScheduleWorkbook } from './exam-schedule-export';
+import { campusOnSheet, inferScheduleLayout, isScheduleLayout, presetRows } from './exam-schedule-layouts';
 
 type Staff = IJwtStaffPayload;
 
@@ -94,7 +96,7 @@ function initialsOf(name: string): string {
 }
 
 const SCHEDULE_INCLUDE = {
-    campuses: { select: { id: true, campus_name: true, address: true } },
+    campuses: { select: { id: true, campus_name: true, campus_code: true, address: true } },
     exam_schedule_classes: { include: { classes: { select: { id: true, description: true } } } },
     exam_schedule_papers: { orderBy: [{ paper_date: 'asc' }, { sort_order: 'asc' }, { id: 'asc' }] },
     _count: { select: { exam_documents: true, exam_schedule_fee_dates: true } },
@@ -161,6 +163,9 @@ export class ExamDocumentsService {
             students_with_own_fee_date: row._count.exam_schedule_fee_dates,
             issue_from: iso(row.issue_from),
             notes: row.notes,
+            /** TAFSD-525: the sheet the export copies; `layout_chosen` false when it was taken from the classes. */
+            layout: isScheduleLayout(row.layout) ? row.layout : inferScheduleLayout(classes.map((c) => c.id)),
+            layout_chosen: isScheduleLayout(row.layout),
             status: row.status as ExamScheduleStatus,
             classes,
             papers: row.exam_schedule_papers.map((p) => ({
@@ -224,39 +229,108 @@ export class ExamDocumentsService {
         return this.serializeSchedule(await this.loadSchedule(id, user));
     }
 
-    /** TAFSD-524: the schedule as an Excel sheet in the school's own layout. */
+    /** TAFSD-524: the schedule as an Excel sheet copying the school's own (layout per TAFSD-525). */
     async exportSchedule(id: number, user: Staff): Promise<{ buffer: Buffer; filename: string }> {
         const schedule = await this.loadSchedule(id, user);
         const classes = schedule.exam_schedule_classes.map((c) => ({ id: c.class_id, description: c.classes.description }));
-        const secondary = classes.length > 0 && classes.every((c) => isSecondaryClass(c.id));
-        const byRow = new Map<string, ScheduleSheetRow>();
-        for (const p of schedule.exam_schedule_papers) {
-            const date = iso(p.paper_date)!;
-            const key = `${date}|${p.time_text}`;
-            const row = byRow.get(key) ?? { date, time: p.time_text, cells: {} };
-            row.cells[p.class_id] = row.cells[p.class_id] ? `${row.cells[p.class_id]} / ${p.subject}` : p.subject;
-            byRow.set(key, row);
-        }
-        const segment = secondary ? 'SECONDARY SEGMENT' : schedule.segment_line ? `${schedule.segment_line.toUpperCase()} SEGMENT` : '';
+        const layout = isScheduleLayout(schedule.layout) ? schedule.layout : inferScheduleLayout(classes.map((c) => c.id));
+        const campus = campusOnSheet(schedule.campuses);
         const buffer = await buildScheduleWorkbook({
-            secondary,
+            layout,
             title: schedule.title,
             segmentLine: schedule.segment_line,
             academicYear: schedule.academic_year,
-            campusName: schedule.campuses.campus_name,
+            campusLabel: campus.label,
+            campusAddress: campus.address,
             referenceNo: schedule.reference_no,
             letterDate: karachiToday(),
             classes,
-            rows: [...byRow.values()],
+            papers: schedule.exam_schedule_papers.map((p) => ({
+                class_id: p.class_id,
+                date: iso(p.paper_date)!,
+                time: p.time_text,
+                subject: p.subject,
+            })),
             notes: schedule.notes,
-            campusLine: [schedule.campuses.campus_name.toUpperCase(), segment].filter(Boolean).join(' : '),
-            addressLines: [schedule.campuses.address?.trim() || DEFAULT_ADDRESS, WEB_LINE],
         });
         const safe = (s: string) => s.replace(/[^A-Za-z0-9 &()-]+/g, ' ').replace(/\s+/g, ' ').trim();
         return {
             buffer,
             filename: `Exam schedule - ${safe(schedule.title)} - ${safe(schedule.campuses.campus_name)} ${schedule.academic_year}.xlsx`,
         };
+    }
+
+    // ─── Presets (TAFSD-525) ───────────────────────────────────────────────
+
+    /** Every preset, in the order the school uses them. */
+    async listPresets() {
+        const rows = await this.prisma.exam_schedule_presets.findMany({ orderBy: [{ sort_order: 'asc' }, { name: 'asc' }] });
+        const classIds = [...new Set(rows.flatMap((r) => r.class_ids))];
+        const names = new Map(
+            (await this.prisma.classes.findMany({ where: { id: { in: classIds } }, select: { id: true, description: true } })).map((c) => [
+                c.id,
+                c.description,
+            ]),
+        );
+        return rows.map((r) => ({
+            id: r.id,
+            name: r.name,
+            layout: isScheduleLayout(r.layout) ? r.layout : inferScheduleLayout(r.class_ids),
+            title: r.title,
+            segment_line: r.segment_line,
+            classes: r.class_ids.map((id) => ({ id, description: names.get(id) ?? `Class ${id}` })),
+            rows: presetRows(r.rows),
+            notes: r.notes,
+            created_by: r.created_by,
+            updated_at: r.updated_at,
+        }));
+    }
+
+    async createPreset(dto: ExamPresetCreateDto, user: Staff) {
+        const classIds = [...new Set(dto.class_ids)];
+        const known = await this.prisma.classes.count({ where: { id: { in: classIds } } });
+        if (known !== classIds.length) throw new BadRequestException('Unknown class in the preset');
+        const rows = presetRows(dto.rows).map((r) => ({
+            ...r,
+            cells: Object.fromEntries(Object.entries(r.cells).filter(([id]) => classIds.includes(Number(id)))),
+        }));
+        const last = await this.prisma.exam_schedule_presets.aggregate({ _max: { sort_order: true } });
+        const created = await this.prisma.exam_schedule_presets.create({
+            data: {
+                name: dto.name.trim(),
+                layout: dto.layout,
+                title: dto.title.trim(),
+                segment_line: dto.segment_line?.trim() || null,
+                class_ids: classIds.sort((a, b) => a - b),
+                rows: rows as unknown as Prisma.InputJsonValue,
+                notes: dto.notes.map((n) => n.trim()).filter(Boolean),
+                sort_order: (last._max.sort_order ?? 0) + 10,
+                created_by: this.by(user),
+            },
+            select: { id: true },
+        });
+        await this.auditLogs.log({
+            entity_type: 'EXAM_SCHEDULE_PRESET',
+            entity_id: String(created.id),
+            action: 'CREATED',
+            new_value: dto.name.trim(),
+            changed_by: this.by(user),
+        });
+        return (await this.listPresets()).find((p) => p.id === created.id);
+    }
+
+    async deletePreset(id: number, user: Staff) {
+        const preset = await this.prisma.exam_schedule_presets.findUnique({ where: { id }, select: { id: true, name: true } });
+        if (!preset) throw new NotFoundException('Preset not found');
+        await this.prisma.exam_schedule_presets.delete({ where: { id } });
+        await this.auditLogs.log({
+            entity_type: 'EXAM_SCHEDULE_PRESET',
+            entity_id: String(id),
+            action: 'DELETED',
+            old_value: preset.name,
+            changed_by: this.by(user),
+        });
+        return { id };
     }
 
     private async validateUpsert(dto: ExamScheduleUpsertDto, user: Staff) {
@@ -316,6 +390,7 @@ export class ExamDocumentsService {
                 title: dto.title.trim(),
                 segment_line: dto.segment_line?.trim() || null,
                 reference_no: dto.reference_no?.trim() || null,
+                layout: dto.layout ?? null,
                 fee_date: new Date(`${feeDate}T00:00:00Z`),
                 issue_from: dto.issue_from ? new Date(`${dto.issue_from.slice(0, 10)}T00:00:00Z`) : null,
                 notes,
@@ -366,6 +441,7 @@ export class ExamDocumentsService {
                     title: dto.title.trim(),
                     segment_line: dto.segment_line?.trim() || null,
                     reference_no: dto.reference_no?.trim() || null,
+                    layout: dto.layout ?? null,
                     fee_date: new Date(`${feeDate}T00:00:00Z`),
                     issue_from: dto.issue_from ? new Date(`${dto.issue_from.slice(0, 10)}T00:00:00Z`) : null,
                     notes,

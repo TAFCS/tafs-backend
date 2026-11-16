@@ -26,6 +26,7 @@ import {
     ExamFeeDatePreviewDto,
     ExamIssueDto,
     ExamOverrideDto,
+    ExamPresetCreateDto,
     ExamRosterQueryDto,
     ExamScheduleListQueryDto,
     ExamScheduleStatusDto,
@@ -73,6 +74,29 @@ export class ExamDocumentsController {
             'Access-Control-Expose-Headers': 'Content-Disposition',
         });
         res.send(buffer);
+    }
+
+    // TAFSD-525: presets a new schedule starts from. Anyone who can see schedules
+    // can see the presets; making and removing them is part of managing schedules.
+    @Get('presets')
+    @ApiOperation({ summary: 'Schedule presets: layout, classes, subjects and notes, without dates' })
+    @RequireAction('student.exam_documents#view')
+    async presets() {
+        return createApiResponse(await this.service.listPresets(), HttpStatus.OK, 'Presets fetched');
+    }
+
+    @Post('presets')
+    @ApiOperation({ summary: "Save a schedule's layout, classes, subjects and notes as a preset" })
+    @RequireAction('student.exam_documents#manage_schedules')
+    async createPreset(@Body() dto: ExamPresetCreateDto, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.service.createPreset(dto, user), HttpStatus.CREATED, 'Preset saved');
+    }
+
+    @Delete('presets/:id')
+    @ApiOperation({ summary: 'Remove a preset. Schedules made from it are not touched' })
+    @RequireAction('student.exam_documents#manage_schedules')
+    async deletePreset(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.service.deletePreset(id, user), HttpStatus.OK, 'Preset removed');
     }
 
     @Post('schedules')
