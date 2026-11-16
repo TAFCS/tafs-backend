@@ -9,6 +9,7 @@ import {
     IsInt,
     IsOptional,
     IsString,
+    Matches,
     MaxLength,
     MinLength,
     ValidateNested,
@@ -87,10 +88,10 @@ export class ExamScheduleUpsertDto {
     @IsInt()
     campus_id!: number;
 
+    /** TAFSD-522: a session, "YYYY-YYYY" with consecutive years (checked in the service). */
     @ApiProperty({ example: '2026-2027' })
     @IsString()
-    @MinLength(4)
-    @MaxLength(10)
+    @Matches(/^\d{4}-\d{4}$/, { message: 'academic_year must be a session like 2026-2027' })
     academic_year!: string;
 
     @ApiProperty({ example: 'FIRST SEMESTER ASSESSMENTS' })

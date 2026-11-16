@@ -37,12 +37,15 @@ import {
     feeDateLabel,
     formatSerial,
     isSecondaryClass,
+    isSessionLabel,
     issueWindowOpen,
+    notOfferedClasses,
     rosterState,
     totalOwed,
 } from './exam-document-rules';
 import type { ExamScheduleStatus } from './exam-document-rules';
 import { EXAM_LOGO, ExamDocPage, ExamDocumentsPDF } from './ExamDocumentPDF';
+import { ScheduleSheetRow, buildScheduleWorkbook } from './exam-schedule-export';
 
 type Staff = IJwtStaffPayload;
 
@@ -221,14 +224,68 @@ export class ExamDocumentsService {
         return this.serializeSchedule(await this.loadSchedule(id, user));
     }
 
+    /** TAFSD-524: the schedule as an Excel sheet in the school's own layout. */
+    async exportSchedule(id: number, user: Staff): Promise<{ buffer: Buffer; filename: string }> {
+        const schedule = await this.loadSchedule(id, user);
+        const classes = schedule.exam_schedule_classes.map((c) => ({ id: c.class_id, description: c.classes.description }));
+        const secondary = classes.length > 0 && classes.every((c) => isSecondaryClass(c.id));
+        const byRow = new Map<string, ScheduleSheetRow>();
+        for (const p of schedule.exam_schedule_papers) {
+            const date = iso(p.paper_date)!;
+            const key = `${date}|${p.time_text}`;
+            const row = byRow.get(key) ?? { date, time: p.time_text, cells: {} };
+            row.cells[p.class_id] = row.cells[p.class_id] ? `${row.cells[p.class_id]} / ${p.subject}` : p.subject;
+            byRow.set(key, row);
+        }
+        const segment = secondary ? 'SECONDARY SEGMENT' : schedule.segment_line ? `${schedule.segment_line.toUpperCase()} SEGMENT` : '';
+        const buffer = await buildScheduleWorkbook({
+            secondary,
+            title: schedule.title,
+            segmentLine: schedule.segment_line,
+            academicYear: schedule.academic_year,
+            campusName: schedule.campuses.campus_name,
+            referenceNo: schedule.reference_no,
+            letterDate: karachiToday(),
+            classes,
+            rows: [...byRow.values()],
+            notes: schedule.notes,
+            campusLine: [schedule.campuses.campus_name.toUpperCase(), segment].filter(Boolean).join(' : '),
+            addressLines: [schedule.campuses.address?.trim() || DEFAULT_ADDRESS, WEB_LINE],
+        });
+        const safe = (s: string) => s.replace(/[^A-Za-z0-9 &()-]+/g, ' ').replace(/\s+/g, ' ').trim();
+        return {
+            buffer,
+            filename: `Exam schedule - ${safe(schedule.title)} - ${safe(schedule.campuses.campus_name)} ${schedule.academic_year}.xlsx`,
+        };
+    }
+
     private async validateUpsert(dto: ExamScheduleUpsertDto, user: Staff) {
         this.scope.assertCampus(user, dto.campus_id);
         const campus = await this.prisma.campuses.findUnique({ where: { id: dto.campus_id }, select: { id: true } });
         if (!campus) throw new BadRequestException('Unknown campus');
 
+        // TAFSD-522: a real session, consecutive years.
+        if (!isSessionLabel(dto.academic_year)) {
+            throw new BadRequestException('Choose the academic session, like 2026-2027');
+        }
+
         const classIds = [...new Set(dto.class_ids)];
-        const classes = await this.prisma.classes.findMany({ where: { id: { in: classIds } }, select: { id: true } });
+        const classes = await this.prisma.classes.findMany({
+            where: { id: { in: classIds } },
+            select: { id: true, description: true },
+        });
         if (classes.length !== classIds.length) throw new BadRequestException('Unknown class in the schedule');
+
+        // TAFSD-523: only classes the campus offers.
+        const offered = await this.prisma.campus_classes.findMany({
+            where: { campus_id: dto.campus_id, class_id: { in: classIds }, NOT: { is_active: false } },
+            select: { class_id: true },
+        });
+        const notOffered = notOfferedClasses(classIds, offered.map((o) => o.class_id));
+        if (notOffered.length) {
+            const names = classes.filter((c) => notOffered.includes(c.id)).map((c) => c.description);
+            throw new BadRequestException(`This campus does not offer ${names.join(', ')}`);
+        }
 
         const stray = dto.papers.find((p) => !classIds.includes(p.class_id));
         if (stray) throw new BadRequestException(`A paper is set for class ${stray.class_id}, which the schedule does not cover`);
