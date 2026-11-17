@@ -61,6 +61,7 @@ import { DailyDigestModule } from './modules/daily-digest/daily-digest.module';
 import { AccessModule } from './modules/access/access.module';
 import { ScopeModule } from './common/scope/scope.module';
 import { HierarchyModule } from './common/hierarchy/hierarchy.module';
+import { McpModule } from './modules/mcp/mcp.module';
 
 @Module({
   imports: [
@@ -125,6 +126,7 @@ import { HierarchyModule } from './common/hierarchy/hierarchy.module';
     AccessModule,
     ScopeModule,
     HierarchyModule,
+    McpModule,
   ],
   controllers: [AppController],
   providers: [
