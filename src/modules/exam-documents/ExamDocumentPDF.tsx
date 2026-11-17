@@ -205,7 +205,11 @@ function EntryFields({ d }: { d: ExamDocPage }) {
     return (
         <View style={[s.row, { marginTop: 10, alignItems: 'flex-end' }]}>
             <View style={{ flex: 1, paddingRight: 14 }}>
-                <Field label="CENTRE / CANDIDATE #" value={`${d.centre} / ${d.cc}`} boxW={120} mt={0} />
+                <View style={s.row}>
+                    <Field label="CENTRE / CANDIDATE #" value={`${d.centre} / ${d.cc}`} boxW={120} mt={0} />
+                    <View style={{ flex: 1 }} />
+                    <Field label="LEVEL" value={klassOf(d).toUpperCase()} labelW={44} boxW={88} mt={0} fitW={88} />
+                </View>
                 <Field label="CANDIDATE'S NAME" value={d.name} fitW={NAME_BOX_W} />
                 <View style={s.row}>
                     <Field label="DATE OF BIRTH" value={d.dob} boxW={120} />
@@ -224,7 +228,7 @@ function AdmitFields({ d }: { d: ExamDocPage }) {
         <View style={[s.row, { marginTop: 10, alignItems: 'flex-end' }]}>
             <View style={{ flex: 1, paddingRight: 14 }}>
                 <View style={s.row}>
-                    <Field label="CLASS" value={klassOf(d)} labelW={44} boxW={88} mt={0} />
+                    <Field label="CLASS" value={klassOf(d).toUpperCase()} labelW={44} boxW={88} mt={0} />
                     <View style={{ flex: 1 }} />
                     <Field label="C.C. #" value={d.cc} labelW={42} boxW={66} mt={0} />
                     <View style={{ flex: 1 }} />

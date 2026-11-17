@@ -34,10 +34,11 @@ describe('TAFSD-528 exam document page', () => {
         ]);
     });
 
-    it('heads a statement of entry with the level, as on the Sr I sheet', () => {
+    it('keeps the level out of a statement of entry heading: it has its own box beside the centre number', () => {
         const d = buildExamDocPage(base());
         expect(d.docType).toBe('STATEMENT_OF_ENTRY');
-        expect(d.lines).toEqual(['FIRST SEMESTER ASSESSMENTS', 'SENIOR CAMBRIDGE', 'SESSION : 2026 – 2027', 'LEVEL SR. I A']);
+        expect(d.lines).toEqual(['FIRST SEMESTER ASSESSMENTS', 'SENIOR CAMBRIDGE', 'SESSION : 2026 – 2027']);
+        expect([d.className, d.sectionName]).toEqual(['Sr. I', 'A']);
         expect(d.campusLine).toBe('CAMPUS # II : SENIOR CAMBRIDGE SEGMENT');
         // CENTRE / CANDIDATE # : PK 564 / 4137 — the candidate number is the C.C.
         expect([d.centre, d.cc]).toEqual(['PK 564', '4137']);

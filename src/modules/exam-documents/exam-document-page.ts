@@ -107,8 +107,7 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
             // or the segment, both already on the card (CLASS box, footer).
             ...(schedule.segmentLine && !secondary ? [schedule.segmentLine.toUpperCase()] : []),
             `SESSION : ${session}`,
-            // The statement of entry names the class in the heading, as on the Sr I sheet ("LEVEL SR. I A").
-            ...(secondary ? [] : [`LEVEL ${[p.className, p.sectionName].filter(Boolean).join(' ').toUpperCase()}`]),
+            // The class is in its own box on both documents (LEVEL beside CENTRE / CANDIDATE #, or CLASS), not the heading.
         ],
         leftLogo: secondary ? EXAM_LOGO.secondary : EXAM_LOGO.alevel,
         rightLogo: secondary ? 'motto' : 'cambridge',
