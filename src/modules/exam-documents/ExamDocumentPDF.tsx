@@ -1,15 +1,19 @@
 import React from 'react';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
+import { Circle, Document, Font, G, Image, Line, Page, Rect, StyleSheet, Svg, Text, View } from '@react-pdf/renderer';
 import type { ExamDocType } from './exam-document-rules';
+import type { Notice, NoticeItem } from './exam-notices';
+import { noticeItemText } from './exam-notices';
 
 /**
  * TAFSD-510: admit card (VI–X) and statement of entry (every other class).
  * TAFSD-528: both follow the A Level Sr I statement of entry the school signed off
  * (scripts/exam-docs-sample.cjs, StatementOfEntry): set in Times, school name and
- * document title in Stencil. Each student gets a front page and, when the schedule
- * has notes, a back page with the rules of assessments, numbered "PAGE # 01 OF 02".
+ * document title in Stencil. A statement of entry always has a back page: the
+ * segment's Notice to Candidates (exam-notices.ts) and then the schedule's notes. An
+ * admit card has a rules page when the schedule has notes. Every page ends with
+ * "PAGE # 01 OF 02".
  */
 
 // Never hyphenate ("OB-TAINED").
@@ -65,8 +69,12 @@ export interface ExamDocPage {
     photo: string | null;
     initials: string;
     papers: ExamPaperLine[];
-    /** The schedule's notes: the rules of assessments on the back page. */
+    /** The schedule's notes: under the notice on a statement of entry, the rules page of an admit card. */
     notes: string[];
+    /** Statement of entry only: the Notice to Candidates on its back page. */
+    notice: Notice | null;
+    /** The schedule's title, heading its notes under the notice. */
+    assessment: string;
     campusLine: string;
     addressLines: string[];
     issuedLong: string;
@@ -371,7 +379,7 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
     );
 }
 
-/** The back page: who it belongs to, then the schedule's notes. */
+/** The admit card's back page: who it belongs to, then the schedule's notes. */
 function RulesPage({ d, of }: { d: ExamDocPage; of: number }) {
     const size = d.notes.length > 12 ? 9.5 : 10.5;
     return (
@@ -402,7 +410,147 @@ function RulesPage({ d, of }: { d: ExamDocPage; of: number }) {
     );
 }
 
+/** Usable height and widths of the back page, in points (A4 frame less its header and page number). */
+const BACK = { height: 680, bulletW: 495, boxW: 465, subW: 425 };
+const NOTICE_SIZES = [11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5];
+const SIGN_SIZES = [92, 74, 58, 46, 0];
+
+function linesFor(text: string, widthPt: number, size: number): number {
+    // Capitals in Times average about 0.6em wide (measured on the O-III back page).
+    return subjectLines(text, Math.max(10, Math.floor(widthPt / (size * 0.6))));
+}
+
+/** Font size and no-phones sign size that keep the notice and the schedule's notes on one page. */
+export function noticeLayout(notice: Notice, notes: string[]): { size: number; sign: number } {
+    const cambridge = notice.style === 'cambridge';
+    const itemsH = (size: number) => {
+        const lh = size * (cambridge ? 1.3 : 1.5);
+        const gap = size * 0.5;
+        const w = cambridge ? BACK.boxW : BACK.bulletW;
+        let h = 0;
+        for (const it of notice.items) {
+            h += linesFor(noticeItemText(it), w, size) * lh + gap;
+            for (const sub of it.sub ?? []) h += linesFor(sub, BACK.subW, size) * lh + gap;
+        }
+        if (notes.length) {
+            h += size * 3; // the assessment's heading
+            for (const n of notes) h += linesFor(n, BACK.bulletW, size) * size * 1.5 + gap;
+        }
+        return h + (cambridge ? 28 : 0); // the box's padding
+    };
+    // The sign is part of the Cambridge notice: keep it while the text can stay 9pt or more.
+    const fits = (size: number, sign: number) => itemsH(size) + (sign ? sign + 12 : 0) <= BACK.height;
+    for (const sign of cambridge ? SIGN_SIZES : [0]) {
+        const size = NOTICE_SIZES.find((sz) => (sign ? sz >= 9 : true) && fits(sz, sign));
+        if (size) return { size, sign };
+    }
+    return { size: NOTICE_SIZES[NOTICE_SIZES.length - 1], sign: 0 };
+}
+
+/** The no-phones sign from the Cambridge notice, redrawn: phone tilted left, slash from top right. */
+function NoPhones({ size }: { size: number }) {
+    const keys = [0, 1, 2, 3].flatMap((r) => [0, 1, 2].map((c) => ({ x: 42 + c * 8, y: 50 + r * 7.5 })));
+    return (
+        <Svg width={size} height={size} viewBox="0 0 100 100">
+            <Circle cx={50} cy={50} r={44} fill="#ffffff" stroke="#e01b1b" strokeWidth={9} />
+            <G transform="translate(50 50) rotate(-30) translate(-50 -50)">
+                <Rect x={56} y={8} width={4} height={14} fill="#111111" />
+                <Rect x={33} y={20} width={34} height={64} rx={6} ry={6} fill="#111111" />
+                <Rect x={38} y={26} width={24} height={16} rx={2} ry={2} fill="#ffffff" />
+                {keys.map((k, i) => (
+                    <Rect key={i} x={k.x - 3} y={k.y - 2.2} width={6} height={4.4} rx={2.2} ry={2.2} fill="#ffffff" />
+                ))}
+            </G>
+            <Line x1={81} y1={19} x2={19} y2={81} stroke="#e01b1b" strokeWidth={9} />
+        </Svg>
+    );
+}
+
+function BulletList({ items, size }: { items: string[]; size: number }) {
+    return (
+        <View>
+            {items.map((n, i) => (
+                <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? size * 0.5 : 0 }]} wrap={false}>
+                    <Text style={{ width: 18, fontSize: size, lineHeight: 1.5 }}>•</Text>
+                    <Text style={{ flex: 1, fontFamily: F.i, fontSize: size, lineHeight: 1.5 }}>{n.toUpperCase()}</Text>
+                </View>
+            ))}
+        </View>
+    );
+}
+
+function CambridgeRules({ items, size, sign }: { items: NoticeItem[]; size: number; sign: number }) {
+    return (
+        <View style={{ borderWidth: 0.9, borderColor: RULE, paddingVertical: 14, paddingHorizontal: 14 }}>
+            {items.map((it, i) => (
+                <View key={i} style={{ marginTop: i ? size * 0.5 : 0 }} wrap={false}>
+                    <View style={[s.row, { alignItems: 'flex-start' }]}>
+                        <Text style={{ width: 20, fontSize: size, lineHeight: 1.3 }}>{`${i + 1}.`}</Text>
+                        <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3, textAlign: 'justify' }}>
+                            {it.parts.map((p, j) => (
+                                <Text key={j} style={p.bold ? { fontFamily: F.b } : {}}>{p.text.toUpperCase()}</Text>
+                            ))}
+                        </Text>
+                    </View>
+                    {(it.sub ?? []).map((t, j) => (
+                        <View key={j} style={[s.row, { alignItems: 'flex-start', marginTop: size * 0.5, paddingLeft: 40 }]}>
+                            <Text style={{ width: 22, fontSize: size, lineHeight: 1.3 }}>•</Text>
+                            <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3 }}>{t.toUpperCase()}</Text>
+                        </View>
+                    ))}
+                    {it.sub && sign ? (
+                        <View style={{ alignItems: 'center', marginTop: 10 }}>
+                            <NoPhones size={sign} />
+                        </View>
+                    ) : null}
+                </View>
+            ))}
+        </View>
+    );
+}
+
+/** The back of a statement of entry: the segment's Notice to Candidates, then the schedule's notes. */
+function NoticePage({ d, notice, of }: { d: ExamDocPage; notice: Notice; of: number }) {
+    const { size, sign } = noticeLayout(notice, d.notes);
+    return (
+        <Page size="A4" style={s.page}>
+            <View style={[s.frame, { paddingTop: 8 }]}>
+                <Text style={{ fontFamily: F.b, fontSize: 8, color: MUTED, textAlign: 'right', letterSpacing: 0.3 }}>
+                    {`${d.name}  ·  C.C. # ${d.cc}  ·  ${klassOf(d).toUpperCase()}  ·  S. # ${d.serial}`}
+                </Text>
+                <Text style={{ fontFamily: F.b, fontSize: 22, textAlign: 'center', marginTop: 18 }}>{notice.title}</Text>
+                <Text style={{ fontFamily: F.b, fontSize: 12.5, textAlign: 'center', marginTop: 8, marginBottom: 16 }}>{notice.subtitle}</Text>
+                <View style={{ paddingHorizontal: notice.style === 'cambridge' ? 14 : 8 }}>
+                    {notice.style === 'cambridge' ? (
+                        <CambridgeRules items={notice.items} size={size} sign={sign} />
+                    ) : (
+                        <BulletList items={notice.items.map(noticeItemText)} size={size} />
+                    )}
+                    {d.notes.length ? (
+                        <View style={{ marginTop: size * 1.2 }}>
+                            <Text style={{ fontFamily: F.b, fontSize: size + 0.5, textDecoration: 'underline', marginBottom: size * 0.6 }}>
+                                {d.assessment}
+                            </Text>
+                            <BulletList items={d.notes} size={size} />
+                        </View>
+                    ) : null}
+                </View>
+                <View style={{ flex: 1 }} />
+                <Text style={s.pageNo}>{pageCountLabel(2, of)}</Text>
+            </View>
+        </Page>
+    );
+}
+
 export function ExamDocPages({ d }: { d: ExamDocPage }) {
+    if (d.notice) {
+        return (
+            <>
+                <FrontPage d={d} of={2} />
+                <NoticePage d={d} notice={d.notice} of={2} />
+            </>
+        );
+    }
     const of = d.notes.length ? 2 : 1;
     return (
         <>

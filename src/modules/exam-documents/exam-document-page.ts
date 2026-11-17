@@ -1,5 +1,6 @@
 import { EXAM_LOGO, ExamDocPage } from './ExamDocumentPDF';
 import { docTypeForClass, formatSerial, isSecondaryClass } from './exam-document-rules';
+import { noticeForClass } from './exam-notices';
 
 /**
  * TAFSD-528: what one student's admit card / statement of entry shows, from plain
@@ -119,6 +120,8 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         initials: initialsOf(s.fullName),
         papers,
         notes: schedule.notes,
+        notice: secondary ? null : noticeForClass(p.classId),
+        assessment: schedule.title.toUpperCase(),
         campusLine: [schedule.campusName.toUpperCase(), segment].filter(Boolean).join(' : '),
         addressLines: [schedule.campusAddress?.trim() || DEFAULT_ADDRESS, WEB_LINE],
         issuedLong: karachiLong(p.issuedAt),

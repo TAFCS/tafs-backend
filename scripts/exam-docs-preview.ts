@@ -31,7 +31,6 @@ const A_LEVEL = {
     title: 'FIRST SEMESTER ASSESSMENTS',
     segment_line: 'A LEVELS',
     academic_year: '2026-2027',
-    // No notes, so this one shows a single-page document (PAGE # 01 of 01).
     notes: [] as string[],
     papers: [
         ['2026-12-11', 'MATHEMATICS', '9709 / 12'], ['2026-12-12', 'PHYSICS', '9702 / 22'], ['2026-12-14', 'CHEMISTRY', '9701 / 22'],
@@ -76,10 +75,10 @@ async function main() {
         const buf = await renderToBuffer(React.createElement(ExamDocumentsPDF, { pages, title: set.file }) as any);
         const file = path.join(OUT, `${set.file}.pdf`);
         fs.writeFileSync(file, buf);
-        // A front page that spills over adds a sheet: every student must take exactly 1 or 2.
+        // A page that spills over adds a sheet: every student must take exactly 1 or 2.
         const got = (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length;
-        const want = pages.reduce((n, d) => n + (d.notes.length ? 2 : 1), 0);
-        if (got !== want) throw new Error(`${set.file}: ${got} pages, expected ${want} (front page overflowed)`);
+        const want = pages.reduce((n, d) => n + (d.notice || d.notes.length ? 2 : 1), 0);
+        if (got !== want) throw new Error(`${set.file}: ${got} pages, expected ${want} (a page overflowed)`);
         console.log(file);
     }
 }
