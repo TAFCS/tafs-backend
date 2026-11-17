@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 // Triggering reload to connect to Redis service
-import { RequestMethod, ValidationPipe } from '@nestjs/common';
+import { RequestMethod } from '@nestjs/common';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import * as express from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -9,7 +9,7 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { applyGlobalPipeline } from './app.pipeline';
 import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
 
 /**
@@ -84,7 +84,8 @@ async function bootstrap() {
   // 2mb is enough for a busy day's ATTLOG; 8mb concurrent backfills OOMed prod.
   app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '2mb' }));
 
-  app.setGlobalPrefix('api/v1');
+  // Prefix, validation and the error envelope (shared with the DB test suite).
+  applyGlobalPipeline(app);
 
   // 1. Setup Origins
   const rawOrigins = process.env.CORS_ORIGIN;
@@ -176,16 +177,6 @@ async function bootstrap() {
 
   app.use(compression());
   app.use(cookieParser());
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
-
-  app.useGlobalFilters(new HttpExceptionFilter());
 
   app.use(
     morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'),
