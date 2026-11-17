@@ -63,14 +63,14 @@ describe('TAFSD-528 exam document page', () => {
         expect(d.initials).toBe('AK');
     });
 
-    it('numbers pages "PAGE # 01 of 02"', () => {
-        expect(pageCountLabel(1, 2)).toBe('PAGE # 01 of 02');
-        expect(pageCountLabel(1, 1)).toBe('PAGE # 01 of 01');
+    it('numbers pages "PAGE # 01 OF 02"', () => {
+        expect(pageCountLabel(1, 2)).toBe('PAGE # 01 OF 02');
+        expect(pageCountLabel(1, 1)).toBe('PAGE # 01 OF 01');
     });
 
     it('names the right document in the front-page lines', () => {
-        expect(frontNotes({ docType: 'ADMIT_CARD' })[1]).toBe('Bring this admit card every day until the last day of the assessments.');
-        expect(frontNotes({ docType: 'STATEMENT_OF_ENTRY' })[1]).toContain('statement of entry');
+        expect(frontNotes({ docType: 'ADMIT_CARD' })[1]).toBe('BRING THIS ADMIT CARD EVERY DAY UNTIL THE LAST DAY OF THE ASSESSMENTS.');
+        expect(frontNotes({ docType: 'STATEMENT_OF_ENTRY' })[1]).toContain('STATEMENT OF ENTRY');
     });
 
     it('keeps the Sr I row spacing for ten one-line papers and tightens for wrapped ones', () => {

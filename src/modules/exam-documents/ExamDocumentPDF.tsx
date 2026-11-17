@@ -9,7 +9,7 @@ import type { ExamDocType } from './exam-document-rules';
  * TAFSD-528: both follow the A Level Sr I statement of entry the school signed off
  * (scripts/exam-docs-sample.cjs, StatementOfEntry): set in Times, school name and
  * document title in Stencil. Each student gets a front page and, when the schedule
- * has notes, a back page with the rules of assessments, numbered "PAGE # 01 of 02".
+ * has notes, a back page with the rules of assessments, numbered "PAGE # 01 OF 02".
  */
 
 // Never hyphenate ("OB-TAINED").
@@ -122,9 +122,9 @@ const SIGNATURES = [
 
 const two = (n: number) => String(n).padStart(2, '0');
 
-/** "PAGE # 01 of 02" */
+/** "PAGE # 01 OF 02" */
 export function pageCountLabel(page: number, of: number): string {
-    return `PAGE # ${two(page)} of ${two(of)}`;
+    return `PAGE # ${two(page)} OF ${two(of)}`;
 }
 
 /** The two lines under the table on the front page, as on the Sr I statement of entry. */
@@ -133,7 +133,7 @@ export function frontNotes(d: Pick<ExamDocPage, 'docType'>): string[] {
     return [
         'All entry details, including the spelling of your name and date of birth, must be checked for accuracy.',
         `Bring this ${doc} every day until the last day of the assessments.`,
-    ];
+    ].map((n) => n.toUpperCase());
 }
 
 function Header({ d }: { d: ExamDocPage }) {
@@ -247,7 +247,7 @@ export function subjectLines(subject: string, columnChars: number): number {
 const SUBJECT_CHARS = { entry: 29, admit: 40 };
 
 /** Height the front page leaves for the paper rows (ten one-line rows at the Sr I spacing). */
-const ROWS_BUDGET = 226;
+const ROWS_BUDGET = 204;
 const LINE_H = 11.5;
 
 /** Row padding that keeps the front page on one sheet: the Sr I spacing when there is room. */
@@ -338,17 +338,17 @@ function Footer({ d, page, of, right }: { d: ExamDocPage; page: number; of: numb
     return (
         <View style={{ marginTop: 6 }}>
             <View style={[s.row, { borderWidth: 0.9, borderColor: RULE, paddingVertical: 3.5, paddingHorizontal: 8, marginBottom: 5 }]}>
-                <Text style={{ fontFamily: F.bi, fontSize: 8.5 }}>{`Day & date of issuance : ${d.issuedLong}`}</Text>
+                <Text style={{ fontFamily: F.bi, fontSize: 8.5 }}>{`DAY & DATE OF ISSUANCE : ${d.issuedLong.toUpperCase()}`}</Text>
                 {right ? <Text style={{ fontFamily: F.bi, fontSize: 8.5, marginLeft: 'auto' }}>{right}</Text> : null}
             </View>
             <View style={s.footerBox}>
                 <Text style={s.footCampus}>{d.campusLine}</Text>
                 {d.addressLines.map((l, i) => (
-                    <Text key={i} style={s.footText}>{l}</Text>
+                    <Text key={i} style={s.footText}>{l.toUpperCase()}</Text>
                 ))}
             </View>
             <Text style={s.sysNote}>
-                This is a system generated document issued without alteration or erasure, and does not require a signature.
+                THIS IS A SYSTEM GENERATED DOCUMENT ISSUED WITHOUT ALTERATION OR ERASURE, AND DOES NOT REQUIRE A SIGNATURE.
             </Text>
             <Text style={s.pageNo}>{pageCountLabel(page, of)}</Text>
         </View>
@@ -365,7 +365,7 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
                 <FrontNotes d={d} />
                 <View style={{ flex: 1 }} />
                 <Signatures />
-                <Footer d={d} page={1} of={of} right={of > 1 ? 'Please turn over for the rules of assessments' : undefined} />
+                <Footer d={d} page={1} of={of} right={of > 1 ? 'PLEASE TURN OVER FOR THE RULES OF ASSESSMENTS' : undefined} />
             </View>
         </Page>
     );
@@ -391,7 +391,7 @@ function RulesPage({ d, of }: { d: ExamDocPage; of: number }) {
                     {d.notes.map((n, i) => (
                         <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? 5 : 0 }]} wrap={false}>
                             <Text style={{ width: 20, fontFamily: F.b, fontSize: size }}>{`${i + 1}.`}</Text>
-                            <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3 }}>{n}</Text>
+                            <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3 }}>{n.toUpperCase()}</Text>
                         </View>
                     ))}
                 </View>
