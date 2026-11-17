@@ -88,6 +88,8 @@ const MUTED = '#444444';
 const RULE = '#111111';
 const SHADE = '#f2f2f2';
 const LABEL_W = 142;
+/** Text width of the name boxes beside the photo (page less label, photo and padding). */
+const NAME_BOX_W = 270;
 
 const s = StyleSheet.create({
     page: { padding: 18, fontFamily: F.r, fontSize: 10, color: INK },
@@ -167,14 +169,15 @@ function Header({ d }: { d: ExamDocPage }) {
 }
 
 /** Values sit at the left of their box; an empty box shows a dash in its centre. */
-function Field(p: { label: string; value: string; labelW?: number; boxW?: number; mt?: number }) {
-    const { label, value, labelW = LABEL_W, boxW, mt = 7 } = p;
+function Field(p: { label: string; value: string; labelW?: number; boxW?: number; mt?: number; fitW?: number }) {
+    const { label, value, labelW = LABEL_W, boxW, mt = 7, fitW } = p;
     const empty = !value.trim();
+    const size = fitW && !empty ? fitOneLine(value, fitW) : undefined;
     return (
         <View style={[s.row, { marginTop: mt }]}>
             <Text style={[s.label, { width: labelW }]}>{`${label} :`}</Text>
             <View style={[s.box, boxW ? { width: boxW } : { flex: 1 }]}>
-                <Text style={[s.boxText, { textAlign: empty ? 'center' : 'left' }]}>{empty ? '-' : value}</Text>
+                <Text style={[s.boxText, { textAlign: empty ? 'center' : 'left' }, size ? { fontSize: size } : {}]}>{empty ? '-' : value}</Text>
             </View>
         </View>
     );
@@ -203,7 +206,7 @@ function EntryFields({ d }: { d: ExamDocPage }) {
         <View style={[s.row, { marginTop: 10, alignItems: 'flex-end' }]}>
             <View style={{ flex: 1, paddingRight: 14 }}>
                 <Field label="CENTRE / CANDIDATE #" value={`${d.centre} / ${d.cc}`} boxW={120} mt={0} />
-                <Field label="CANDIDATE'S NAME" value={d.name} />
+                <Field label="CANDIDATE'S NAME" value={d.name} fitW={NAME_BOX_W} />
                 <View style={s.row}>
                     <Field label="DATE OF BIRTH" value={d.dob} boxW={120} />
                     <View style={{ flex: 1 }} />
@@ -227,8 +230,8 @@ function AdmitFields({ d }: { d: ExamDocPage }) {
                     <View style={{ flex: 1 }} />
                     <Field label="G.R. #" value={d.gr} labelW={42} boxW={66} mt={0} />
                 </View>
-                <Field label="STUDENT'S NAME" value={d.name} />
-                <Field label="FATHER'S NAME" value={d.father} />
+                <Field label="STUDENT'S NAME" value={d.name} fitW={NAME_BOX_W} />
+                <Field label="FATHER'S NAME" value={d.father} fitW={NAME_BOX_W} />
                 <View style={s.row}>
                     <Field label="DATE OF BIRTH" value={d.dob} boxW={120} />
                     <View style={{ flex: 1 }} />
@@ -264,14 +267,51 @@ const LINE_H = 11.5;
  * An admit card is one page: its rows and the schedule's notes share this height (it has
  * one heading line fewer than a statement of entry and no notice on a back page).
  */
-const ADMIT_BUDGET = 330;
-const ADMIT_NOTE_SIZE = 8.5;
+const ADMIT_BUDGET = 325;
+const ADMIT_NOTE_SIZES = [8.5, 8, 7.5, 7, 6.5];
 
 /** Height of the admit card's NOTE box; with no notes it carries the two front-page lines. */
-export function admitNotesHeight(notes: string[]): number {
+export function admitNotesHeight(notes: string[], size = ADMIT_NOTE_SIZES[0]): number {
     if (!notes.length) return 42;
-    const cpl = Math.floor(495 / (ADMIT_NOTE_SIZE * 0.6));
-    return 24 + notes.reduce((h, n) => h + subjectLines(n, cpl) * ADMIT_NOTE_SIZE * 1.3 + 1.5, 0);
+    const cpl = Math.floor(480 / (size * 0.66));
+    return 24 + notes.reduce((h, n) => h + subjectLines(n, cpl) * size * 1.3 + 1.5, 0);
+}
+
+export interface TableFit {
+    /** Row padding, top and bottom. */
+    pv: number;
+    /** Font size of the paper rows. */
+    size: number;
+}
+
+/**
+ * Row padding and text size that keep the paper rows inside `budget` points: the Sr I
+ * spacing when there is room, then tighter rows, then smaller text (never under 6.5pt).
+ */
+export function fitTable(lineCounts: number[], budget: number): TableFit {
+    const pv = rowPadding(lineCounts, budget);
+    const lines = lineCounts.reduce((a, b) => a + b, 0);
+    const rows = Math.max(lineCounts.length, 1);
+    if (lines * LINE_H + rows * 2 * pv <= budget) return { pv, size: 10 };
+    const size = Math.max(6.5, Math.floor(((10 * (budget - rows * 3)) / (lines * LINE_H)) * 10) / 10);
+    return { pv: 1.5, size };
+}
+
+/** The admit card's table and notes share one budget and shrink together, the table staying a step larger. */
+export function fitAdmit(lineCounts: number[], notes: string[]): TableFit & { noteSize: number } {
+    let last: TableFit & { noteSize: number } = { pv: 1.5, size: 6.5, noteSize: 6.5 };
+    for (const noteSize of ADMIT_NOTE_SIZES) {
+        last = { ...fitTable(lineCounts, ADMIT_BUDGET - admitNotesHeight(notes, noteSize)), noteSize };
+        // Keep the table a step larger than the notes: 8.5pt notes want a full 10pt table.
+        if (last.size >= Math.min(10, noteSize + 1.5)) return last;
+    }
+    return last;
+}
+
+/** Text size that keeps a value on one line of its box (about 0.66em a capital, Times Bold). */
+export function fitOneLine(text: string, boxWidth: number, base = 10.5, min = 7): number {
+    const fits = Math.floor(boxWidth / (base * 0.66));
+    return text.length <= fits ? base : Math.max(min, Math.floor(((base * fits) / text.length) * 10) / 10);
 }
 
 /** Row padding that keeps the front page on one sheet: the Sr I spacing when there is room. */
@@ -281,15 +321,18 @@ export function rowPadding(lineCounts: number[], budget = ROWS_BUDGET): number {
     return Math.max(1.5, Math.min(6.5, Math.floor(pv * 10) / 10));
 }
 
+const paperLines = (d: ExamDocPage) =>
+    d.papers.map((p) => subjectLines(p.subject, d.docType === 'STATEMENT_OF_ENTRY' ? SUBJECT_CHARS.entry : SUBJECT_CHARS.admit));
+
 function PapersTable({ d }: { d: ExamDocPage }) {
     const entry = d.docType === 'STATEMENT_OF_ENTRY';
-    const lines = d.papers.map((p) => subjectLines(p.subject, entry ? SUBJECT_CHARS.entry : SUBJECT_CHARS.admit));
-    const pv = rowPadding(lines, entry ? ROWS_BUDGET : ADMIT_BUDGET - admitNotesHeight(d.notes));
+    const lines = paperLines(d);
+    const { pv, size } = entry ? fitTable(lines, ROWS_BUDGET) : fitAdmit(lines, d.notes);
     const W: Record<string, number | null> = { code: 84, subject: null, day: 84, date: 104, dayDate: 150, time: 74 };
-    const cs = (k: string) => (W[k] ? { width: W[k] as number } : { flex: 1, textAlign: 'left' as const, paddingLeft: 8 });
+    const cs = (k: string) => (W[k] ? { width: W[k] } : { flex: 1, textAlign: 'left' as const, paddingLeft: 8 });
     const cell = (v: string | null) => (v && v.trim() ? v : '-');
     const td = (k: string, v: string, extra: { fontFamily?: string } = {}) => (
-        <Text style={[s.td, cs(k), s.vline, { paddingVertical: pv }, extra]}>{v}</Text>
+        <Text style={[s.td, cs(k), s.vline, { paddingVertical: pv, fontSize: size }, extra]}>{v}</Text>
     );
     return (
         <View style={[s.table, { marginTop: 12 }]}>
@@ -311,7 +354,7 @@ function PapersTable({ d }: { d: ExamDocPage }) {
             {d.papers.map((p, i) =>
                 entry ? (
                     <View key={i} style={s.tr} wrap={false}>
-                        <Text style={[s.td, cs('code'), { paddingVertical: pv }]}>{cell(p.code)}</Text>
+                        <Text style={[s.td, cs('code'), { paddingVertical: pv, fontSize: size }]}>{cell(p.code)}</Text>
                         {td('subject', p.subject.toUpperCase(), { fontFamily: F.b })}
                         {td('day', p.day.toUpperCase())}
                         {td('date', p.date)}
@@ -319,7 +362,7 @@ function PapersTable({ d }: { d: ExamDocPage }) {
                     </View>
                 ) : (
                     <View key={i} style={s.tr} wrap={false}>
-                        <Text style={[s.td, cs('subject'), { fontFamily: F.b, paddingVertical: pv }]}>{p.subject.toUpperCase()}</Text>
+                        <Text style={[s.td, cs('subject'), { fontFamily: F.b, paddingVertical: pv, fontSize: size }]}>{p.subject.toUpperCase()}</Text>
                         {td('dayDate', p.dayDate)}
                         {td('time', cell(p.time))}
                     </View>
@@ -343,14 +386,14 @@ function FrontNotes({ d }: { d: ExamDocPage }) {
 }
 
 /** The admit card's notes, numbered under NOTE: as on the school's own admit card. */
-function AdmitNotes({ notes }: { notes: string[] }) {
+function AdmitNotes({ notes, size }: { notes: string[]; size: number }) {
     return (
         <View style={{ marginTop: 9, borderWidth: 0.9, borderColor: RULE, paddingVertical: 5, paddingHorizontal: 8 }}>
             <Text style={{ fontFamily: F.b, fontSize: 9, textDecoration: 'underline', marginBottom: 3 }}>NOTE:</Text>
             {notes.map((n, i) => (
                 <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? 1.5 : 0 }]} wrap={false}>
-                    <Text style={{ width: 16, fontSize: ADMIT_NOTE_SIZE, lineHeight: 1.3 }}>{`${i + 1}.`}</Text>
-                    <Text style={{ flex: 1, fontSize: ADMIT_NOTE_SIZE, lineHeight: 1.3 }}>{n.toUpperCase()}</Text>
+                    <Text style={{ width: 16, fontSize: size, lineHeight: 1.3 }}>{`${i + 1}.`}</Text>
+                    <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3 }}>{n.toUpperCase()}</Text>
                 </View>
             ))}
         </View>
@@ -402,7 +445,7 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
                 <Header d={d} />
                 {d.docType === 'ADMIT_CARD' ? <AdmitFields d={d} /> : <EntryFields d={d} />}
                 <PapersTable d={d} />
-                {d.docType === 'ADMIT_CARD' && d.notes.length ? <AdmitNotes notes={d.notes} /> : <FrontNotes d={d} />}
+                {d.docType === 'ADMIT_CARD' && d.notes.length ? <AdmitNotes notes={d.notes} size={fitAdmit(paperLines(d), d.notes).noteSize} /> : <FrontNotes d={d} />}
                 <View style={{ flex: 1 }} />
                 <Signatures />
                 <Footer d={d} page={1} of={of} right={of > 1 ? 'PLEASE TURN OVER FOR THE RULES OF ASSESSMENTS' : undefined} />

@@ -37,7 +37,6 @@ import {
     effectiveFeeDate,
     feeDateLabel,
     formatSerial,
-    isSecondaryClass,
     isSessionLabel,
     issueWindowOpen,
     notOfferedClasses,

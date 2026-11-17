@@ -1,5 +1,5 @@
 import { buildExamDocPage, ExamDocPageInput, longDate } from './exam-document-page';
-import { frontNotes, pageCountLabel, rowPadding, subjectLines } from './ExamDocumentPDF';
+import { fitAdmit, fitOneLine, fitTable, frontNotes, pageCountLabel, rowPadding, subjectLines } from './ExamDocumentPDF';
 
 const base = (over: Partial<ExamDocPageInput> = {}): ExamDocPageInput => ({
     schedule: {
@@ -87,9 +87,30 @@ describe('TAFSD-528 exam document page', () => {
         expect(subjectLines('ACCOUNTING P2 / CHEMISTRY P2', 29)).toBe(1);
         expect(subjectLines('ECONOMICS P2 / CHEMISTRY P1, P4', 29)).toBe(2);
         expect(subjectLines('B. STUDIES P1 / BIO. P1, P6 / COMPUTER SCIENCE P1', 29)).toBe(2);
-        expect(rowPadding(Array(8).fill(1))).toBe(6.5);
+        expect(rowPadding(Array<number>(8).fill(1))).toBe(6.5);
         const tenWrapped = rowPadding([2, 1, 2, 1, 1, 1, 1, 2, 1, 1]);
-        expect(tenWrapped).toBeLessThan(rowPadding(Array(10).fill(1)));
-        expect(rowPadding(Array(30).fill(2))).toBe(1.5);
+        expect(tenWrapped).toBeLessThan(rowPadding(Array<number>(10).fill(1)));
+        expect(rowPadding(Array<number>(30).fill(2))).toBe(1.5);
+    });
+
+    it('shrinks the table text only once the rows are at their tightest', () => {
+        expect(fitTable(Array<number>(10).fill(1), 226)).toEqual({ pv: 5.5, size: 10 });
+        const crowded = fitTable(Array<number>(16).fill(2), 226);
+        expect(crowded.pv).toBe(1.5);
+        expect(crowded.size).toBeLessThan(10);
+        expect(crowded.size).toBeGreaterThanOrEqual(6.5);
+    });
+
+    it('fits an admit card with the school\'s IX schedule at full table size', () => {
+        const fit = fitAdmit(Array<number>(10).fill(1), Array<string>(9).fill('NO PRE OR POST ASSESSMENT WILL BE CONDUCTED, AND THE RESULT WILL BE ANNOUNCED IN THE PTM.'));
+        expect(fit.size).toBe(10);
+        expect(fit.noteSize).toBeGreaterThanOrEqual(8);
+    });
+
+    it('keeps a long name on one line of its box', () => {
+        expect(fitOneLine('HAMZA ARIF', 270)).toBe(10.5);
+        const long = fitOneLine('MUHAMMAD ABDUL REHMAN SIDDIQUI QURESHI KHAN YOUSUFZAI', 270);
+        expect(long).toBeLessThan(10.5);
+        expect(long).toBeGreaterThanOrEqual(7);
     });
 });
