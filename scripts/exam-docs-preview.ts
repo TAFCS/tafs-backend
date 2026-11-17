@@ -75,9 +75,9 @@ async function main() {
         const buf = await renderToBuffer(React.createElement(ExamDocumentsPDF, { pages, title: set.file }) as any);
         const file = path.join(OUT, `${set.file}.pdf`);
         fs.writeFileSync(file, buf);
-        // A page that spills over adds a sheet: every student must take exactly 1 or 2.
+        // A page that spills over adds a sheet: a statement of entry is 2 pages, an admit card 1.
         const got = (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length;
-        const want = pages.reduce((n, d) => n + (d.notice || d.notes.length ? 2 : 1), 0);
+        const want = pages.reduce((n, d) => n + (d.notice ? 2 : 1), 0);
         if (got !== want) throw new Error(`${set.file}: ${got} pages, expected ${want} (a page overflowed)`);
         console.log(file);
     }

@@ -101,7 +101,9 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         title: secondary ? 'ADMIT CARD' : 'STATEMENT OF ENTRY',
         lines: [
             schedule.title.toUpperCase(),
-            ...(schedule.segmentLine ? [schedule.segmentLine.toUpperCase()] : []),
+            // An admit card leaves the schedule's line out: it named the classes ("CLASSES IX & X")
+            // or the segment, both already on the card (CLASS box, footer).
+            ...(schedule.segmentLine && !secondary ? [schedule.segmentLine.toUpperCase()] : []),
             `SESSION : ${session}`,
             // The statement of entry names the class in the heading, as on the Sr I sheet ("LEVEL SR. I A").
             ...(secondary ? [] : [`LEVEL ${[p.className, p.sectionName].filter(Boolean).join(' ').toUpperCase()}`]),

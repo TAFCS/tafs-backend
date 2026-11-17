@@ -49,6 +49,14 @@ describe('TAFSD-528 exam document page', () => {
         expect(d.campusLine).toBe('CAMPUS # II : SECONDARY SEGMENT');
     });
 
+    it('keeps the schedule line ("CLASSES IX & X") out of the admit card heading: the class has its own box', () => {
+        for (const line of ['CLASSES IX & X', 'SECONDARY SEGMENT']) {
+            const d = buildExamDocPage(base({ classId: 18, className: 'IX', schedule: { ...base().schedule, segmentLine: line } }));
+            expect(d.lines).toEqual(['FIRST SEMESTER ASSESSMENTS', 'SESSION : 2026 – 2027']);
+            expect(d.campusLine).toBe('CAMPUS # II : SECONDARY SEGMENT');
+        }
+    });
+
     it('writes every date with dashes: date of birth and the admit card\'s day & date', () => {
         const d = buildExamDocPage(base({ classId: 15, className: 'VI', schedule: { ...base().schedule, papers: [
             { class_id: 15, paper_date: new Date('2026-09-28T00:00:00Z'), time_text: '8:00 – 11:30', subject: 'Science', code: null },

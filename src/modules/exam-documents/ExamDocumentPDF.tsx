@@ -12,7 +12,7 @@ import { noticeItemText } from './exam-notices';
  * (scripts/exam-docs-sample.cjs, StatementOfEntry): set in Times, school name and
  * document title in Stencil. A statement of entry always has a back page: the
  * segment's Notice to Candidates (exam-notices.ts) and then the schedule's notes. An
- * admit card has a rules page when the schedule has notes. Every page ends with
+ * admit card is one page, its notes under the table. Every page ends with
  * "PAGE # 01 OF 02".
  */
 
@@ -69,7 +69,7 @@ export interface ExamDocPage {
     photo: string | null;
     initials: string;
     papers: ExamPaperLine[];
-    /** The schedule's notes: under the notice on a statement of entry, the rules page of an admit card. */
+    /** The schedule's notes: under the notice on a statement of entry, under the table on an admit card. */
     notes: string[];
     /** Statement of entry only: the Notice to Candidates on its back page. */
     notice: Notice | null;
@@ -258,16 +258,31 @@ const SUBJECT_CHARS = { entry: 29, admit: 40 };
 const ROWS_BUDGET = 204;
 const LINE_H = 11.5;
 
+/**
+ * An admit card is one page: its rows and the schedule's notes share this height (it has
+ * one heading line fewer than a statement of entry and no notice on a back page).
+ */
+const ADMIT_BUDGET = 330;
+const ADMIT_NOTE_SIZE = 8.5;
+
+/** Height of the admit card's NOTE box; with no notes it carries the two front-page lines. */
+export function admitNotesHeight(notes: string[]): number {
+    if (!notes.length) return 42;
+    const cpl = Math.floor(495 / (ADMIT_NOTE_SIZE * 0.6));
+    return 24 + notes.reduce((h, n) => h + subjectLines(n, cpl) * ADMIT_NOTE_SIZE * 1.3 + 1.5, 0);
+}
+
 /** Row padding that keeps the front page on one sheet: the Sr I spacing when there is room. */
-export function rowPadding(lineCounts: number[]): number {
+export function rowPadding(lineCounts: number[], budget = ROWS_BUDGET): number {
     const lines = lineCounts.reduce((a, b) => a + b, 0);
-    const pv = (ROWS_BUDGET - lines * LINE_H) / (2 * Math.max(lineCounts.length, 1));
+    const pv = (budget - lines * LINE_H) / (2 * Math.max(lineCounts.length, 1));
     return Math.max(1.5, Math.min(6.5, Math.floor(pv * 10) / 10));
 }
 
 function PapersTable({ d }: { d: ExamDocPage }) {
     const entry = d.docType === 'STATEMENT_OF_ENTRY';
-    const pv = rowPadding(d.papers.map((p) => subjectLines(p.subject, entry ? SUBJECT_CHARS.entry : SUBJECT_CHARS.admit)));
+    const lines = d.papers.map((p) => subjectLines(p.subject, entry ? SUBJECT_CHARS.entry : SUBJECT_CHARS.admit));
+    const pv = rowPadding(lines, entry ? ROWS_BUDGET : ADMIT_BUDGET - admitNotesHeight(d.notes));
     const W: Record<string, number | null> = { code: 84, subject: null, day: 84, date: 104, dayDate: 150, time: 74 };
     const cs = (k: string) => (W[k] ? { width: W[k] as number } : { flex: 1, textAlign: 'left' as const, paddingLeft: 8 });
     const cell = (v: string | null) => (v && v.trim() ? v : '-');
@@ -325,6 +340,21 @@ function FrontNotes({ d }: { d: ExamDocPage }) {
     );
 }
 
+/** The admit card's notes, numbered under NOTE: as on the school's own admit card. */
+function AdmitNotes({ notes }: { notes: string[] }) {
+    return (
+        <View style={{ marginTop: 9, borderWidth: 0.9, borderColor: RULE, paddingVertical: 5, paddingHorizontal: 8 }}>
+            <Text style={{ fontFamily: F.b, fontSize: 9, textDecoration: 'underline', marginBottom: 3 }}>NOTE:</Text>
+            {notes.map((n, i) => (
+                <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? 1.5 : 0 }]} wrap={false}>
+                    <Text style={{ width: 16, fontSize: ADMIT_NOTE_SIZE, lineHeight: 1.3 }}>{`${i + 1}.`}</Text>
+                    <Text style={{ flex: 1, fontSize: ADMIT_NOTE_SIZE, lineHeight: 1.3 }}>{n.toUpperCase()}</Text>
+                </View>
+            ))}
+        </View>
+    );
+}
+
 function Signatures() {
     return (
         <View style={s.signBox}>
@@ -370,41 +400,10 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
                 <Header d={d} />
                 {d.docType === 'ADMIT_CARD' ? <AdmitFields d={d} /> : <EntryFields d={d} />}
                 <PapersTable d={d} />
-                <FrontNotes d={d} />
+                {d.docType === 'ADMIT_CARD' && d.notes.length ? <AdmitNotes notes={d.notes} /> : <FrontNotes d={d} />}
                 <View style={{ flex: 1 }} />
                 <Signatures />
                 <Footer d={d} page={1} of={of} right={of > 1 ? 'PLEASE TURN OVER FOR THE RULES OF ASSESSMENTS' : undefined} />
-            </View>
-        </Page>
-    );
-}
-
-/** The admit card's back page: who it belongs to, then the schedule's notes. */
-function RulesPage({ d, of }: { d: ExamDocPage; of: number }) {
-    const size = d.notes.length > 12 ? 9.5 : 10.5;
-    return (
-        <Page size="A4" style={s.page}>
-            <View style={s.frame}>
-                <Header d={d} />
-                <Field label={d.docType === 'ADMIT_CARD' ? "STUDENT'S NAME" : "CANDIDATE'S NAME"} value={d.name} mt={12} />
-                <View style={s.row}>
-                    <Field label="CLASS" value={klassOf(d)} boxW={120} />
-                    <View style={{ flex: 1 }} />
-                    <Field label="C.C. #" value={d.cc} labelW={42} boxW={66} />
-                    <View style={{ width: 14 }} />
-                    <Field label="G.R. #" value={d.gr} labelW={42} boxW={66} />
-                </View>
-                <Text style={[s.docTitle, { fontFamily: F.b, fontSize: 13, marginTop: 16, letterSpacing: 1.5 }]}>RULES OF ASSESSMENTS</Text>
-                <View style={{ marginTop: 8, borderWidth: 0.9, borderColor: RULE, paddingVertical: 8, paddingHorizontal: 10 }}>
-                    {d.notes.map((n, i) => (
-                        <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? 5 : 0 }]} wrap={false}>
-                            <Text style={{ width: 20, fontFamily: F.b, fontSize: size }}>{`${i + 1}.`}</Text>
-                            <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3 }}>{n.toUpperCase()}</Text>
-                        </View>
-                    ))}
-                </View>
-                <View style={{ flex: 1 }} />
-                <Footer d={d} page={2} of={of} />
             </View>
         </Page>
     );
@@ -542,20 +541,13 @@ function NoticePage({ d, notice, of }: { d: ExamDocPage; notice: Notice; of: num
     );
 }
 
+/** A statement of entry is two pages (the notice on the back); an admit card is one. */
 export function ExamDocPages({ d }: { d: ExamDocPage }) {
-    if (d.notice) {
-        return (
-            <>
-                <FrontPage d={d} of={2} />
-                <NoticePage d={d} notice={d.notice} of={2} />
-            </>
-        );
-    }
-    const of = d.notes.length ? 2 : 1;
+    if (!d.notice) return <FrontPage d={d} of={1} />;
     return (
         <>
-            <FrontPage d={d} of={of} />
-            {of > 1 ? <RulesPage d={d} of={of} /> : null}
+            <FrontPage d={d} of={2} />
+            <NoticePage d={d} notice={d.notice} of={2} />
         </>
     );
 }
