@@ -39,6 +39,8 @@ describe('TAFSD-528 exam document page', () => {
         expect(d.docType).toBe('STATEMENT_OF_ENTRY');
         expect(d.lines).toEqual(['FIRST SEMESTER ASSESSMENTS', 'SENIOR CAMBRIDGE', 'SESSION : 2026 – 2027', 'LEVEL SR. I A']);
         expect(d.campusLine).toBe('CAMPUS # II : SENIOR CAMBRIDGE SEGMENT');
+        // CENTRE / CANDIDATE # : PK 564 / 4137 — the candidate number is the C.C.
+        expect([d.centre, d.cc]).toEqual(['PK 564', '4137']);
     });
 
     it('gives VI–X an admit card with the class in its own box, not in the heading', () => {

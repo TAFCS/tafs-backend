@@ -71,6 +71,8 @@ export interface ExamDocPage {
     papers: ExamPaperLine[];
     /** The schedule's notes: under the notice on a statement of entry, under the table on an admit card. */
     notes: string[];
+    /** Cambridge centre number, printed before the candidate number (the C.C.) on a statement of entry. */
+    centre: string;
     /** Statement of entry only: the Notice to Candidates on its back page. */
     notice: Notice | null;
     /** The schedule's title, heading its notes under the notice. */
@@ -200,7 +202,7 @@ function EntryFields({ d }: { d: ExamDocPage }) {
     return (
         <View style={[s.row, { marginTop: 10, alignItems: 'flex-end' }]}>
             <View style={{ flex: 1, paddingRight: 14 }}>
-                <Field label="C.C. # / G.R. #" value={[d.cc, d.gr || '-'].join(' / ')} boxW={120} mt={0} />
+                <Field label="CENTRE / CANDIDATE #" value={`${d.centre} / ${d.cc}`} boxW={120} mt={0} />
                 <Field label="CANDIDATE'S NAME" value={d.name} />
                 <View style={s.row}>
                     <Field label="DATE OF BIRTH" value={d.dob} boxW={120} />

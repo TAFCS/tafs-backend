@@ -12,6 +12,8 @@ const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 export const DEFAULT_ADDRESS =
     'C-61, 62, 63, 64 & 65, Block 13, Gulistan-e-Jauhar, Karachi  ·  Phone (92-21) 3476-5111-13  ·  Fax (92-21) 3476-5114';
+/** The school's Cambridge centre number, the same on every campus (confirmed 2026-11-17). */
+export const CAMBRIDGE_CENTRE = 'PK 564';
 export const WEB_LINE = 'info@tafs.edu.pk  ·  american@cyber.net.pk  ·  www.tafs.edu.pk';
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -122,6 +124,7 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         initials: initialsOf(s.fullName),
         papers,
         notes: schedule.notes,
+        centre: CAMBRIDGE_CENTRE,
         notice: secondary ? null : noticeForClass(p.classId),
         assessment: schedule.title.toUpperCase(),
         campusLine: [schedule.campusName.toUpperCase(), segment].filter(Boolean).join(' : '),
