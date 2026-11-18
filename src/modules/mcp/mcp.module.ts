@@ -4,6 +4,10 @@ import { McpController } from './mcp.controller';
 import { McpTokensController } from './mcp-tokens.controller';
 import { McpTokensService } from './mcp-tokens.service';
 import { McpService } from './mcp.service';
+import { McpGrantsController } from './mcp-grants.controller';
+import { McpOAuthController } from './oauth/oauth.controller';
+import { McpWellKnownController } from './oauth/well-known.controller';
+import { McpOAuthService } from './oauth/oauth.service';
 
 /**
  * TAFSD-531: an MCP server for staff AI assistants. Tools call the existing
@@ -12,7 +16,13 @@ import { McpService } from './mcp.service';
  */
 @Module({
   imports: [AuthModule],
-  controllers: [McpTokensController, McpController],
-  providers: [McpTokensService, McpService],
+  controllers: [
+    McpTokensController,
+    McpGrantsController,
+    McpOAuthController,
+    McpWellKnownController,
+    McpController,
+  ],
+  providers: [McpTokensService, McpService, McpOAuthService],
 })
 export class McpModule {}

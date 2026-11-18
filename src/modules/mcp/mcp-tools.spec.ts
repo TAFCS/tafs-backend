@@ -205,13 +205,13 @@ describe('MCP tools/call re-checks access and audits', () => {
   it('refuses a tool the caller may not use exactly like an unknown one, without running it', async () => {
     const vouchers = { findAll: jest.fn() };
     const { svc, audit } = service({ VouchersController: vouchers });
-    const denied = svc.callTool(directory, 'list_vouchers', {}, 'tok-1');
+    const denied = svc.callTool(directory, 'list_vouchers', {}, 'token tok-1');
     await expect(denied).rejects.toBeInstanceOf(McpError);
     await expect(
-      svc.callTool(directory, 'list_vouchers', {}, 'tok-1'),
+      svc.callTool(directory, 'list_vouchers', {}, 'token tok-1'),
     ).rejects.toThrow('Unknown tool: list_vouchers');
     await expect(
-      svc.callTool(directory, 'drop_tables', {}, 'tok-1'),
+      svc.callTool(directory, 'drop_tables', {}, 'token tok-1'),
     ).rejects.toThrow('Unknown tool: drop_tables');
     expect(vouchers.findAll).not.toHaveBeenCalled();
     expect(audit.log).toHaveBeenCalledWith(
@@ -234,7 +234,7 @@ describe('MCP tools/call re-checks access and audits', () => {
       directory,
       'get_student',
       { cc: 7570 },
-      'tok-1',
+      'token tok-1',
     );
     expect(students.findOne).toHaveBeenCalledWith(7570, directory);
     expect(res.isError).toBeUndefined();

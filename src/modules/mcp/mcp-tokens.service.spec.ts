@@ -42,10 +42,13 @@ function setup(
           expires_at: new Date(Date.now() + 86_400_000),
           revoked_at: null,
           last_used_at: null,
+          grant_id: null,
+          grant: null,
           users: user,
           ...opts.row,
         };
   const prisma = {
+    mcp_oauth_grants: { update: jest.fn().mockResolvedValue({}) },
     mcp_access_tokens: {
       findUnique: jest.fn().mockResolvedValue(row),
       update: jest.fn().mockResolvedValue({}),
@@ -88,8 +91,8 @@ function setup(
 describe('McpTokensService.authenticate (TAFSD-531)', () => {
   it('resolves a live token to the principal the JWT strategy builds for its owner', async () => {
     const { svc, token, strategy, prisma } = setup();
-    const { user: principal, tokenId } = await svc.authenticate(token);
-    expect(tokenId).toBe('tok-1');
+    const { user: principal, credential } = await svc.authenticate(token);
+    expect(credential).toBe('token tok-1');
     expect(prisma.mcp_access_tokens.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { token_hash: hashMcpToken(token) } }),
     );
@@ -128,6 +131,40 @@ describe('McpTokensService.authenticate (TAFSD-531)', () => {
     );
   });
 
+  it('accepts an OAuth access token while its grant stands, and names the grant for audit', async () => {
+    const { svc, token } = setup({
+      row: {
+        grant_id: 'grant-1',
+        grant: {
+          revoked_at: null,
+          expires_at: new Date(Date.now() + 86_400_000),
+        },
+      },
+    });
+    await expect(svc.authenticate(token)).resolves.toMatchObject({
+      credential: 'oauth grant grant-1',
+    });
+  });
+
+  it.each([
+    [
+      'revoked',
+      { revoked_at: new Date(), expires_at: new Date(Date.now() + 86_400_000) },
+    ],
+    ['expired', { revoked_at: null, expires_at: new Date(Date.now() - 1000) }],
+  ])(
+    'refuses an OAuth access token whose grant is %s',
+    async (_label, grant) => {
+      const { svc, token, strategy } = setup({
+        row: { grant_id: 'grant-1', grant },
+      });
+      await expect(svc.authenticate(token)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(strategy.validate).not.toHaveBeenCalled();
+    },
+  );
+
   it('refuses a deactivated owner (the strategy throws)', async () => {
     const { svc, token, strategy } = setup();
     strategy.validate.mockRejectedValueOnce(
@@ -151,7 +188,7 @@ describe('McpTokensService.authenticate (TAFSD-531)', () => {
       actions: [],
     });
     await expect(svc.authenticate(token)).resolves.toMatchObject({
-      tokenId: 'tok-1',
+      credential: 'token tok-1',
     });
   });
 

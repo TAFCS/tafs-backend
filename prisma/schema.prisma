@@ -959,24 +959,98 @@ model user_refresh_tokens {
   @@index([user_id, revoked_at, expires_at], map: "idx_user_rf_tokens_lookup")
 }
 
-/// TAFSD-531: personal access tokens for the admin MCP server. Only the
-/// SHA-256 of the token is stored; the token itself is shown once at issue.
-/// A token acts as its owner, whose role, tiles and scope are read live on
-/// every request, so it never carries more than the owner holds right now.
+/// TAFSD-531: access tokens for the admin MCP server. Only the SHA-256 of
+/// a token is stored; the token itself is shown once. A token acts as its
+/// owner, whose role, tiles and scope are read live on every request.
+/// grant_id is null for a personal access token (issued from the AI
+/// Assistant page) and set for a short-lived OAuth access token.
 model mcp_access_tokens {
-  id           String    @id @default(uuid())
+  id           String            @id @default(uuid())
   user_id      String
-  name         String    @db.VarChar(100)
+  name         String            @db.VarChar(100)
   /// First characters of the token, for telling tokens apart in a list.
-  token_prefix String    @db.VarChar(20)
-  token_hash   String    @unique @db.VarChar(64)
-  expires_at   DateTime  @db.Timestamptz(6)
-  revoked_at   DateTime? @db.Timestamptz(6)
-  last_used_at DateTime? @db.Timestamptz(6)
-  created_at   DateTime  @default(now()) @db.Timestamptz(6)
-  users        users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  token_prefix String            @db.VarChar(20)
+  token_hash   String            @unique @db.VarChar(64)
+  expires_at   DateTime          @db.Timestamptz(6)
+  revoked_at   DateTime?         @db.Timestamptz(6)
+  last_used_at DateTime?         @db.Timestamptz(6)
+  created_at   DateTime          @default(now()) @db.Timestamptz(6)
+  grant_id     String?
+  users        users             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  grant        mcp_oauth_grants? @relation(fields: [grant_id], references: [id], onDelete: Cascade)
 
   @@index([user_id, revoked_at], map: "idx_mcp_access_tokens_user")
+  @@index([grant_id], map: "idx_mcp_access_tokens_grant")
+}
+
+/// TAFSD-531: an OAuth client registered for the MCP server (RFC 7591
+/// dynamic registration). Public clients only: no secret, PKCE required.
+model mcp_oauth_clients {
+  /// The client_id handed to the client.
+  id            String             @id @db.VarChar(64)
+  client_name   String             @db.VarChar(200)
+  client_uri    String?            @db.VarChar(500)
+  redirect_uris String[]
+  created_at    DateTime           @default(now()) @db.Timestamptz(6)
+  grants        mcp_oauth_grants[]
+  codes         mcp_oauth_codes[]
+}
+
+/// TAFSD-531: one approval a person gave one client. Its refresh tokens and
+/// access tokens die with it when it is revoked or reaches expires_at.
+model mcp_oauth_grants {
+  id             String                     @id @default(uuid())
+  client_id      String                     @db.VarChar(64)
+  user_id        String
+  scope          String                     @db.VarChar(200)
+  created_at     DateTime                   @default(now()) @db.Timestamptz(6)
+  /// Hard end of the grant; refresh never extends past it.
+  expires_at     DateTime                   @db.Timestamptz(6)
+  last_used_at   DateTime?                  @db.Timestamptz(6)
+  revoked_at     DateTime?                  @db.Timestamptz(6)
+  revoked_reason String?                    @db.VarChar(50)
+  client         mcp_oauth_clients          @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  users          users                      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  access_tokens  mcp_access_tokens[]
+  refresh_tokens mcp_oauth_refresh_tokens[]
+  codes          mcp_oauth_codes[]
+
+  @@index([user_id, revoked_at], map: "idx_mcp_oauth_grants_user")
+}
+
+/// TAFSD-531: an authorization code from an approved consent. Single use,
+/// minutes long, bound to the client, redirect URI and PKCE challenge.
+model mcp_oauth_codes {
+  id             String            @id @default(uuid())
+  code_hash      String            @unique @db.VarChar(64)
+  client_id      String            @db.VarChar(64)
+  user_id        String
+  redirect_uri   String
+  code_challenge String            @db.VarChar(128)
+  scope          String            @db.VarChar(200)
+  resource       String?
+  expires_at     DateTime          @db.Timestamptz(6)
+  used_at        DateTime?         @db.Timestamptz(6)
+  /// The grant the code was exchanged for, revoked if the code is replayed.
+  grant_id       String?
+  created_at     DateTime          @default(now()) @db.Timestamptz(6)
+  client         mcp_oauth_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  users          users             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  grant          mcp_oauth_grants? @relation(fields: [grant_id], references: [id], onDelete: Cascade)
+}
+
+/// TAFSD-531: refresh tokens, rotated on every use. A used one presented
+/// again means it was copied, and revokes the whole grant.
+model mcp_oauth_refresh_tokens {
+  id         String           @id @default(uuid())
+  grant_id   String
+  token_hash String           @unique @db.VarChar(64)
+  expires_at DateTime         @db.Timestamptz(6)
+  used_at    DateTime?        @db.Timestamptz(6)
+  created_at DateTime         @default(now()) @db.Timestamptz(6)
+  grant      mcp_oauth_grants @relation(fields: [grant_id], references: [id], onDelete: Cascade)
+
+  @@index([grant_id], map: "idx_mcp_oauth_refresh_tokens_grant")
 }
 
 model permissions {
@@ -1064,6 +1138,8 @@ model users {
   user_permissions                                                         user_permissions[]           @relation("user_permissions_link")
   user_refresh_tokens                                                      user_refresh_tokens[]
   mcp_access_tokens                                                        mcp_access_tokens[]
+  mcp_oauth_grants                                                         mcp_oauth_grants[]
+  mcp_oauth_codes                                                          mcp_oauth_codes[]
   granted_tile_grants                                                      user_tile_grants[]           @relation("user_tile_grants_granted_byTousers")
   user_tile_grants                                                         user_tile_grants[]           @relation("user_tile_grants_user_idTousers")
   granted_tile_action_grants                                               user_tile_action_grants[]    @relation("user_tile_action_grants_granted_byTousers")

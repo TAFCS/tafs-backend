@@ -1,4 +1,5 @@
 import {
+  MCP_OAUTH_ACCESS_PREFIX,
   MCP_TOKEN_MAX_DAYS,
   MCP_TOKEN_PREFIX,
   bearerFrom,
@@ -101,6 +102,18 @@ describe('MCP personal access tokens (TAFSD-531)', () => {
         reason: 'malformed',
       });
     }
+  });
+
+  it('accepts both token kinds the MCP endpoint takes', () => {
+    const oauth = `${MCP_OAUTH_ACCESS_PREFIX}${'A'.repeat(43)}`;
+    expect(looksLikeMcpToken(oauth)).toBe(true);
+    expect(
+      checkMcpToken(oauth, row({ token_hash: hashMcpToken(oauth) }), now),
+    ).toEqual({ ok: true });
+    expect(displayPrefix(oauth)).toBe(`${MCP_OAUTH_ACCESS_PREFIX}AAAAAA`);
+    // A refresh token or authorization code is never a bearer token.
+    expect(looksLikeMcpToken(`tafs_ort_${'A'.repeat(43)}`)).toBe(false);
+    expect(looksLikeMcpToken(`tafs_oac_${'A'.repeat(43)}`)).toBe(false);
   });
 
   it('reads the bearer header', () => {

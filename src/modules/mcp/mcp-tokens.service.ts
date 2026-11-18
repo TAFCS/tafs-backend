@@ -36,6 +36,24 @@ const LIST_SELECT = {
   revoked_at: true,
 } as const;
 
+export const STAFF_USER_SELECT = {
+  id: true,
+  username: true,
+  full_name: true,
+  role: true,
+  campus_id: true,
+  allowed_class_ids: true,
+} as const;
+
+export type StaffUserRow = {
+  id: string;
+  username: string;
+  full_name: string;
+  role: StaffRole;
+  campus_id: number | null;
+  allowed_class_ids: number[] | null;
+};
+
 /** Whether a principal may use the MCP server at all (the AI Assistant tile). */
 export function mayUseMcp(user: IJwtStaffPayload): boolean {
   return (
@@ -55,7 +73,7 @@ export class McpTokensService {
 
   async list(user: IJwtStaffPayload) {
     const rows = await this.prisma.mcp_access_tokens.findMany({
-      where: { user_id: user.sub },
+      where: { user_id: user.sub, grant_id: null },
       select: LIST_SELECT,
       orderBy: { created_at: 'desc' },
     });
@@ -87,7 +105,12 @@ export class McpTokensService {
       throw new BadRequestException((err as Error).message);
     }
     const live = await this.prisma.mcp_access_tokens.count({
-      where: { user_id: user.sub, revoked_at: null, expires_at: { gt: now } },
+      where: {
+        user_id: user.sub,
+        grant_id: null,
+        revoked_at: null,
+        expires_at: { gt: now },
+      },
     });
     if (live >= MCP_TOKEN_MAX_LIVE) {
       throw new BadRequestException(
@@ -119,7 +142,7 @@ export class McpTokensService {
 
   async revoke(user: IJwtStaffPayload, id: string) {
     const row = await this.prisma.mcp_access_tokens.findFirst({
-      where: { id, user_id: user.sub },
+      where: { id, user_id: user.sub, grant_id: null },
       select: LIST_SELECT,
     });
     if (!row) throw new NotFoundException('Token not found');
@@ -142,18 +165,40 @@ export class McpTokensService {
   }
 
   /**
+   * The live staff principal for a user, exactly as the browser's JWT guard
+   * builds it: role, capabilities, tile actions and scope are read now, not
+   * remembered. Throws 401 for an inactive account.
+   */
+  async livePrincipal(u: StaffUserRow): Promise<IJwtStaffPayload> {
+    return this.jwtStaffStrategy.validate({
+      sub: u.id,
+      username: u.username,
+      fullName: u.full_name,
+      role: u.role,
+      campusId: u.campus_id,
+      allowedClassIds: u.allowed_class_ids ?? [],
+      userType: 'STAFF',
+      permissions: [],
+    });
+  }
+
+  /**
    * Bearer token → the same staff principal the browser's JWT guard builds.
    *
-   * The token only names the user. Role, capabilities, tile actions and scope
-   * come from JwtStaffStrategy.validate, which reads them live, so every
-   * existing policy and scope check applies to MCP calls unchanged and losing
-   * access in the ERP loses it here on the next request. Throws 401 for any
-   * token that does not let the caller in; the message never says which rule
-   * failed, so a stolen-but-revoked token cannot be told from a typo.
+   * Accepts a personal access token or an OAuth access token; both are rows
+   * here. The token only names the user. Everything else comes from
+   * livePrincipal, so every existing policy and scope check applies to MCP
+   * calls unchanged and losing access in the ERP loses it here on the next
+   * request. Throws 401 for any token that does not let the caller in; the
+   * message never says which rule failed, so a stolen-but-revoked token
+   * cannot be told from a typo.
+   *
+   * `credential` names what was used, for audit rows: the token id, or the
+   * OAuth grant id (an OAuth access token changes every hour, its grant not).
    */
   async authenticate(
     presented: string | null,
-  ): Promise<{ user: IJwtStaffPayload; tokenId: string }> {
+  ): Promise<{ user: IJwtStaffPayload; credential: string }> {
     const deny = () =>
       new UnauthorizedException('Invalid or expired MCP token');
     if (!looksLikeMcpToken(presented)) throw deny();
@@ -167,32 +212,23 @@ export class McpTokensService {
         expires_at: true,
         revoked_at: true,
         last_used_at: true,
-        users: {
-          select: {
-            id: true,
-            username: true,
-            full_name: true,
-            role: true,
-            campus_id: true,
-            allowed_class_ids: true,
-          },
-        },
+        grant_id: true,
+        grant: { select: { revoked_at: true, expires_at: true } },
+        users: { select: STAFF_USER_SELECT },
       },
     });
     const verdict = checkMcpToken(presented, row, new Date());
     if (!verdict.ok || !row) throw deny();
+    if (
+      row.grant_id &&
+      (!row.grant ||
+        row.grant.revoked_at ||
+        row.grant.expires_at.getTime() <= Date.now())
+    ) {
+      throw deny();
+    }
 
-    const u = row.users;
-    const principal = await this.jwtStaffStrategy.validate({
-      sub: u.id,
-      username: u.username,
-      fullName: u.full_name,
-      role: u.role,
-      campusId: u.campus_id,
-      allowedClassIds: u.allowed_class_ids ?? [],
-      userType: 'STAFF',
-      permissions: [],
-    });
+    const principal = await this.livePrincipal(row.users);
     if (!mayUseMcp(principal)) {
       throw new ForbiddenException(
         'Your access does not include the AI Assistant (MCP).',
@@ -201,14 +237,32 @@ export class McpTokensService {
 
     const lastUsed = row.last_used_at?.getTime() ?? 0;
     if (Date.now() - lastUsed > MCP_TOKEN_TOUCH_INTERVAL_MS) {
-      this.prisma.mcp_access_tokens
-        .update({ where: { id: row.id }, data: { last_used_at: new Date() } })
-        .catch((err) =>
-          this.logger.warn(
-            `last_used_at update failed: ${(err as Error).message}`,
-          ),
+      const now = new Date();
+      const touches: Promise<unknown>[] = [
+        this.prisma.mcp_access_tokens.update({
+          where: { id: row.id },
+          data: { last_used_at: now },
+        }),
+      ];
+      if (row.grant_id) {
+        touches.push(
+          this.prisma.mcp_oauth_grants.update({
+            where: { id: row.grant_id },
+            data: { last_used_at: now },
+          }),
         );
+      }
+      Promise.all(touches).catch((err) =>
+        this.logger.warn(
+          `last_used_at update failed: ${(err as Error).message}`,
+        ),
+      );
     }
-    return { user: principal, tokenId: row.id };
+    return {
+      user: principal,
+      credential: row.grant_id
+        ? `oauth grant ${row.grant_id}`
+        : `token ${row.id}`,
+    };
   }
 }

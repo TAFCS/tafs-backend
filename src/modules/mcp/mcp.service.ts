@@ -96,7 +96,7 @@ export class McpService {
     user: IJwtStaffPayload,
     name: string,
     args: Record<string, unknown> | undefined,
-    tokenId: string | null,
+    credential: string | null,
   ): Promise<CallToolResult> {
     const input = args ?? {};
     const tool = MCP_TOOLS_BY_NAME.get(name);
@@ -106,7 +106,7 @@ export class McpService {
         name,
         'DENIED',
         input,
-        tokenId,
+        credential,
         tool ? 'not permitted' : 'unknown tool',
       );
       throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
@@ -123,7 +123,7 @@ export class McpService {
         name,
         'CALL',
         input,
-        tokenId,
+        credential,
         `ok, ${text.length} chars${truncated ? ' (truncated)' : ''}`,
       );
       return { content: [{ type: 'text', text }] };
@@ -141,7 +141,7 @@ export class McpService {
           name,
           'ERROR',
           input,
-          tokenId,
+          credential,
           `${err.getStatus()}: ${message}`.slice(0, 300),
         );
         return { isError: true, content: [{ type: 'text', text: message }] };
@@ -150,7 +150,14 @@ export class McpService {
         `MCP tool ${name} failed: ${(err as Error).message}`,
         (err as Error).stack,
       );
-      await this.audit(user, name, 'ERROR', input, tokenId, 'internal error');
+      await this.audit(
+        user,
+        name,
+        'ERROR',
+        input,
+        credential,
+        'internal error',
+      );
       return {
         isError: true,
         content: [
@@ -180,22 +187,22 @@ export class McpService {
     tool: string,
     outcome: McpCallOutcome,
     args: Record<string, unknown>,
-    tokenId: string | null,
+    credential: string | null,
     result: string,
   ) {
     await this.auditLogs.log({
       entity_type: MCP_TOOL_ENTITY,
-      entity_id: tool.slice(0, 100),
+      entity_id: tool.slice(0, 50),
       action: outcome,
       section: 'system',
       new_value: result,
-      note: `args ${summarizeArgs(args)}${tokenId ? ` · token ${tokenId}` : ''}`,
+      note: `args ${summarizeArgs(args)}${credential ? ` · ${credential}` : ''}`,
       changed_by: auditActorLabel(user),
     });
   }
 
   /** A fresh MCP server bound to one caller. */
-  buildServer(user: IJwtStaffPayload, tokenId: string | null): Server {
+  buildServer(user: IJwtStaffPayload, credential: string | null): Server {
     const server = new Server(
       { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
       {
@@ -211,7 +218,7 @@ export class McpService {
         user,
         request.params.name,
         request.params.arguments,
-        tokenId,
+        credential,
       ),
     );
     return server;
@@ -222,9 +229,9 @@ export class McpService {
     req: Request,
     res: Response,
     user: IJwtStaffPayload,
-    tokenId: string | null,
+    credential: string | null,
   ): Promise<void> {
-    const server = this.buildServer(user, tokenId);
+    const server = this.buildServer(user, credential);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

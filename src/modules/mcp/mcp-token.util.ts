@@ -8,6 +8,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'crypto';
  * nothing, and a fast one keeps the per-request lookup to one indexed read.
  */
 export const MCP_TOKEN_PREFIX = 'tafs_pat_';
+/** Prefix of a short-lived OAuth access token (OAuth 2.1 sign-in). */
+export const MCP_OAUTH_ACCESS_PREFIX = 'tafs_oat_';
 /** Characters of the token kept in clear, so a person can tell tokens apart. */
 export const MCP_TOKEN_DISPLAY_CHARS = MCP_TOKEN_PREFIX.length + 6;
 export const MCP_TOKEN_DEFAULT_DAYS = 30;
@@ -27,16 +29,25 @@ export function hashMcpToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
-/** Shape check only; whether the token exists is the database's answer. */
+/**
+ * Shape check only; whether the token exists is the database's answer. Both
+ * kinds the MCP endpoint accepts: a personal token and an OAuth access token.
+ */
 export function looksLikeMcpToken(
   value: string | null | undefined,
 ): value is string {
-  if (!value || !value.startsWith(MCP_TOKEN_PREFIX)) return false;
-  return TOKEN_BODY.test(value.slice(MCP_TOKEN_PREFIX.length));
+  if (!value) return false;
+  const prefix = [MCP_TOKEN_PREFIX, MCP_OAUTH_ACCESS_PREFIX].find((p) =>
+    value.startsWith(p),
+  );
+  return prefix !== undefined && TOKEN_BODY.test(value.slice(prefix.length));
 }
 
 export function displayPrefix(token: string): string {
-  return token.slice(0, MCP_TOKEN_DISPLAY_CHARS);
+  const prefix = token.startsWith(MCP_OAUTH_ACCESS_PREFIX)
+    ? MCP_OAUTH_ACCESS_PREFIX
+    : MCP_TOKEN_PREFIX;
+  return token.slice(0, prefix.length + 6);
 }
 
 /** `Authorization: Bearer <token>` → token, or null. Case-insensitive scheme. */
