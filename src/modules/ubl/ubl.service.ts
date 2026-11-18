@@ -5,7 +5,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { ccFromUblConsumerNumber, isUbl1BillConsumerNumber, ubl1BillCharge, ubl1BillConsumerNumber, ublCc } from '../../utils/ubl.util';
-import { UblBillInquiryQueryDto, UblBillPaymentDto } from './dto/ubl-bill.dto';
+import { UBL_ONEBILL_METHOD, UBL_PAYMENT_METHODS, UblBillInquiryQueryDto, UblBillPaymentDto } from './dto/ubl-bill.dto';
 
 /**
  * Response codes returned to UBL in `response_code` (HTTP is always 200 for a
@@ -188,12 +188,19 @@ export class UblService {
 
     async billPayment(dto: UblBillPaymentDto) {
         try {
-            if ((dto.payment_method === 'CHEQUE' || dto.payment_method === 'PAY_ORDER') && !dto.instrument_number) {
-                return reply('INVALID_REQUEST', { response_desc: 'instrument_number is required for CHEQUE and PAY_ORDER' });
-            }
-
             // The consumer number decides 1Bill; channel only splits CC payments by where they came in.
             const oneBill = isUbl1BillConsumerNumber(dto.consumer_number);
+            // 1Bill payments carry ONEBILL (or nothing, which means the same); CC
+            // payments carry how the payer actually paid (agreed with UBL, 18 Nov 2026).
+            const method = oneBill ? (dto.payment_method ?? UBL_ONEBILL_METHOD) : dto.payment_method;
+            if (!method || (!oneBill && method === UBL_ONEBILL_METHOD)) {
+                return reply('INVALID_REQUEST', {
+                    response_desc: `payment_method is required for a CC payment: ${UBL_PAYMENT_METHODS.join(', ')}`,
+                });
+            }
+            if ((method === 'CHEQUE' || method === 'PAY_ORDER') && !dto.instrument_number) {
+                return reply('INVALID_REQUEST', { response_desc: 'instrument_number is required for CHEQUE and PAY_ORDER' });
+            }
             if (oneBill && dto.channel && dto.channel !== 'ONEBILL') {
                 return reply('INVALID_REQUEST', { response_desc: 'A 1Bill consumer number is always channel ONEBILL' });
             }
@@ -226,6 +233,9 @@ export class UblService {
             }
 
             const txnAt = new Date(dto.transaction_datetime);
+            if (Number.isNaN(txnAt.getTime())) {
+                return reply('INVALID_REQUEST', { response_desc: 'transaction_datetime is not a valid date' });
+            }
             const txnDate = pktDate(txnAt);
             const r = await this.resolve(dto.consumer_number, txnDate);
             if ('error' in r) return r.error;
@@ -270,7 +280,7 @@ export class UblService {
 
             const methodNote = [
                 `UBL ${channel}`,
-                dto.payment_method,
+                method,
                 dto.instrument_number ? `instrument ${dto.instrument_number}` : null,
                 dto.branch_code ? `branch ${dto.branch_code}` : null,
                 channelFee.gt(0) ? `1Bill fee PKR ${channelFee.toFixed(0)} (not booked)` : null,
@@ -317,7 +327,7 @@ export class UblService {
                         voucher_id: voucher.id,
                         voucher_number: voucher.voucher_number ?? null,
                         channel,
-                        payment_method: dto.payment_method,
+                        payment_method: method,
                         amount_received: received,
                         amount_booked: booked,
                         channel_fee: channelFee,
@@ -347,7 +357,7 @@ export class UblService {
                     `Booked=Rs. ${booked.toFixed(0)}`,
                     `Received=Rs. ${received.toFixed(0)}`,
                     `Channel=${channel}`,
-                    `Method=${dto.payment_method}`,
+                    `Method=${method}`,
                     `Txn=${dto.transaction_id}`,
                 ].join(' | '),
             });

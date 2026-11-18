@@ -398,10 +398,10 @@ Content-Type: application/json
 \endhead
 \texttt{consumer\_number} & digits & Yes & Same value used in the inquiry \\
 \texttt{channel} & enum & \textbf{Yes} & \texttt{ONEBILL}, \texttt{OTC}, \texttt{APP}, \texttt{INTERNET\_BANKING} \\
-\texttt{payment\_method} & enum & \textbf{Yes} & How the payer paid. See Section~\ref{sec:method} \\
+\texttt{payment\_method} & enum & CC: Yes; 1Bill: \texttt{ONEBILL} or empty & How the payer paid. See Section~\ref{sec:method} \\
 \texttt{amount} & number & Yes & Amount collected from the payer, PKR. Must equal \texttt{amount\_payable} (incl.\ the 1Bill charge on 1Bill) \\
 \texttt{transaction\_id} & string & Yes & UBL's unique transaction reference (max 100). Used to prevent duplicate posting \\
-\texttt{transaction\_datetime} & ISO 8601 & Yes & When the payment was taken, with offset, e.g.\ \texttt{2026-10-05T11:00:00+05:00} \\
+\texttt{transaction\_datetime} & ISO 8601 & Yes & When the payment was taken, with offset, e.g.\ \texttt{2026-10-05T11:00:00+05:00}; or \texttt{YYYYMMDD} / \texttt{YYYYMMDDHHmmss} in Pakistan time \\
 \texttt{voucher\_number} & string & Advised & \texttt{voucher\_number} from the inquiry; guards against a newer voucher issued in between \\
 \texttt{branch\_code} & string & OTC & UBL branch code where cash/cheque was received \\
 \texttt{payer\_bank\_code} & string & 1Bill & Code of the bank or wallet the payer paid from \\
@@ -427,6 +427,7 @@ payer actually used, so that each receipt can be reconciled. A payment without t
 \texttt{CREDIT\_CARD} & Credit card \\
 \texttt{WALLET} & Mobile wallet (e.g.\ via 1Bill) \\
 \texttt{OTHER} & Any other method; please tell TAFS which so it can be added \\
+\texttt{ONEBILL} & 1Bill payments (15-digit consumer number). Empty or \texttt{null} on a 1Bill payment means the same. Not accepted for a CC \\
 \bottomrule
 \end{tabularx}
 \end{center}
