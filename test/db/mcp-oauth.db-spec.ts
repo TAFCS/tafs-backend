@@ -193,6 +193,20 @@ describe('issuer in production', () => {
             expect(auth.headers.location).toBeUndefined();
         }));
 
+    it('tells the webapp the public MCP address, not the host the request came in on', () =>
+        withEnv({ NODE_ENV: 'production', MCP_PUBLIC_URL: 'https://api.tafs.example/' }, async () => {
+            const res = await as.clerk.get('/mcp/tokens/server').set('X-Forwarded-Host', 'internal.example');
+            expect(res.status).toBe(200);
+            expect(res.body.data).toEqual({ endpoint: 'https://api.tafs.example/api/v1/mcp', sign_in_available: true });
+        }));
+
+    it('reports no address when sign-in is not configured in production', () =>
+        withEnv({ NODE_ENV: 'production', MCP_PUBLIC_URL: undefined }, async () => {
+            const res = await as.clerk.get('/mcp/tokens/server');
+            expect(res.status).toBe(200);
+            expect(res.body.data).toEqual({ endpoint: null, sign_in_available: false });
+        }));
+
     it('names MCP_PUBLIC_URL as issuer whatever the request says, and is never cached across hosts', () =>
         withEnv({ NODE_ENV: 'production', MCP_PUBLIC_URL: 'https://api.tafs.example/' }, async () => {
             const meta = await request(server()).get('/.well-known/oauth-authorization-server').set('X-Forwarded-Host', 'evil.example');
