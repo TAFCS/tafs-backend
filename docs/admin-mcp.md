@@ -28,23 +28,34 @@ In claude.ai: Settings → Connectors → Add custom connector, URL
    origin.
 3. Dynamic client registration, `POST /api/v1/mcp/oauth/register` (RFC 7591).
    Public clients only (no secret). Redirect URIs must be loopback
-   `http://localhost` / `127.0.0.1` (any port) or `https` on a host in
-   `MCP_OAUTH_REDIRECT_HOSTS` (default `claude.ai,claude.com`, subdomains
-   included).
+   `http://localhost` / `127.0.0.1` (any port), or an `https` URI listed
+   **exactly** in `MCP_OAUTH_REDIRECT_URIS` (default
+   `https://claude.ai/api/mcp/auth_callback` and
+   `https://claude.com/api/mcp/auth_callback`; no other path, subdomain or
+   port). Rate-limited to 20 registrations per address and 500 overall per
+   hour, per instance.
 4. `GET /api/v1/mcp/oauth/authorize` checks the client, the exact redirect URI
    (a loopback port may differ, RFC 8252) and a PKCE **S256** challenge
    (`plain` is refused), then redirects to the webapp's
    `WEBAPP_URL/mcp/authorize?ticket=…`. The ticket is a signed, 10-minute JWT
-   carrying the request; no table holds pending requests.
+   carrying the request and the issuer, with a `jti`. It belongs to the first
+   signed-in person who opens it (`mcp_oauth_consents`) and takes one answer.
 5. The webapp page signs the person in if needed (normal TAFS login, which
    returns to the page with its ticket) and shows the consent screen: the app's
    name, where it sends them back, that it acts as them, and the exact tools
-   they would get. Approve or deny. Someone without the tile, or impersonating,
-   can only go back to the app.
+   they would get. The name is marked unverified (the app chose it) next to
+   the address it returns to. Approve or deny. Someone without the tile, or
+   impersonating, can only go back to the app.
+   The consent API (`GET/POST /api/v1/mcp/oauth/consent`) accepts only the
+   webapp's own Origin (`WEBAPP_URL`): a POST must carry it, a GET is refused
+   with another Origin or `Sec-Fetch-Site: cross-site`. The session cookie is
+   `SameSite=None` in production, so without this any site could approve on a
+   signed-in person's behalf. The page itself cannot be framed.
 6. `POST /api/v1/mcp/oauth/token`:
    - `authorization_code`: single-use code, 5 minutes, bound to the client,
-     redirect URI and challenge; the verifier must match. Replaying a used
-     code revokes the grant it produced.
+     redirect URI and challenge; the verifier must match. Claiming the code,
+     creating the grant and issuing tokens is one transaction; replaying a
+     used code, even simultaneously, revokes the grant it produced.
    - `refresh_token`: rotates on every use. Replaying a used refresh token
      revokes the whole grant (theft detection).
    - Access token 1 hour, refresh token 30 days, grant 90 days at most.
@@ -98,12 +109,23 @@ No token or code is ever written to a log.
   - `WEBAPP_URL` (required for sign-in): the webapp origin the consent page is
     served from, e.g. `https://tafs-webapp.vercel.app`. Without it, sign-in
     answers `temporarily_unavailable`; personal tokens still work.
-  - `MCP_PUBLIC_URL` (recommended): the backend's public origin as clients
-    reach it, e.g. `https://api.example.com`. Otherwise it is read from the
-    request's `X-Forwarded-Proto` / `X-Forwarded-Host` / `Host`.
-  - `MCP_OAUTH_REDIRECT_HOSTS` (optional): https redirect hosts clients may
-    register, comma-separated. Default `claude.ai,claude.com`.
+  - `MCP_PUBLIC_URL` (**required in production** for sign-in): the backend's
+    public origin as clients reach it, e.g. `https://api.example.com`. It is
+    the OAuth issuer. Without it in production, OAuth and its metadata answer
+    503 and the 401 carries no `resource_metadata` (personal tokens still
+    work); request headers are never trusted to name the issuer there.
+    Outside production it falls back to `X-Forwarded-*` / `Host`.
+  - `MCP_OAUTH_REDIRECT_URIS` (optional): exact https redirect URIs clients may
+    register, comma-separated. Default the claude.ai and claude.com connector
+    callbacks above. (Replaces `MCP_OAUTH_REDIRECT_HOSTS`, which never
+    shipped.)
 - The backend origin root must route `/.well-known/*` to the backend.
+- CORS with credentials now allows only `tafs-webapp.vercel.app`, this
+  project's own deployments (`tafs-webapp-<hash>-…` and
+  `tafs-webapp-git-<branch>-tafstechsystems-1600s-projects.vercel.app`),
+  `http://localhost:*` and `CORS_ORIGIN`, not any `*.vercel.app`.
+- Logs: OAuth query strings (tickets, codes, state) are redacted from the
+  request log, the slow-request log and morgan (URL and referrer).
 - The webapp must be deployed with `/mcp/authorize` (after the backend).
 
 ## Adding a tool
