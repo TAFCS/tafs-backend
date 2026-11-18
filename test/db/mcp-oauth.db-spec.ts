@@ -57,12 +57,23 @@ async function startAuthorize(clientId: string, challenge: string, state = 'stat
     return new URL(res.headers.location).searchParams.get('ticket')!;
 }
 
+/** The issuer as discovery reports it: what every authorization response must carry (RFC 9207). */
+async function issuer() {
+    return (await request(server()).get('/.well-known/oauth-authorization-server')).body.issuer as string;
+}
+
 async function approve(who: ReturnType<typeof client>, ticket: string) {
-    const res = await who.post('/mcp/oauth/consent').send({ ticket, decision: 'approve' });
+    // The consent call reaches the backend through the webapp's /api proxy,
+    // so its host is the webapp's. The `iss` sent back must still be ours.
+    const res = await who
+        .post('/mcp/oauth/consent')
+        .set('X-Forwarded-Host', 'webapp.test')
+        .send({ ticket, decision: 'approve' });
     expect(res.status).toBe(201);
     const back = new URL(res.body.data.redirect_to);
     expect(back.origin + back.pathname).toBe(REDIRECT);
     expect(back.searchParams.get('state')).toBe('state-123');
+    expect(back.searchParams.get('iss')).toBe(await issuer());
     return back.searchParams.get('code')!;
 }
 
@@ -237,10 +248,14 @@ describe('consent', () => {
     it('sends a denial back as access_denied and issues no code', async () => {
         const clientId = (await register()).body.client_id;
         const ticket = await startAuthorize(clientId, pkce().challenge);
-        const res = await as.clerk.post('/mcp/oauth/consent').send({ ticket, decision: 'deny' });
+        const res = await as.clerk
+            .post('/mcp/oauth/consent')
+            .set('X-Forwarded-Host', 'webapp.test')
+            .send({ ticket, decision: 'deny' });
         expect(res.status).toBe(201);
         const back = new URL(res.body.data.redirect_to);
         expect(back.searchParams.get('error')).toBe('access_denied');
+        expect(back.searchParams.get('iss')).toBe(await issuer());
         expect(back.searchParams.get('state')).toBe('state-123');
         expect(back.searchParams.get('code')).toBeNull();
         expect(await prisma.mcp_oauth_codes.count({ where: { client_id: clientId } })).toBe(0);

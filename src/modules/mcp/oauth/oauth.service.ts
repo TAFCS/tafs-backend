@@ -64,6 +64,8 @@ export class OAuthError extends Error {
 
 /** What the signed authorize ticket carries between /authorize and the consent screen. */
 type AuthorizeTicket = {
+  /** The issuer, fixed at /authorize: the consent calls arrive through the webapp's proxy. */
+  iss: string;
   cid: string;
   ru: string;
   cc: string;
@@ -341,6 +343,7 @@ export class McpOAuthService {
       );
     }
     const ticket: AuthorizeTicket = {
+      iss,
       cid: client.id,
       ru: redirectUri,
       cc: query.code_challenge,
@@ -403,22 +406,23 @@ export class McpOAuthService {
       blocked_reason: blocked,
       tools: blocked
         ? []
-        : this.mcp
-            .listTools(user)
-            .map((tool) => ({
-              name: tool.name,
-              title: tool.title,
-              description: tool.description,
-            })),
+        : this.mcp.listTools(user).map((tool) => ({
+            name: tool.name,
+            title: tool.title,
+            description: tool.description,
+          })),
     };
   }
 
-  /** The person's answer. Returns where the browser goes next (back to the client). */
+  /**
+   * The person's answer. Returns where the browser goes next (back to the
+   * client). The `iss` it carries comes from the ticket: this call arrives
+   * through the webapp's proxy, whose host is not the issuer (RFC 9207).
+   */
   async decideConsent(
     ticketValue: unknown,
     decision: 'approve' | 'deny',
     user: IJwtStaffPayload,
-    req: Request,
   ) {
     const t = await this.readTicket(ticketValue);
     const client = await this.prisma.mcp_oauth_clients.findUnique({
@@ -429,7 +433,7 @@ export class McpOAuthService {
         'This app is no longer registered. Start again from your app.',
       );
     }
-    const iss = this.baseUrl(req);
+    const iss = t.iss;
     if (decision === 'deny') {
       await this.audit(
         auditActorLabel(user),

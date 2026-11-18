@@ -117,10 +117,9 @@ export class McpOAuthController {
   async decide(
     @Body() dto: ConsentDecisionDto,
     @CurrentUser() user: IJwtStaffPayload,
-    @Req() req: Request,
   ) {
     return createApiResponse(
-      await this.oauth.decideConsent(dto.ticket, dto.decision, user, req),
+      await this.oauth.decideConsent(dto.ticket, dto.decision, user),
       HttpStatus.OK,
       dto.decision === 'approve' ? 'App connected' : 'Request denied',
     );
