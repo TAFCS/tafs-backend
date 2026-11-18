@@ -54,7 +54,7 @@ const SECTION_ENTITY_TYPES: Record<string, string[]> = {
   ],
   'school-setup': ['CAMPUS', 'CLASS', 'SECTION', 'SEGMENT', 'FEE_TYPE', 'BANK'],
   'house-balancer': ['HOUSE'],
-  system: ['USER', 'PERMISSION', 'BACKUP'],
+  system: ['USER', 'PERMISSION', 'BACKUP', 'MCP_TOKEN', 'MCP_TOOL', 'MCP_OAUTH'],
   'app-config': ['APP_CONFIG'],
   'parent-requests': ['PARENT_CHANGE_REQUEST'],
 };

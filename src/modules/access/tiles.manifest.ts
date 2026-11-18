@@ -711,6 +711,16 @@ const ACTIVITY_LOGS_ACTIONS: TileAction[] = [
 // SUPER_ADMIN could use the page. Bridged from system.permissions.manage, which
 // no default role but SUPER_ADMIN holds, so nobody else gains anything.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+// TAFSD-531: AI Assistant (MCP). Lets a person issue their own access tokens
+// and connect an AI assistant to /api/v1/mcp. It grants no data by itself:
+// each MCP tool mirrors an existing route, and that route's own tile and
+// action decide whether the person sees the tool. Its own capability (which
+// maps to no CASL subject) and no legacy bridge: like every web tile it is
+// default-deny and granted per person, and no role baseline carries it.
+const AI_ASSISTANT_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Connect an AI assistant', description: 'Issue and revoke their own MCP tokens. The assistant sees only what the person can already see.', default: true },
+];
+
 const DEVELOPER_SETTINGS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Developer Settings', description: 'See app versions, maintenance mode and system switches', default: true },
 
@@ -1116,6 +1126,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // TAFSD-327: who reports to whom. Super admins only, by design: permissions
   // will follow this tree, so nobody inside it may edit it.
   { id: 'system.reporting_hierarchy', module: 'system', label: 'Reporting Hierarchy', description: 'Set who reports to whom', href: '/system/reporting-hierarchy', capabilities: ['system.permissions.manage'], superAdminOnly: true },
+  { id: 'system.ai_assistant', module: 'system', label: 'AI Assistant (MCP)', description: 'Connect an AI assistant with your own access, through personal tokens', href: '/system/ai-assistant', capabilities: ['system.ai_assistant.use'], actions: AI_ASSISTANT_ACTIONS },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'], actions: DEVELOPER_SETTINGS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
 ];
 
