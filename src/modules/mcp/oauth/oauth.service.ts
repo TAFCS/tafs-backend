@@ -3,7 +3,10 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import { PrismaService } from '../../../../prisma/prisma.service';
@@ -41,12 +44,17 @@ import {
   isValidChallenge,
   newClientId,
   newToken,
-  redirectHostsFrom,
+  WindowLimiter,
+  originOf,
+  redirectAllowlistFrom,
   redirectUriMatches,
   sameResource,
   verifyPkce,
   withParams,
 } from './oauth.util';
+
+/** Thrown inside an exchange transaction when another request spent the code or refresh token first. */
+class CodeAlreadyUsed extends Error {}
 
 /** An OAuth protocol error, answered as `{ error, error_description }`. */
 export class OAuthError extends Error {
@@ -64,6 +72,9 @@ export class OAuthError extends Error {
 
 /** What the signed authorize ticket carries between /authorize and the consent screen. */
 type AuthorizeTicket = {
+  /** Set by the signer: one id per ticket, and its expiry (seconds). */
+  jti?: string;
+  exp?: number;
   /** The issuer, fixed at /authorize: the consent calls arrive through the webapp's proxy. */
   iss: string;
   cid: string;
@@ -100,6 +111,9 @@ const GRANT_LIST_SELECT = {
   },
 } as const;
 
+const USED_TICKET =
+  'This sign-in link was already used. Start again from your app.';
+
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' && v !== '' ? v : undefined;
 
@@ -116,6 +130,8 @@ const str = (v: unknown): string | undefined =>
 @Injectable()
 export class McpOAuthService {
   private readonly logger = new Logger(McpOAuthService.name);
+  /** Registration is public: at most 20 per client address and 500 in all per hour, per instance. */
+  private readonly registrations = new WindowLimiter(20, 500, 60 * 60 * 1000);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -128,13 +144,16 @@ export class McpOAuthService {
   // ── URLs and metadata ────────────────────────────────────────────────────
 
   /**
-   * The backend's public origin. MCP_PUBLIC_URL when set (production: the
-   * URL people configure in their clients); otherwise read from the request,
-   * honouring the proxy's forwarded headers.
+   * The backend's public origin, which is also the OAuth issuer:
+   * MCP_PUBLIC_URL, the URL people configure in their clients. Required in
+   * production, where the request's Host / X-Forwarded-Host are not trusted
+   * to name the issuer. Elsewhere (local, tests) it falls back to them.
+   * Null when OAuth cannot run.
    */
-  baseUrl(req: Request): string {
+  publicBase(req: Request): string | null {
     const configured = process.env.MCP_PUBLIC_URL?.trim().replace(/\/+$/, '');
     if (configured) return configured;
+    if (process.env.NODE_ENV === 'production') return null;
     const header = (name: string) => {
       const v = req.headers[name];
       return (Array.isArray(v) ? v[0] : v)?.split(',')[0].trim();
@@ -144,12 +163,69 @@ export class McpOAuthService {
     return `${proto}://${host}`;
   }
 
+  /** publicBase, or a 503 OAuth error when sign-in is not configured. */
+  baseUrl(req: Request): string {
+    const base = this.publicBase(req);
+    if (!base) {
+      this.logger.error(
+        'MCP_PUBLIC_URL is not set; MCP OAuth sign-in is disabled',
+      );
+      throw new OAuthError(
+        'temporarily_unavailable',
+        'Sign-in is not configured on this server',
+        503,
+      );
+    }
+    return base;
+  }
+
   resourceUrl(req: Request): string {
     return this.baseUrl(req) + MCP_RESOURCE_PATH;
   }
 
-  resourceMetadataUrl(req: Request): string {
-    return `${this.baseUrl(req)}/.well-known/oauth-protected-resource${MCP_RESOURCE_PATH}`;
+  /** For the 401's WWW-Authenticate; null when OAuth is not configured (personal tokens still work). */
+  resourceMetadataUrl(req: Request): string | null {
+    const base = this.publicBase(req);
+    return base
+      ? `${base}/.well-known/oauth-protected-resource${MCP_RESOURCE_PATH}`
+      : null;
+  }
+
+  /** The webapp origin that serves the consent page, from WEBAPP_URL. */
+  webappOrigin(): string | null {
+    return originOf(process.env.WEBAPP_URL?.trim());
+  }
+
+  /**
+   * The consent API is called by the webapp's consent page and nothing else.
+   * Its session cookie is SameSite=None in production and CORS answers other
+   * origins with credentials, so without this check any site could approve a
+   * grant on a signed-in person's behalf (CSRF) and read back the code. A
+   * POST must carry the webapp's Origin; a GET is refused when it carries a
+   * different Origin or comes cross-site.
+   */
+  assertConsentOrigin(req: Request): void {
+    const webapp = this.webappOrigin();
+    if (!webapp)
+      throw new ServiceUnavailableException(
+        'Sign-in is not configured on this server.',
+      );
+    const header = (name: string) => {
+      const v = req.headers[name];
+      return Array.isArray(v) ? v[0] : v;
+    };
+    const origin = header('origin');
+    const site = header('sec-fetch-site');
+    const refuse = () =>
+      new ForbiddenException(
+        'This request must come from the TAFS sign-in page.',
+      );
+    if (req.method === 'GET') {
+      if ((origin && origin !== webapp) || site === 'cross-site')
+        throw refuse();
+      return;
+    }
+    if (origin !== webapp) throw refuse();
   }
 
   protectedResourceMetadata(req: Request) {
@@ -183,9 +259,16 @@ export class McpOAuthService {
 
   // ── Dynamic client registration (RFC 7591) ───────────────────────────────
 
-  async register(body: Record<string, unknown>) {
-    const allowedHosts = redirectHostsFrom(
-      process.env.MCP_OAUTH_REDIRECT_HOSTS,
+  async register(body: Record<string, unknown>, clientKey: string) {
+    if (!this.registrations.take(clientKey)) {
+      throw new OAuthError(
+        'temporarily_unavailable',
+        'Too many registrations; try again later',
+        429,
+      );
+    }
+    const allowlist = redirectAllowlistFrom(
+      process.env.MCP_OAUTH_REDIRECT_URIS,
     );
     const uris = body.redirect_uris;
     if (
@@ -198,11 +281,11 @@ export class McpOAuthService {
         `redirect_uris must list 1 to ${OAUTH_MAX_REDIRECT_URIS} URIs`,
       );
     }
-    const bad = uris.find((u) => !isAllowedRedirectUri(u, allowedHosts));
+    const bad = uris.find((u) => !isAllowedRedirectUri(u, allowlist));
     if (bad !== undefined) {
       throw new OAuthError(
         'invalid_redirect_uri',
-        `redirect URI not allowed: ${String(bad).slice(0, 200)}. Use http://localhost or https on ${allowedHosts.join(', ')}.`,
+        `redirect URI not allowed: ${String(bad).slice(0, 200)}. Use http://localhost, or exactly one of: ${allowlist.join(', ')}.`,
       );
     }
     const method = str(body.token_endpoint_auth_method) ?? 'none';
@@ -302,7 +385,16 @@ export class McpOAuthService {
     }
 
     const state = str(query.state);
-    const iss = this.baseUrl(req);
+    const iss = this.publicBase(req);
+    if (!iss) {
+      this.logger.error(
+        'MCP_PUBLIC_URL is not set; MCP OAuth sign-in is disabled',
+      );
+      return {
+        status: 503,
+        message: 'Sign-in is not configured on this server.',
+      };
+    }
     const fail = (error: string, description: string) => ({
       redirect: withParams(redirectUri, {
         error,
@@ -328,11 +420,11 @@ export class McpOAuthService {
     if (!scope)
       return fail('invalid_scope', `The only scope is "${OAUTH_SCOPE}"`);
     const resource = str(query.resource);
-    if (resource && !sameResource(resource, this.resourceUrl(req))) {
+    if (resource && !sameResource(resource, iss + MCP_RESOURCE_PATH)) {
       return fail('invalid_target', 'resource is not this MCP server');
     }
 
-    const webapp = process.env.WEBAPP_URL?.trim().replace(/\/+$/, '');
+    const webapp = this.webappOrigin();
     if (!webapp) {
       this.logger.error(
         'WEBAPP_URL is not set; MCP OAuth sign-in cannot show its consent page',
@@ -354,6 +446,7 @@ export class McpOAuthService {
     const signed = await this.jwt.signAsync(ticket, {
       audience: OAUTH_TICKET_AUDIENCE,
       expiresIn: OAUTH_TICKET_TTL_S,
+      jwtid: randomUUID(),
     });
     return {
       redirect: `${webapp}/mcp/authorize?ticket=${encodeURIComponent(signed)}`,
@@ -374,6 +467,51 @@ export class McpOAuthService {
     }
   }
 
+  /**
+   * Ties a ticket to the first signed-in person who opens (or answers) it.
+   * Anyone else presenting it, or anyone once it is answered, gets "not
+   * found": a ticket is not a bearer credential for whoever holds the link.
+   */
+  private async bindTicket(
+    t: AuthorizeTicket,
+    user: IJwtStaffPayload,
+  ): Promise<void> {
+    if (!t.jti || !t.exp)
+      throw new NotFoundException('This sign-in link is not valid.');
+    let row = await this.prisma.mcp_oauth_consents.findUnique({
+      where: { id: t.jti },
+    });
+    if (!row) {
+      try {
+        row = await this.prisma.mcp_oauth_consents.create({
+          data: {
+            id: t.jti,
+            client_id: t.cid,
+            user_id: user.sub,
+            expires_at: new Date(t.exp * 1000),
+          },
+        });
+      } catch (err) {
+        if (
+          !(
+            err instanceof Prisma.PrismaClientKnownRequestError &&
+            err.code === 'P2002'
+          )
+        )
+          throw err;
+        row = await this.prisma.mcp_oauth_consents.findUnique({
+          where: { id: t.jti },
+        });
+      }
+    }
+    if (!row || row.user_id !== user.sub) {
+      throw new NotFoundException(
+        'This sign-in link belongs to another account. Start again from your app.',
+      );
+    }
+    if (row.decided_at) throw new NotFoundException(USED_TICKET);
+  }
+
   private blockedReason(
     user: IJwtStaffPayload,
   ): 'no_tile' | 'impersonating' | null {
@@ -392,11 +530,14 @@ export class McpOAuthService {
       throw new NotFoundException(
         'This app is no longer registered. Start again from your app.',
       );
+    await this.bindTicket(t, user);
     const blocked = this.blockedReason(user);
     return {
       client: {
         id: client.id,
         name: client.client_name,
+        // The name is whatever the app registered itself as; nothing checks it.
+        name_verified: false,
         uri: client.client_uri,
         redirect_host: hostOf(t.ru),
       },
@@ -433,6 +574,25 @@ export class McpOAuthService {
         'This app is no longer registered. Start again from your app.',
       );
     }
+    await this.bindTicket(t, user);
+    if (decision === 'approve') {
+      const blocked = this.blockedReason(user);
+      if (blocked === 'impersonating')
+        throw new ForbiddenException(
+          'An app cannot be connected while impersonating another user.',
+        );
+      if (blocked === 'no_tile')
+        throw new ForbiddenException(
+          'Your access does not include the AI Assistant (MCP).',
+        );
+    }
+    // One answer per ticket: the first decision wins, a replay finds nothing.
+    const answered = await this.prisma.mcp_oauth_consents.updateMany({
+      where: { id: t.jti, user_id: user.sub, decided_at: null },
+      data: { decided_at: new Date(), decision },
+    });
+    if (answered.count !== 1) throw new NotFoundException(USED_TICKET);
+
     const iss = t.iss;
     if (decision === 'deny') {
       await this.audit(
@@ -450,16 +610,6 @@ export class McpOAuthService {
         }),
       };
     }
-    const blocked = this.blockedReason(user);
-    if (blocked === 'impersonating')
-      throw new ForbiddenException(
-        'An app cannot be connected while impersonating another user.',
-      );
-    if (blocked === 'no_tile')
-      throw new ForbiddenException(
-        'Your access does not include the AI Assistant (MCP).',
-      );
-
     const code = newToken(OAUTH_CODE_PREFIX);
     await this.prisma.mcp_oauth_codes.create({
       data: {
@@ -542,41 +692,62 @@ export class McpOAuthService {
       );
     }
 
-    const claimed = await this.prisma.mcp_oauth_codes.updateMany({
-      where: { id: row.id, used_at: null },
-      data: { used_at: new Date() },
-    });
-    if (claimed.count !== 1)
-      throw new OAuthError('invalid_grant', 'Authorization code already used');
-
     const user = await this.liveOrRefuse(row.users);
     const now = new Date();
-    const grant = await this.prisma.mcp_oauth_grants.create({
-      data: {
-        client_id: row.client_id,
-        user_id: row.user_id,
-        scope: row.scope,
-        expires_at: new Date(now.getTime() + OAUTH_GRANT_TTL_MS),
-        last_used_at: now,
-      },
-    });
-    await this.prisma.mcp_oauth_codes.update({
-      where: { id: row.id },
-      data: { grant_id: grant.id },
-    });
-    const issued = await this.issueTokens(
-      grant,
-      row.user_id,
-      row.client.client_name,
-      now,
-    );
+    // Claim the code, create the grant, link the code to it and issue the
+    // tokens in one transaction. A concurrent redemption of the same code
+    // blocks on the claim until this commits, then finds it used, and the
+    // grant it then revokes is already there to find.
+    let result: {
+      issued: TokenResponse;
+      grant: { id: string; expires_at: Date };
+    };
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.mcp_oauth_codes.updateMany({
+          where: { id: row.id, used_at: null },
+          data: { used_at: now },
+        });
+        if (claimed.count !== 1) throw new CodeAlreadyUsed();
+        const grant = await tx.mcp_oauth_grants.create({
+          data: {
+            client_id: row.client_id,
+            user_id: row.user_id,
+            scope: row.scope,
+            expires_at: new Date(now.getTime() + OAUTH_GRANT_TTL_MS),
+            last_used_at: now,
+          },
+        });
+        await tx.mcp_oauth_codes.update({
+          where: { id: row.id },
+          data: { grant_id: grant.id },
+        });
+        const issued = await this.issueTokens(
+          tx,
+          grant,
+          row.user_id,
+          row.client.client_name,
+          now,
+        );
+        return { issued, grant };
+      });
+    } catch (err) {
+      if (!(err instanceof CodeAlreadyUsed)) throw err;
+      const used = await this.prisma.mcp_oauth_codes.findUnique({
+        where: { id: row.id },
+        select: { grant_id: true },
+      });
+      if (used?.grant_id)
+        await this.revokeGrantById(used.grant_id, 'code_reuse', 'system');
+      throw new OAuthError('invalid_grant', 'Authorization code already used');
+    }
     await this.audit(
       auditActorLabel(user),
-      grant.id,
+      result.grant.id,
       'TOKEN_ISSUE',
-      `${row.client.client_name} (grant until ${grant.expires_at.toISOString().slice(0, 10)})`,
+      `${row.client.client_name} (grant until ${result.grant.expires_at.toISOString().slice(0, 10)})`,
     );
-    return issued;
+    return result.issued;
   }
 
   private async refresh(body: Record<string, unknown>): Promise<TokenResponse> {
@@ -616,25 +787,33 @@ export class McpOAuthService {
     if (grant.expires_at <= now || row.expires_at <= now)
       throw new OAuthError('invalid_grant', 'Refresh token expired');
 
-    const claimed = await this.prisma.mcp_oauth_refresh_tokens.updateMany({
-      where: { id: row.id, used_at: null },
-      data: { used_at: now },
-    });
-    if (claimed.count !== 1) {
+    const user = await this.liveOrRefuse(grant.users);
+    // Rotate and issue together: either the old refresh token is spent and a
+    // new pair exists, or nothing changed.
+    let issued: TokenResponse;
+    try {
+      issued = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.mcp_oauth_refresh_tokens.updateMany({
+          where: { id: row.id, used_at: null },
+          data: { used_at: now },
+        });
+        if (claimed.count !== 1) throw new CodeAlreadyUsed();
+        return this.issueTokens(
+          tx,
+          grant,
+          grant.user_id,
+          grant.client.client_name,
+          now,
+        );
+      });
+    } catch (err) {
+      if (!(err instanceof CodeAlreadyUsed)) throw err;
       await this.revokeGrantById(grant.id, 'refresh_reuse', 'system');
       throw new OAuthError(
         'invalid_grant',
         'Refresh token already used; the connection has been revoked',
       );
     }
-
-    const user = await this.liveOrRefuse(grant.users);
-    const issued = await this.issueTokens(
-      grant,
-      grant.user_id,
-      grant.client.client_name,
-      now,
-    );
     // Keep the table small: access tokens of this grant that expired a day ago are dead weight.
     await this.prisma.mcp_access_tokens.deleteMany({
       where: {
@@ -671,6 +850,7 @@ export class McpOAuthService {
   }
 
   private async issueTokens(
+    db: Prisma.TransactionClient,
     grant: { id: string; expires_at: Date; scope: string },
     userId: string,
     clientName: string,
@@ -682,7 +862,7 @@ export class McpOAuthService {
       new Date(now.getTime() + OAUTH_ACCESS_TTL_MS),
       grant.expires_at,
     );
-    await this.prisma.mcp_access_tokens.create({
+    await db.mcp_access_tokens.create({
       data: {
         user_id: userId,
         grant_id: grant.id,
@@ -692,7 +872,7 @@ export class McpOAuthService {
         expires_at: accessExpires,
       },
     });
-    await this.prisma.mcp_oauth_refresh_tokens.create({
+    await db.mcp_oauth_refresh_tokens.create({
       data: {
         grant_id: grant.id,
         token_hash: hashOAuthSecret(refresh),

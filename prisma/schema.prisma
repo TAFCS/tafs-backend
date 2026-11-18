@@ -987,13 +987,14 @@ model mcp_access_tokens {
 /// dynamic registration). Public clients only: no secret, PKCE required.
 model mcp_oauth_clients {
   /// The client_id handed to the client.
-  id            String             @id @db.VarChar(64)
-  client_name   String             @db.VarChar(200)
-  client_uri    String?            @db.VarChar(500)
+  id            String               @id @db.VarChar(64)
+  client_name   String               @db.VarChar(200)
+  client_uri    String?              @db.VarChar(500)
   redirect_uris String[]
-  created_at    DateTime           @default(now()) @db.Timestamptz(6)
+  created_at    DateTime             @default(now()) @db.Timestamptz(6)
   grants        mcp_oauth_grants[]
   codes         mcp_oauth_codes[]
+  consents      mcp_oauth_consents[]
 }
 
 /// TAFSD-531: one approval a person gave one client. Its refresh tokens and
@@ -1037,6 +1038,23 @@ model mcp_oauth_codes {
   client         mcp_oauth_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
   users          users             @relation(fields: [user_id], references: [id], onDelete: Cascade)
   grant          mcp_oauth_grants? @relation(fields: [grant_id], references: [id], onDelete: Cascade)
+}
+
+/// TAFSD-531: one consent screen, keyed by the authorize ticket's jti. The
+/// ticket belongs to the first signed-in person who opens it and can be
+/// answered once, so a leaked or replayed ticket cannot be approved by
+/// someone else or twice.
+model mcp_oauth_consents {
+  /// The ticket's jti.
+  id         String            @id @db.VarChar(64)
+  client_id  String            @db.VarChar(64)
+  user_id    String
+  created_at DateTime          @default(now()) @db.Timestamptz(6)
+  expires_at DateTime          @db.Timestamptz(6)
+  decided_at DateTime?         @db.Timestamptz(6)
+  decision   String?           @db.VarChar(10)
+  client     mcp_oauth_clients @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  users      users             @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }
 
 /// TAFSD-531: refresh tokens, rotated on every use. A used one presented
@@ -1140,6 +1158,7 @@ model users {
   mcp_access_tokens                                                        mcp_access_tokens[]
   mcp_oauth_grants                                                         mcp_oauth_grants[]
   mcp_oauth_codes                                                          mcp_oauth_codes[]
+  mcp_oauth_consents                                                       mcp_oauth_consents[]
   granted_tile_grants                                                      user_tile_grants[]           @relation("user_tile_grants_granted_byTousers")
   user_tile_grants                                                         user_tile_grants[]           @relation("user_tile_grants_user_idTousers")
   granted_tile_action_grants                                               user_tile_action_grants[]    @relation("user_tile_action_grants_granted_byTousers")

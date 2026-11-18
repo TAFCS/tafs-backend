@@ -53,11 +53,16 @@ export class McpController {
       if (status === HttpStatus.UNAUTHORIZED) {
         // MCP authorization spec: point the client at the protected-resource
         // metadata, which names the authorization server to sign in with.
+        // Without MCP_PUBLIC_URL in production there is no OAuth to point to.
+        const metadata = this.oauth.resourceMetadataUrl(req);
         const presented = Boolean(req.headers.authorization);
+        const params = [
+          ...(metadata ? [`resource_metadata="${metadata}"`] : []),
+          ...(presented ? ['error="invalid_token"'] : []),
+        ];
         res.setHeader(
           'WWW-Authenticate',
-          `Bearer resource_metadata="${this.oauth.resourceMetadataUrl(req)}"` +
-            (presented ? ', error="invalid_token"' : ''),
+          params.length ? `Bearer ${params.join(', ')}` : 'Bearer',
         );
       }
       res

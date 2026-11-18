@@ -22,8 +22,15 @@ export const OAUTH_TICKET_TTL_S = 10 * 60;
 export const OAUTH_TICKET_AUDIENCE = 'tafs-mcp-authorize';
 
 export const OAUTH_MAX_REDIRECT_URIS = 5;
-/** https redirect hosts allowed when MCP_OAUTH_REDIRECT_HOSTS is not set. */
-export const DEFAULT_REDIRECT_HOSTS = ['claude.ai', 'claude.com'];
+/**
+ * The https redirect URIs a client may register, matched exactly, when
+ * MCP_OAUTH_REDIRECT_URIS is not set: the callback claude.ai custom
+ * connectors use (web, desktop and mobile share it), on both Claude domains.
+ */
+export const DEFAULT_REDIRECT_URIS = [
+  'https://claude.ai/api/mcp/auth_callback',
+  'https://claude.com/api/mcp/auth_callback',
+];
 
 /** The MCP resource path on this server, below the public origin. */
 export const MCP_RESOURCE_PATH = '/api/v1/mcp';
@@ -66,23 +73,25 @@ export function verifyPkce(verifier: unknown, challenge: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Hosts an https redirect may point at, from MCP_OAUTH_REDIRECT_HOSTS (comma-separated). */
-export function redirectHostsFrom(env: string | undefined): string[] {
-  const hosts = (env ?? '')
+/** Exact https redirect URIs from MCP_OAUTH_REDIRECT_URIS (comma-separated), or the default. */
+export function redirectAllowlistFrom(env: string | undefined): string[] {
+  const uris = (env ?? '')
     .split(',')
-    .map((h) => h.trim().toLowerCase())
+    .map((u) => u.trim())
     .filter(Boolean);
-  return hosts.length ? hosts : DEFAULT_REDIRECT_HOSTS;
+  return uris.length ? uris : DEFAULT_REDIRECT_URIS;
 }
 
 /**
- * Whether a client may register this redirect URI. Loopback http on any port
- * (native and CLI clients: Claude Code, Cursor) or https on an allowed host
- * or its subdomain. No fragments, no credentials in the URL.
+ * Whether a client may register this redirect URI: loopback http on any port
+ * and path (native and CLI clients: Claude Code, Cursor; the code only ever
+ * reaches the person's own machine), or an https URI on the allowlist,
+ * matched exactly: no other host, subdomain or path. No fragments, no
+ * credentials in the URL.
  */
 export function isAllowedRedirectUri(
   uri: unknown,
-  allowedHosts: string[],
+  allowlist: string[],
 ): uri is string {
   if (typeof uri !== 'string' || uri.length > 500) return false;
   let u: URL;
@@ -92,12 +101,13 @@ export function isAllowedRedirectUri(
     return false;
   }
   if (u.hash || u.username || u.password) return false;
-  const host = u.hostname.toLowerCase();
-  if (u.protocol === 'http:')
-    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  if (u.protocol === 'http:') return isLoopbackHost(u.hostname);
   if (u.protocol !== 'https:') return false;
-  return allowedHosts.some((h) => host === h || host.endsWith(`.${h}`));
+  return allowlist.includes(uri);
 }
+
+const isLoopbackHost = (host: string) =>
+  ['localhost', '127.0.0.1', '[::1]'].includes(host.toLowerCase());
 
 /**
  * Exact match against the registered list, except that a loopback URI may
@@ -123,7 +133,7 @@ export function redirectUriMatches(
         g.hostname === r.hostname &&
         g.pathname === r.pathname &&
         g.search === r.search &&
-        ['localhost', '127.0.0.1', '[::1]'].includes(g.hostname)
+        isLoopbackHost(g.hostname)
       );
     } catch {
       return false;
@@ -167,3 +177,47 @@ export function withParams(
 
 export const earliest = (...dates: Date[]) =>
   new Date(Math.min(...dates.map((d) => d.getTime())));
+
+/**
+ * A fixed-window counter, per key and in total, for the public registration
+ * endpoint. In memory and per instance: it caps abuse, it is not an account.
+ */
+export class WindowLimiter {
+  private readonly hits = new Map<string, { count: number; resetAt: number }>();
+  private total = { count: 0, resetAt: 0 };
+
+  constructor(
+    private readonly perKey: number,
+    private readonly overall: number,
+    private readonly windowMs: number,
+  ) {}
+
+  /** Records an attempt; false when either limit is already reached. */
+  take(key: string, now = Date.now()): boolean {
+    if (now >= this.total.resetAt)
+      this.total = { count: 0, resetAt: now + this.windowMs };
+    let entry = this.hits.get(key);
+    if (!entry || now >= entry.resetAt) {
+      entry = { count: 0, resetAt: now + this.windowMs };
+      this.hits.set(key, entry);
+    }
+    if (entry.count >= this.perKey || this.total.count >= this.overall)
+      return false;
+    entry.count++;
+    this.total.count++;
+    if (this.hits.size > 10_000) {
+      for (const [k, v] of this.hits) if (now >= v.resetAt) this.hits.delete(k);
+    }
+    return true;
+  }
+}
+
+/** Origin of a URL, or null when it is not one. */
+export function originOf(url: string | undefined | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}

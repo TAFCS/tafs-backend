@@ -41,6 +41,13 @@ function sendOAuthError(res: Response, err: unknown) {
   throw err;
 }
 
+/** Who is registering, for the rate limit: the first forwarded address, else the socket's. */
+function clientKey(req: Request): string {
+  const fwd = req.headers['x-forwarded-for'];
+  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0].trim();
+  return first || req.socket?.remoteAddress || 'unknown';
+}
+
 /** A minimal page for authorize errors that must not be redirected (unknown client or redirect URI). */
 function errorPage(message: string): string {
   const safe = message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -57,9 +64,17 @@ export class McpOAuthController {
   constructor(private readonly oauth: McpOAuthService) {}
 
   @Post('register')
-  async register(@Body() body: Record<string, unknown>, @Res() res: Response) {
+  async register(
+    @Body() body: Record<string, unknown>,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
     try {
-      sendOAuth(res, HttpStatus.CREATED, await this.oauth.register(body ?? {}));
+      sendOAuth(
+        res,
+        HttpStatus.CREATED,
+        await this.oauth.register(body ?? {}, clientKey(req)),
+      );
     } catch (err) {
       sendOAuthError(res, err);
     }
@@ -103,7 +118,9 @@ export class McpOAuthController {
   async consent(
     @Query('ticket') ticket: string,
     @CurrentUser() user: IJwtStaffPayload,
+    @Req() req: Request,
   ) {
+    this.oauth.assertConsentOrigin(req);
     return createApiResponse(
       await this.oauth.describeConsent(ticket, user),
       HttpStatus.OK,
@@ -117,7 +134,9 @@ export class McpOAuthController {
   async decide(
     @Body() dto: ConsentDecisionDto,
     @CurrentUser() user: IJwtStaffPayload,
+    @Req() req: Request,
   ) {
+    this.oauth.assertConsentOrigin(req);
     return createApiResponse(
       await this.oauth.decideConsent(dto.ticket, dto.decision, user),
       HttpStatus.OK,

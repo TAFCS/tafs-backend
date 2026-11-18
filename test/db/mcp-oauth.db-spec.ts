@@ -33,9 +33,13 @@ function pkce() {
     return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url') };
 }
 
+let registrations = 0;
 async function register(redirectUris: string[] = [REDIRECT], extra: Record<string, unknown> = {}) {
+    // A distinct client address each time: registration is rate-limited per address.
+    registrations++;
     return request(server())
         .post('/api/v1/mcp/oauth/register')
+        .set('X-Forwarded-For', `10.0.${Math.floor(registrations / 250)}.${registrations % 250}`)
         .send({ client_name: 'DB Suite Client', redirect_uris: redirectUris, ...extra });
 }
 
@@ -67,6 +71,7 @@ async function approve(who: ReturnType<typeof client>, ticket: string) {
     // so its host is the webapp's. The `iss` sent back must still be ours.
     const res = await who
         .post('/mcp/oauth/consent')
+        .set('Origin', WEBAPP)
         .set('X-Forwarded-Host', 'webapp.test')
         .send({ ticket, decision: 'approve' });
     expect(res.status).toBe(201);
@@ -159,6 +164,48 @@ describe('discovery', () => {
     });
 });
 
+describe('issuer in production', () => {
+    const withEnv = async (env: Record<string, string | undefined>, fn: () => Promise<void>) => {
+        const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+        Object.assign(process.env, env);
+        for (const [k, v] of Object.entries(env)) if (v === undefined) delete process.env[k];
+        try {
+            await fn();
+        } finally {
+            for (const [k, v] of Object.entries(saved)) {
+                if (v === undefined) delete process.env[k];
+                else process.env[k] = v;
+            }
+        }
+    };
+
+    it('turns OAuth off rather than trusting request headers when MCP_PUBLIC_URL is missing', () =>
+        withEnv({ NODE_ENV: 'production', MCP_PUBLIC_URL: undefined }, async () => {
+            const meta = await request(server()).get('/.well-known/oauth-authorization-server').set('X-Forwarded-Host', 'evil.example');
+            expect(meta.status).toBe(503);
+            const unauth = await request(server()).post('/api/v1/mcp').send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+            expect(unauth.status).toBe(401);
+            expect(unauth.headers['www-authenticate']).toBe('Bearer');
+            const auth = await request(server())
+                .get('/api/v1/mcp/oauth/authorize')
+                .query({ response_type: 'code', client_id: (await register()).body.client_id, redirect_uri: REDIRECT });
+            expect(auth.status).toBe(503);
+            expect(auth.headers.location).toBeUndefined();
+        }));
+
+    it('names MCP_PUBLIC_URL as issuer whatever the request says, and is never cached across hosts', () =>
+        withEnv({ NODE_ENV: 'production', MCP_PUBLIC_URL: 'https://api.tafs.example/' }, async () => {
+            const meta = await request(server()).get('/.well-known/oauth-authorization-server').set('X-Forwarded-Host', 'evil.example');
+            expect(meta.status).toBe(200);
+            expect(meta.body.issuer).toBe('https://api.tafs.example');
+            expect(meta.headers['cache-control']).toBe('no-store');
+            const unauth = await request(server()).post('/api/v1/mcp').set('X-Forwarded-Host', 'evil.example').send({});
+            expect(unauth.headers['www-authenticate']).toBe(
+                'Bearer resource_metadata="https://api.tafs.example/.well-known/oauth-protected-resource/api/v1/mcp"',
+            );
+        }));
+});
+
 describe('dynamic client registration', () => {
     it('registers a public loopback client', async () => {
         const res = await register();
@@ -172,6 +219,26 @@ describe('dynamic client registration', () => {
         const res = await register(['https://evil.example/cb']);
         expect(res.status).toBe(400);
         expect(res.body.error).toBe('invalid_redirect_uri');
+    });
+
+    it('allows only the exact claude.ai connector callback among https redirects', async () => {
+        expect((await register(['https://claude.ai/api/mcp/auth_callback'])).status).toBe(201);
+        for (const uri of ['https://claude.ai/other', 'https://evil.claude.ai/api/mcp/auth_callback', 'https://claude.ai/api/mcp/auth_callback/x']) {
+            const res = await register([uri]);
+            expect(res.status).toBe(400);
+            expect(res.body.error).toBe('invalid_redirect_uri');
+        }
+    });
+
+    it('limits registrations per client address', async () => {
+        const from = (n: number) =>
+            request(server())
+                .post('/api/v1/mcp/oauth/register')
+                .set('X-Forwarded-For', '192.0.2.77')
+                .send({ client_name: `burst ${n}`, redirect_uris: [REDIRECT] });
+        for (let i = 0; i < 20; i++) expect((await from(i)).status).toBe(201);
+        const over = await from(20);
+        expect(over.status).toBe(429);
     });
 
     it('refuses a confidential client', async () => {
@@ -226,7 +293,7 @@ describe('consent', () => {
         expect(res.status).toBe(200);
         const d = res.body.data;
         expect(d).toMatchObject({
-            client: { name: 'DB Suite Client', redirect_host: 'localhost:4567' },
+            client: { name: 'DB Suite Client', name_verified: false, redirect_host: 'localhost:4567' },
             acting_as: { username: USERS.clerk.username },
             allowed: true,
             blocked_reason: null,
@@ -240,7 +307,7 @@ describe('consent', () => {
         const ticket = await startAuthorize(clientId, pkce().challenge);
         const shown = await as.viewer.get(`/mcp/oauth/consent?ticket=${encodeURIComponent(ticket)}`);
         expect(shown.body.data).toMatchObject({ allowed: false, blocked_reason: 'no_tile', tools: [] });
-        const approve = await as.viewer.post('/mcp/oauth/consent').send({ ticket, decision: 'approve' });
+        const approve = await as.viewer.post('/mcp/oauth/consent').set('Origin', WEBAPP).send({ ticket, decision: 'approve' });
         expect(approve.status).toBe(403);
         expect(await prisma.mcp_oauth_codes.count({ where: { user_id: USERS.viewer.id } })).toBe(0);
     });
@@ -250,6 +317,7 @@ describe('consent', () => {
         const ticket = await startAuthorize(clientId, pkce().challenge);
         const res = await as.clerk
             .post('/mcp/oauth/consent')
+            .set('Origin', WEBAPP)
             .set('X-Forwarded-Host', 'webapp.test')
             .send({ ticket, decision: 'deny' });
         expect(res.status).toBe(201);
@@ -262,8 +330,63 @@ describe('consent', () => {
     });
 
     it('refuses a forged or tampered ticket', async () => {
-        const res = await as.clerk.post('/mcp/oauth/consent').send({ ticket: 'not.a.ticket', decision: 'approve' });
+        const res = await as.clerk
+            .post('/mcp/oauth/consent')
+            .set('Origin', WEBAPP)
+            .send({ ticket: 'not.a.ticket', decision: 'approve' });
         expect(res.status).toBe(404);
+    });
+});
+
+describe('consent cannot be forged from another site (CSRF)', () => {
+    const consentFor = async () => startAuthorize((await register()).body.client_id, pkce().challenge);
+    const noCodes = async () => expect(await prisma.mcp_oauth_codes.count({ where: { user_id: USERS.clerk.id, used_at: null } })).toBe(0);
+
+    beforeEach(async () => {
+        await prisma.mcp_oauth_codes.deleteMany({ where: { user_id: USERS.clerk.id, used_at: null } });
+    });
+
+    it('refuses an approval with no Origin', async () => {
+        const ticket = await consentFor();
+        const res = await as.clerk.post('/mcp/oauth/consent').send({ ticket, decision: 'approve' });
+        expect(res.status).toBe(403);
+        await noCodes();
+    });
+
+    it('refuses an approval from another origin, even this project’s own previews', async () => {
+        for (const origin of ['https://evil.vercel.app', 'https://tafs-webapp-abc123xyz-tafstechsystems-1600s-projects.vercel.app', 'http://localhost:9999']) {
+            const res = await as.clerk.post('/mcp/oauth/consent').set('Origin', origin).send({ ticket: await consentFor(), decision: 'approve' });
+            expect(res.status).toBe(403);
+        }
+        await noCodes();
+    });
+
+    it('refuses to describe a consent to another origin or a cross-site request', async () => {
+        const ticket = await consentFor();
+        const q = `/mcp/oauth/consent?ticket=${encodeURIComponent(ticket)}`;
+        expect((await as.clerk.get(q).set('Origin', 'https://evil.vercel.app')).status).toBe(403);
+        expect((await as.clerk.get(q).set('Sec-Fetch-Site', 'cross-site')).status).toBe(403);
+        expect((await as.clerk.get(q).set('Sec-Fetch-Site', 'same-origin')).status).toBe(200);
+    });
+
+    it('binds a ticket to the first person who opens it', async () => {
+        const ticket = await consentFor();
+        expect((await as.clerk.get(`/mcp/oauth/consent?ticket=${encodeURIComponent(ticket)}`)).status).toBe(200);
+        const admin = client(app, tokenFor(jwt, USERS.admin));
+        const stolen = await admin.post('/mcp/oauth/consent').set('Origin', WEBAPP).send({ ticket, decision: 'approve' });
+        expect(stolen.status).toBe(404);
+        expect((await admin.get(`/mcp/oauth/consent?ticket=${encodeURIComponent(ticket)}`)).status).toBe(404);
+        // Its owner can still answer it.
+        expect((await as.clerk.post('/mcp/oauth/consent').set('Origin', WEBAPP).send({ ticket, decision: 'approve' })).status).toBe(201);
+    });
+
+    it('takes one answer per ticket', async () => {
+        const ticket = await consentFor();
+        const answer = (decision: string) => as.clerk.post('/mcp/oauth/consent').set('Origin', WEBAPP).send({ ticket, decision });
+        expect((await answer('approve')).status).toBe(201);
+        expect((await answer('approve')).status).toBe(404);
+        expect((await answer('deny')).status).toBe(404);
+        expect(await prisma.mcp_oauth_codes.count({ where: { user_id: USERS.clerk.id, used_at: null } })).toBe(1);
     });
 });
 
@@ -299,6 +422,20 @@ describe('token exchange (PKCE)', () => {
             redirect_uri: 'http://localhost:4567/elsewhere',
         });
         expect(badRedirect.body.error).toBe('invalid_grant');
+    });
+
+    it('lets exactly one of two simultaneous redemptions win, and then revokes it', async () => {
+        const clientId = (await register()).body.client_id;
+        const { verifier, challenge } = pkce();
+        const code = await approve(as.clerk, await startAuthorize(clientId, challenge));
+        const results = await Promise.all([exchange(clientId, code, verifier), exchange(clientId, code, verifier)]);
+        const statuses = results.map((r) => r.status).sort();
+        expect(statuses).toEqual([200, 400]);
+        const winner = results.find((r) => r.status === 200)!.body;
+        // The loser's replay revoked the grant the winner received.
+        expect((await mcp(winner.access_token, 'tools/list')).status).toBe(401);
+        const grant = await prisma.mcp_oauth_grants.findFirst({ where: { client_id: clientId } });
+        expect(grant?.revoked_reason).toBe('code_reuse');
     });
 
     it('revokes the grant when a used code is replayed', async () => {

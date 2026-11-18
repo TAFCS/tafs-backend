@@ -11,6 +11,7 @@ import compression from 'compression';
 import { AppModule } from './app.module';
 import { applyGlobalPipeline } from './app.pipeline';
 import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
+import { redactUrl } from './common/utils/log-redact.util';
 
 /**
  * Log event-loop stalls. Do NOT process.exit — under deploy/traffic spikes a
@@ -69,7 +70,9 @@ async function bootstrap() {
       await redisIoAdapter.disconnect();
       const errMsg =
         err?.message ||
-        (err?.errors ? err.errors.map((e: any) => e.message).join(', ') : String(err));
+        (err?.errors
+          ? err.errors.map((e: any) => e.message).join(', ')
+          : String(err));
       console.warn(
         `ℹ️ Redis not available (${errMsg || 'connection refused'}); using in-memory Socket.IO adapter`,
       );
@@ -97,7 +100,11 @@ async function bootstrap() {
     ...envOrigins,
     /^http:\/\/localhost(:\d+)?$/,
     /^https:\/\/tafs-webapp\.vercel\.app$/,
-    /^https:\/\/.*\.vercel\.app$/,
+    // This project's own Vercel deployments only (TAFSD-531): per-commit
+    // `tafs-webapp-<hash>-…` and per-branch `tafs-webapp-git-<branch>-…`.
+    // It used to be any *.vercel.app, and with credentials that let any
+    // Vercel-hosted site make signed-in requests on a staff member's behalf.
+    /^https:\/\/tafs-webapp-(?:[a-z0-9]{9}|git-[a-z0-9-]+)-tafstechsystems-1600s-projects\.vercel\.app$/,
   ];
 
   // eslint-disable-next-line no-console
@@ -111,14 +118,18 @@ async function bootstrap() {
   app.use((req, res, next) => {
     if (req.method === 'OPTIONS' || req.url.includes('auth')) {
       // eslint-disable-next-line no-console
-      console.log(`[HTTP] ${req.method} ${req.url} | Origin: ${req.headers.origin}`);
+      console.log(
+        `[HTTP] ${req.method} ${redactUrl(req.url)} | Origin: ${req.headers.origin}`,
+      );
     }
     const started = Date.now();
     res.on('finish', () => {
       const ms = Date.now() - started;
       if (ms >= 2000) {
         // eslint-disable-next-line no-console
-        console.warn(`[slow-request] ${req.method} ${req.originalUrl || req.url} ${ms}ms status=${res.statusCode}`);
+        console.warn(
+          `[slow-request] ${req.method} ${redactUrl(req.originalUrl || req.url)} ${ms}ms status=${res.statusCode}`,
+        );
       }
     });
     next();
@@ -136,7 +147,10 @@ async function bootstrap() {
         if (pattern instanceof RegExp) return pattern.test(origin);
         // Case-insensitive and slash-agnostic comparison
         const normalizedOrigin = origin.trim().replace(/\/$/, '').toLowerCase();
-        const normalizedPattern = String(pattern).trim().replace(/\/$/, '').toLowerCase();
+        const normalizedPattern = String(pattern)
+          .trim()
+          .replace(/\/$/, '')
+          .toLowerCase();
         return normalizedOrigin === normalizedPattern;
       });
 
@@ -178,8 +192,20 @@ async function bootstrap() {
   app.use(compression());
   app.use(cookieParser());
 
+  // Same formats as morgan's `combined` / `dev`, with OAuth query strings
+  // (tickets, codes, state) redacted from the URL and the referrer.
+  morgan.token('safe-url', (req) =>
+    redactUrl((req as express.Request).originalUrl || req.url),
+  );
+  morgan.token('safe-referrer', (req) =>
+    redactUrl(req.headers.referer || req.headers.referrer?.toString()),
+  );
   app.use(
-    morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'),
+    morgan(
+      process.env.NODE_ENV === 'production'
+        ? ':remote-addr - :remote-user [:date[clf]] ":method :safe-url HTTP/:http-version" :status :res[content-length] ":safe-referrer" ":user-agent"'
+        : ':method :safe-url :status :response-time ms - :res[content-length]',
+    ),
   );
 
   const port = Number(process.env.PORT ?? 8080);
@@ -222,7 +248,9 @@ async function bootstrap() {
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/docs', app, document);
     // eslint-disable-next-line no-console
-    console.log(`📖 Swagger docs available at: http://0.0.0.0:${port}/api/docs`);
+    console.log(
+      `📖 Swagger docs available at: http://0.0.0.0:${port}/api/docs`,
+    );
   }
 }
 bootstrap().catch((err) => {

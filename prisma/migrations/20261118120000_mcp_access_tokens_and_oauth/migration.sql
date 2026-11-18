@@ -11,6 +11,8 @@
 --   AI Assistant page. Revoking it kills its access and refresh tokens.
 -- mcp_oauth_codes: single-use authorization codes, minutes long, bound to the
 --   client, redirect URI and PKCE challenge. Stored hashed.
+-- mcp_oauth_consents: one consent screen, keyed by the authorize ticket's
+--   jti; bound to the first person who opens it and answerable once.
 -- mcp_oauth_refresh_tokens: rotated on every use; replaying a used one
 --   revokes the grant. Stored hashed.
 --
@@ -78,6 +80,19 @@ CREATE TABLE "mcp_oauth_codes" (
 );
 
 -- CreateTable
+CREATE TABLE "mcp_oauth_consents" (
+    "id" VARCHAR(64) NOT NULL,
+    "client_id" VARCHAR(64) NOT NULL,
+    "user_id" TEXT NOT NULL,
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expires_at" TIMESTAMPTZ(6) NOT NULL,
+    "decided_at" TIMESTAMPTZ(6),
+    "decision" VARCHAR(10),
+
+    CONSTRAINT "mcp_oauth_consents_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "mcp_oauth_refresh_tokens" (
     "id" TEXT NOT NULL,
     "grant_id" TEXT NOT NULL,
@@ -130,6 +145,12 @@ ALTER TABLE "mcp_oauth_codes" ADD CONSTRAINT "mcp_oauth_codes_user_id_fkey" FORE
 
 -- AddForeignKey
 ALTER TABLE "mcp_oauth_codes" ADD CONSTRAINT "mcp_oauth_codes_grant_id_fkey" FOREIGN KEY ("grant_id") REFERENCES "mcp_oauth_grants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "mcp_oauth_consents" ADD CONSTRAINT "mcp_oauth_consents_client_id_fkey" FOREIGN KEY ("client_id") REFERENCES "mcp_oauth_clients"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "mcp_oauth_consents" ADD CONSTRAINT "mcp_oauth_consents_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "mcp_oauth_refresh_tokens" ADD CONSTRAINT "mcp_oauth_refresh_tokens_grant_id_fkey" FOREIGN KEY ("grant_id") REFERENCES "mcp_oauth_grants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
