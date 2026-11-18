@@ -70,6 +70,7 @@ describe('MCP OAuth rules (TAFSD-531)', () => {
       'http://localhost/callback',
       'https://claude.ai/api/mcp/auth_callback',
       'https://claude.com/api/mcp/auth_callback',
+      'https://chatgpt.com/connector_platform_oauth_redirect',
     ])('allows %s', (uri) =>
       expect(isAllowedRedirectUri(uri, allowlist)).toBe(true),
     );
@@ -87,6 +88,10 @@ describe('MCP OAuth rules (TAFSD-531)', () => {
       'https://evil.example/cb',
       'https://claude.ai.evil.example/api/mcp/auth_callback',
       'https://claude.ai/api/mcp/auth_callback#frag',
+      // ChatGPT: only its stable callback, not its other paths or hosts.
+      'https://chatgpt.com/connector_platform_oauth_redirect/',
+      'https://chatgpt.com/connector/oauth/abc123',
+      'https://evil.chatgpt.com/connector_platform_oauth_redirect',
       'https://user:pw@claude.ai/api/mcp/auth_callback',
       'javascript:alert(1)',
       'myapp://callback',
@@ -96,10 +101,11 @@ describe('MCP OAuth rules (TAFSD-531)', () => {
       expect(isAllowedRedirectUri(uri, allowlist)).toBe(false),
     );
 
-    it('reads the exact allowlist from the environment, defaulting to Claude', () => {
+    it('reads the exact allowlist from the environment, defaulting to Claude and ChatGPT', () => {
       expect(redirectAllowlistFrom(undefined)).toEqual([
         'https://claude.ai/api/mcp/auth_callback',
         'https://claude.com/api/mcp/auth_callback',
+        'https://chatgpt.com/connector_platform_oauth_redirect',
       ]);
       const custom = redirectAllowlistFrom(
         ' https://example.com/oauth/cb , ,https://cursor.sh/cb',

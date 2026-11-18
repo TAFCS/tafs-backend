@@ -288,8 +288,13 @@ export class McpOAuthService {
         `redirect URI not allowed: ${String(bad).slice(0, 200)}. Use http://localhost, or exactly one of: ${allowlist.join(', ')}.`,
       );
     }
+    // Only public clients exist here: no secret is ever issued and PKCE is
+    // required. A client asking for a shared secret (ChatGPT's connectors may,
+    // TAFSD-540) is registered as public instead; RFC 7591 lets the server
+    // replace requested metadata, and the response tells the client "none".
+    // Anything else (e.g. private_key_jwt) still cannot be honoured.
     const method = str(body.token_endpoint_auth_method) ?? 'none';
-    if (method !== 'none') {
+    if (!['none', 'client_secret_post', 'client_secret_basic'].includes(method)) {
       throw new OAuthError(
         'invalid_client_metadata',
         'Only public clients are supported (token_endpoint_auth_method "none")',

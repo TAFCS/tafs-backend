@@ -24,12 +24,18 @@ export const OAUTH_TICKET_AUDIENCE = 'tafs-mcp-authorize';
 export const OAUTH_MAX_REDIRECT_URIS = 5;
 /**
  * The https redirect URIs a client may register, matched exactly, when
- * MCP_OAUTH_REDIRECT_URIS is not set: the callback claude.ai custom
- * connectors use (web, desktop and mobile share it), on both Claude domains.
+ * MCP_OAUTH_REDIRECT_URIS is not set:
+ * - the callback claude.ai custom connectors use (web, desktop and mobile
+ *   share it), on both Claude domains;
+ * - ChatGPT's stable connector callback (TAFSD-540). ChatGPT uses it for
+ *   servers that send the RFC 9207 `iss` parameter, which this one does;
+ *   otherwise it falls back to a per-connector /connector/oauth/{id} URL,
+ *   which would have to be added to MCP_OAUTH_REDIRECT_URIS by hand.
  */
 export const DEFAULT_REDIRECT_URIS = [
   'https://claude.ai/api/mcp/auth_callback',
   'https://claude.com/api/mcp/auth_callback',
+  'https://chatgpt.com/connector_platform_oauth_redirect',
 ];
 
 /** The MCP resource path on this server, below the public origin. */

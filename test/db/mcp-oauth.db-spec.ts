@@ -255,10 +255,24 @@ describe('dynamic client registration', () => {
         expect(over.status).toBe(429);
     });
 
-    it('refuses a confidential client', async () => {
-        const res = await register([REDIRECT], { token_endpoint_auth_method: 'client_secret_basic' });
+    it('registers a client that asks for a secret as a public client, issuing no secret (TAFSD-540)', async () => {
+        for (const method of ['client_secret_basic', 'client_secret_post']) {
+            const res = await register([REDIRECT], { token_endpoint_auth_method: method });
+            expect(res.status).toBe(201);
+            expect(res.body.token_endpoint_auth_method).toBe('none');
+            expect(res.body.client_secret).toBeUndefined();
+        }
+    });
+
+    it('still refuses an auth method it cannot honour', async () => {
+        const res = await register([REDIRECT], { token_endpoint_auth_method: 'private_key_jwt' });
         expect(res.status).toBe(400);
         expect(res.body.error).toBe('invalid_client_metadata');
+    });
+
+    it('accepts ChatGPT\'s connector callback by default (TAFSD-540)', async () => {
+        const res = await register(['https://chatgpt.com/connector_platform_oauth_redirect']);
+        expect(res.status).toBe(201);
     });
 });
 
