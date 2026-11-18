@@ -337,9 +337,9 @@ Content-Type: application/json
 \texttt{consumer\_number} & digits & Yes & Same value used in the inquiry \\
 \texttt{amount} & number & Yes & Amount collected, whole PKR. Must equal \texttt{amount\_payable} \\
 \texttt{channel} & enum & CC only & For a CC: \texttt{OTC}, \texttt{APP} or \texttt{INTERNET\_BANKING}. For a 15-digit number it may be omitted; it is always recorded as \texttt{ONEBILL} \\
-\texttt{payment\_method} & enum & Yes & See Section~\ref{sec:method} \\
+\texttt{payment\_method} & enum & CC: Yes; 1Bill: \texttt{ONEBILL} or empty & See Section~\ref{sec:method} \\
 \texttt{transaction\_id} & string & Yes & UBL's unique transaction reference (max 100 characters) \\
-\texttt{transaction\_datetime} & ISO 8601 & Yes & With offset, e.g.\ \texttt{2026-10-05T11:00:00+05:00} \\
+\texttt{transaction\_datetime} & ISO 8601 & Yes & With offset, e.g.\ \texttt{2026-10-05T11:00:00+05:00}; or \texttt{YYYYMMDD} / \texttt{YYYYMMDDHHmmss} in Pakistan time \\
 \texttt{voucher\_number} & string & Advised & From the inquiry; rejects the payment (code \texttt{07}) if a newer voucher was issued since \\
 \texttt{branch\_code} & string & OTC & UBL branch code \\
 \texttt{payer\_bank\_code} & string & 1Bill & Bank or wallet the payer paid from \\
@@ -362,6 +362,7 @@ Content-Type: application/json
 \texttt{CREDIT\_CARD} & Credit card \\
 \texttt{WALLET} & Mobile wallet \\
 \texttt{OTHER} & Any other method \\
+\texttt{ONEBILL} & 1Bill payments (15-digit consumer number). Empty or \texttt{null} on a 1Bill payment means the same. Not accepted for a CC \\
 \bottomrule
 \end{tabularx}
 \end{center}

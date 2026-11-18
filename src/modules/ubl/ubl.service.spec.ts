@@ -272,4 +272,32 @@ describe('UblService', () => {
         const res: any = await svc.billPayment(pay({ payment_method: 'CHEQUE' }));
         expect(res.response_code).toBe('09');
     });
+
+    // TAFSD-538: UBL sends payment_method ONEBILL (or nothing) on 1Bill payments.
+    it('books a 1Bill payment sent with payment_method ONEBILL', async () => {
+        const { svc, prisma } = build();
+        const res: any = await svc.billPayment(pay({ payment_method: 'ONEBILL' }));
+        expect(res.response_code).toBe('00');
+        expect(prisma.ubl_transactions.create.mock.calls[0][0].data.payment_method).toBe('ONEBILL');
+    });
+
+    it('treats a missing payment_method on a 1Bill payment as ONEBILL', async () => {
+        const { svc, prisma } = build();
+        const res: any = await svc.billPayment(pay({ payment_method: undefined, channel: undefined }));
+        expect(res.response_code).toBe('00');
+        expect(prisma.ubl_transactions.create.mock.calls[0][0].data.payment_method).toBe('ONEBILL');
+        expect(prisma.deposits.update.mock.calls[0][0].data.remarks).toContain('ONEBILL');
+    });
+
+    it('still requires a real payment_method on a CC payment', async () => {
+        const { svc, vouchers } = build();
+        for (const payment_method of [undefined, 'ONEBILL']) {
+            const res: any = await svc.billPayment(
+                pay({ consumer_number: '8088', channel: 'OTC', payment_method, amount: 90000 }),
+            );
+            expect(res.response_code).toBe('09');
+            expect(res.response_desc).toContain('payment_method is required');
+        }
+        expect(vouchers.recordDeposit).not.toHaveBeenCalled();
+    });
 });
