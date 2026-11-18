@@ -19,6 +19,8 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:db:setup": "bash test/db/setup-test-db.sh",
+    "test:db": "jest -c test/jest-db.json",
     "seed": "ts-node prisma/seed.ts",
     "seed:hr": "ts-node scripts/seed-hr.ts",
     "seed:staff": "ts-node scripts/seed-staff-roster.ts",

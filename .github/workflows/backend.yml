@@ -1,9 +1,14 @@
 name: Backend CI / Deploy
 
-# Every push and PR: typecheck, then build the Docker image and push it to
-# DigitalOcean Container Registry tagged with the commit SHA.
-# Pushes to main additionally point the App Platform app at that SHA and wait
-# for the deploy. Tags are immutable, so rolling back = redeploying an old SHA.
+# Every push and PR: typecheck, unit tests and the DB test suite. Only when all
+# three pass is the Docker image built and pushed to DigitalOcean Container
+# Registry, tagged with the commit SHA. Pushes to main additionally point the
+# App Platform app at that SHA and wait for the deploy. Tags are immutable, so
+# rolling back = redeploying an old SHA.
+#
+# The DB suite runs against a throwaway Postgres service container built from
+# schema.prisma (test/db/setup-test-db.sh). It never sees a production secret:
+# no job before `image` reads any secret at all.
 #
 # Migrations are NOT run here: `prisma migrate deploy` stays a deliberate,
 # manual step (see CLAUDE.md rule 11).
@@ -25,6 +30,7 @@ env:
 
 jobs:
   check:
+    name: Typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,8 +42,62 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.build.json
 
+  # Every src/**/*.spec.ts. Pure unit specs: services with mocked Prisma, no
+  # database, no network.
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Jest (unit)
+        run: npx jest --ci
+
+  # test/db/**/*.db-spec.ts: the real AppModule over HTTP (guards, validation,
+  # scope) against a real Postgres, starting with the studentwise-fees flows.
+  db:
+    name: DB tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tafs_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Throwaway service container above. setup-test-db.sh and the suite both
+      # refuse any host but localhost and any database not named *test*.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tafs_test
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/tafs_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # ts-jest only transpiles; this is what catches a type error in a spec.
+      - name: Typecheck the DB suite
+        run: npx tsc -p test/db/tsconfig.json
+      - name: Build the test database
+        run: bash test/db/setup-test-db.sh
+      - name: Jest (DB)
+        run: npx jest -c test/jest-db.json --ci
+
   image:
-    needs: check
+    needs: [check, unit, db]
     # The push event already builds every branch; skip the duplicate PR run.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest

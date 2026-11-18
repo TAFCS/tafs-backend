@@ -1,0 +1,29 @@
+{
+  "displayName": "db",
+  "rootDir": "..",
+  "roots": [
+    "<rootDir>/test/db"
+  ],
+  "testRegex": "\\.db-spec\\.ts$",
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts",
+    "tsx"
+  ],
+  "transform": {
+    "^.+\\.(t|j)sx?$": "ts-jest"
+  },
+  "moduleNameMapper": {
+    "^@react-pdf/renderer$": "<rootDir>/test/stubs/react-pdf-renderer.ts",
+    "^uuid$": "<rootDir>/test/stubs/uuid.ts"
+  },
+  "globalSetup": "<rootDir>/test/db/helpers/global-setup.ts",
+  "setupFiles": [
+    "<rootDir>/test/db/helpers/env.ts"
+  ],
+  "testEnvironment": "node",
+  "testTimeout": 60000,
+  "maxWorkers": 1,
+  "forceExit": true
+}
