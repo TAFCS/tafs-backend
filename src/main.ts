@@ -70,9 +70,7 @@ async function bootstrap() {
       await redisIoAdapter.disconnect();
       const errMsg =
         err?.message ||
-        (err?.errors
-          ? err.errors.map((e: any) => e.message).join(', ')
-          : String(err));
+        (err?.errors ? err.errors.map((e: any) => e.message).join(', ') : String(err));
       console.warn(
         `ℹ️ Redis not available (${errMsg || 'connection refused'}); using in-memory Socket.IO adapter`,
       );
@@ -147,10 +145,7 @@ async function bootstrap() {
         if (pattern instanceof RegExp) return pattern.test(origin);
         // Case-insensitive and slash-agnostic comparison
         const normalizedOrigin = origin.trim().replace(/\/$/, '').toLowerCase();
-        const normalizedPattern = String(pattern)
-          .trim()
-          .replace(/\/$/, '')
-          .toLowerCase();
+        const normalizedPattern = String(pattern).trim().replace(/\/$/, '').toLowerCase();
         return normalizedOrigin === normalizedPattern;
       });
 
@@ -248,9 +243,7 @@ async function bootstrap() {
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/docs', app, document);
     // eslint-disable-next-line no-console
-    console.log(
-      `📖 Swagger docs available at: http://0.0.0.0:${port}/api/docs`,
-    );
+    console.log(`📖 Swagger docs available at: http://0.0.0.0:${port}/api/docs`);
   }
 }
 bootstrap().catch((err) => {
