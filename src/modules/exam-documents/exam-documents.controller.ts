@@ -189,7 +189,10 @@ export class ExamDocumentsController {
 
     @Post('schedules/:id/documents')
     @HttpCode(HttpStatus.OK)
-    @ApiOperation({ summary: 'Issue to cleared students and reprint for holders, as one PDF' })
+    @ApiOperation({
+        summary:
+            'Issue to cleared students and reprint for holders, as one PDF. Students who cannot get one are skipped and listed in the run report (X-Run-Id). With nothing to print the reply is the report summary as JSON',
+    })
     @RequireAction('student.exam_documents#issue')
     async issue(
         @Param('id', ParseIntPipe) id: number,
@@ -197,7 +200,60 @@ export class ExamDocumentsController {
         @CurrentUser() user: IJwtStaffPayload,
         @Res() res: Response,
     ) {
-        this.sendPdf(res, await this.service.issue(id, dto, user));
+        const out = await this.service.issue(id, dto, user);
+        res.set({
+            'X-Run-Id': out.run_id == null ? '' : String(out.run_id),
+            'X-Skipped-Count': String(out.skipped),
+            'Access-Control-Expose-Headers': 'Content-Disposition, X-Issued-Count, X-Reprinted-Count, X-Skipped-Count, X-Run-Id',
+        });
+        if (out.buffer) return this.sendPdf(res, { ...out, buffer: out.buffer });
+        res.set({ 'X-Issued-Count': String(out.issued), 'X-Reprinted-Count': String(out.reprinted) });
+        res.status(HttpStatus.OK).json(
+            createApiResponse(
+                { run_id: out.run_id, issued: out.issued, reprinted: out.reprinted, skipped: out.skipped, error: out.error },
+                HttpStatus.OK,
+                out.error ?? 'Nothing was printed. See the report for why.',
+            ),
+        );
+    }
+
+    // TAFSD-543: the report of each Issue run. Read-only, so it sits under #view
+    // like the roster, which already shows the same dues.
+    @Get('schedules/:id/runs')
+    @ApiOperation({ summary: 'Issue runs on this schedule, newest first, with their counts' })
+    @RequireAction('student.exam_documents#view')
+    async runs(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.service.listRuns(id, user), HttpStatus.OK, 'Issue runs fetched');
+    }
+
+    @Get('schedules/:id/runs/:runId')
+    @ApiOperation({ summary: 'One issue run: every student asked for, and why those skipped got no document' })
+    @RequireAction('student.exam_documents#view')
+    async run(
+        @Param('id', ParseIntPipe) id: number,
+        @Param('runId', ParseIntPipe) runId: number,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        return createApiResponse(await this.service.getRun(id, runId, user), HttpStatus.OK, 'Issue run fetched');
+    }
+
+    @Get('schedules/:id/runs/:runId/export')
+    @ApiOperation({ summary: 'An issue run report as an Excel sheet' })
+    @RequireAction('student.exam_documents#view')
+    async exportRun(
+        @Param('id', ParseIntPipe) id: number,
+        @Param('runId', ParseIntPipe) runId: number,
+        @CurrentUser() user: IJwtStaffPayload,
+        @Res() res: Response,
+    ) {
+        const { buffer, filename } = await this.service.exportRun(id, runId, user);
+        res.set({
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': `attachment; filename="${filename}"`,
+            'Content-Length': buffer.length,
+            'Access-Control-Expose-Headers': 'Content-Disposition',
+        });
+        res.send(buffer);
     }
 
     @Post('schedules/:id/documents/override')
@@ -220,7 +276,7 @@ export class ExamDocumentsController {
             'Content-Length': out.buffer.length,
             'X-Issued-Count': String(out.issued),
             'X-Reprinted-Count': String(out.reprinted),
-            'Access-Control-Expose-Headers': 'Content-Disposition, X-Issued-Count, X-Reprinted-Count',
+            'Access-Control-Expose-Headers': 'Content-Disposition, X-Issued-Count, X-Reprinted-Count, X-Skipped-Count, X-Run-Id',
         });
         res.send(out.buffer);
     }
