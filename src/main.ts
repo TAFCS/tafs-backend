@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 // Triggering reload to connect to Redis service
-import { RequestMethod, ValidationPipe } from '@nestjs/common';
+import { RequestMethod } from '@nestjs/common';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import * as express from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -9,8 +9,9 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { applyGlobalPipeline } from './app.pipeline';
 import { RedisIoAdapter } from './common/adapters/redis-io.adapter';
+import { redactUrl } from './common/utils/log-redact.util';
 
 /**
  * Log event-loop stalls. Do NOT process.exit — under deploy/traffic spikes a
@@ -84,7 +85,8 @@ async function bootstrap() {
   // 2mb is enough for a busy day's ATTLOG; 8mb concurrent backfills OOMed prod.
   app.use('/api/v1/iclock', express.text({ type: '*/*', limit: '2mb' }));
 
-  app.setGlobalPrefix('api/v1');
+  // Prefix, validation and the error envelope (shared with the DB test suite).
+  applyGlobalPipeline(app);
 
   // 1. Setup Origins
   const rawOrigins = process.env.CORS_ORIGIN;
@@ -96,7 +98,11 @@ async function bootstrap() {
     ...envOrigins,
     /^http:\/\/localhost(:\d+)?$/,
     /^https:\/\/tafs-webapp\.vercel\.app$/,
-    /^https:\/\/.*\.vercel\.app$/,
+    // This project's own Vercel deployments only (TAFSD-531): per-commit
+    // `tafs-webapp-<hash>-…` and per-branch `tafs-webapp-git-<branch>-…`.
+    // It used to be any *.vercel.app, and with credentials that let any
+    // Vercel-hosted site make signed-in requests on a staff member's behalf.
+    /^https:\/\/tafs-webapp-(?:[a-z0-9]{9}|git-[a-z0-9-]+)-tafstechsystems-1600s-projects\.vercel\.app$/,
   ];
 
   // eslint-disable-next-line no-console
@@ -110,14 +116,18 @@ async function bootstrap() {
   app.use((req, res, next) => {
     if (req.method === 'OPTIONS' || req.url.includes('auth')) {
       // eslint-disable-next-line no-console
-      console.log(`[HTTP] ${req.method} ${req.url} | Origin: ${req.headers.origin}`);
+      console.log(
+        `[HTTP] ${req.method} ${redactUrl(req.url)} | Origin: ${req.headers.origin}`,
+      );
     }
     const started = Date.now();
     res.on('finish', () => {
       const ms = Date.now() - started;
       if (ms >= 2000) {
         // eslint-disable-next-line no-console
-        console.warn(`[slow-request] ${req.method} ${req.originalUrl || req.url} ${ms}ms status=${res.statusCode}`);
+        console.warn(
+          `[slow-request] ${req.method} ${redactUrl(req.originalUrl || req.url)} ${ms}ms status=${res.statusCode}`,
+        );
       }
     });
     next();
@@ -177,18 +187,20 @@ async function bootstrap() {
   app.use(compression());
   app.use(cookieParser());
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
+  // Same formats as morgan's `combined` / `dev`, with OAuth query strings
+  // (tickets, codes, state) redacted from the URL and the referrer.
+  morgan.token('safe-url', (req) =>
+    redactUrl((req as express.Request).originalUrl || req.url),
   );
-
-  app.useGlobalFilters(new HttpExceptionFilter());
-
+  morgan.token('safe-referrer', (req) =>
+    redactUrl(req.headers.referer || req.headers.referrer?.toString()),
+  );
   app.use(
-    morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'),
+    morgan(
+      process.env.NODE_ENV === 'production'
+        ? ':remote-addr - :remote-user [:date[clf]] ":method :safe-url HTTP/:http-version" :status :res[content-length] ":safe-referrer" ":user-agent"'
+        : ':method :safe-url :status :response-time ms - :res[content-length]',
+    ),
   );
 
   const port = Number(process.env.PORT ?? 8080);

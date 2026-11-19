@@ -216,6 +216,31 @@ export class SupportTicketsController {
     return this.supportTicketsService.listPendingApprovals(staff);
   }
 
+  @Get('sent')
+  @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+  @CheckPolicies(canViewTickets)
+  @RequireAction('communication.support_tickets#respond')
+  @ApiOperation({
+    summary: "The caller's own ticket replies with their review status (TAFSD-536)",
+    description:
+      'status: all (default) | pending | approved | rejected, or several comma-separated. ' +
+      'Returns { items, total, take, skip, counts: { all, pending, approved, rejected } }.',
+  })
+  sentReplies(
+    @CurrentUser() staff: any,
+    @Query('status') status?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    const pagination = parsePagination(take, skip);
+    return this.supportTicketsService.listSentReplies(
+      staff,
+      status,
+      pagination.take,
+      pagination.skip,
+    );
+  }
+
   @Patch('messages/:messageId')
   @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
   @CheckPolicies(canManageTickets)

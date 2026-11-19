@@ -43,6 +43,11 @@ import { ReviewTicketMessageDto } from './dto/review-ticket-message.dto';
 import { EditTicketMessageDto } from './dto/edit-ticket-message.dto';
 import { CloseTicketDto } from './dto/close-ticket.dto';
 import { MoveTicketDto } from './dto/move-ticket.dto';
+import {
+  parseSentStatusFilter,
+  sentReplySnippet,
+  ticketTopicLabel,
+} from './support-tickets-sent';
 
 import { ScopeService } from '../../common/scope/scope.service';
 
@@ -333,6 +338,97 @@ export class SupportTicketsService {
         },
       },
     });
+  }
+
+  /**
+   * The caller's own ticket replies, newest first, with the review status a
+   * super admin gave each (TAFSD-536 "Sent" view). Always pinned to
+   * sender_user_id = caller: nobody, super admin included, reads another
+   * person's replies through this list. `counts` ignores the status filter so
+   * every chip shows its total.
+   */
+  async listSentReplies(
+    staff: IJwtStaffPayload,
+    statusFilter?: string,
+    take = 50,
+    skip = 0,
+  ) {
+    const statuses = parseSentStatusFilter(statusFilter);
+    const own: Prisma.ticket_messagesWhereInput = {
+      sender_type: 'STAFF',
+      sender_user_id: staff.sub,
+      deleted_at: null,
+    };
+    const where: Prisma.ticket_messagesWhereInput = statuses
+      ? { ...own, status: { in: statuses } }
+      : own;
+
+    const [rows, total, grouped] = await Promise.all([
+      this.prisma.ticket_messages.findMany({
+        where,
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+        take,
+        skip,
+        select: {
+          id: true,
+          message_type: true,
+          content: true,
+          status: true,
+          created_at: true,
+          reviewed_at: true,
+          review_comment: true,
+          reviewer: { select: { id: true, full_name: true } },
+          ticket: {
+            select: {
+              id: true,
+              status: true,
+              category: true,
+              subtopic: true,
+              flow_path: true,
+              lane: { select: { key: true, name: true, name_ur: true, icon: true, color: true, is_active: true } },
+              families: { select: { id: true, household_name: true } },
+              students: { select: { cc: true, full_name: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.ticket_messages.count({ where }),
+      this.prisma.ticket_messages.groupBy({
+        by: ['status'],
+        where: own,
+        _count: { _all: true },
+      }),
+    ]);
+
+    const byStatus = new Map(grouped.map((g) => [g.status, g._count._all]));
+    const pending = byStatus.get(MessageStatus.PENDING) ?? 0;
+    const approved = byStatus.get(MessageStatus.APPROVED) ?? 0;
+    const rejected = byStatus.get(MessageStatus.REJECTED) ?? 0;
+
+    const items = rows.map(({ content, ticket, ...message }) => ({
+      ...message,
+      snippet: sentReplySnippet(message.message_type, content),
+      ticket: {
+        id: ticket.id,
+        status: ticket.status,
+        category: ticket.category,
+        subtopic: ticket.subtopic,
+        flow_path: ticket.flow_path,
+        topic: ticketTopicLabel(ticket),
+        lane: ticket.lane,
+        lane_name: ticket.lane?.name ?? null,
+        families: ticket.families,
+        students: ticket.students,
+      },
+    }));
+
+    return {
+      items,
+      total,
+      take,
+      skip,
+      counts: { all: pending + approved + rejected, pending, approved, rejected },
+    };
   }
 
   async getTicketById(

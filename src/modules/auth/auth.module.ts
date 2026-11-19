@@ -42,6 +42,6 @@ import { OtpModule } from '../otp/otp.module';
     PoliciesGuard,
     PrismaService,
   ],
-  exports: [AuthService, CaslAbilityFactory, PoliciesGuard, JwtModule],
+  exports: [AuthService, CaslAbilityFactory, PoliciesGuard, JwtModule, JwtStaffStrategy],
 })
 export class AuthModule {}

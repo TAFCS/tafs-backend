@@ -42,6 +42,7 @@ describe('SupportTicketsService leak-proofing', () => {
       count: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
+      groupBy: jest.fn(),
     },
     ticket_events: { create: jest.fn() },
     users: {
@@ -756,6 +757,118 @@ describe('SupportTicketsService leak-proofing', () => {
 
     expect(mockGateway.broadcastTicketMessagesRead).not.toHaveBeenCalled();
     expect(result.is_read).not.toBe(true);
+  });
+
+  describe('listSentReplies (TAFSD-536)', () => {
+    const staff = { sub: 'staff-1', role: 'PRINCIPAL', userType: 'STAFF', username: 'p1' } as any;
+    const row = (over: Record<string, unknown> = {}) => ({
+      id: 'm1',
+      message_type: 'TEXT',
+      content: 'Your fee has been adjusted.',
+      status: MessageStatus.REJECTED,
+      created_at: new Date('2026-11-10T10:00:00Z'),
+      reviewed_at: new Date('2026-11-10T11:00:00Z'),
+      review_comment: 'Wrong amount',
+      reviewer: { id: 'admin-1', full_name: 'Head Admin' },
+      ticket: {
+        id: 't1',
+        status: TicketStatus.ASSIGNED,
+        category: TicketCategory.FINANCIAL,
+        subtopic: null,
+        flow_path: [
+          { key: 'fees', type: 'LANE', label: 'Fees' },
+          { key: 'adj', type: 'TOPIC', label: 'Fee adjustment' },
+        ],
+        lane: { key: 'fees', name: 'Fees', name_ur: null, icon: 'cash', color: '#0f0', is_active: true },
+        families: { id: 7, household_name: 'Family of Khan' },
+        students: { cc: 9001, full_name: 'Ali Khan' },
+      },
+      ...over,
+    });
+
+    beforeEach(() => {
+      prisma.ticket_messages.findMany.mockResolvedValue([row()]);
+      prisma.ticket_messages.count.mockResolvedValue(1);
+      prisma.ticket_messages.groupBy.mockResolvedValue([
+        { status: MessageStatus.PENDING, _count: { _all: 2 } },
+        { status: MessageStatus.APPROVED, _count: { _all: 5 } },
+        { status: MessageStatus.REJECTED, _count: { _all: 1 } },
+      ]);
+    });
+
+    it("only ever reads the caller's own, undeleted staff replies", async () => {
+      await service.listSentReplies(staff);
+      const own = { sender_type: 'STAFF', sender_user_id: 'staff-1', deleted_at: null };
+      expect(prisma.ticket_messages.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: own, orderBy: [{ created_at: 'desc' }, { id: 'desc' }] }),
+      );
+      expect(prisma.ticket_messages.count).toHaveBeenCalledWith({ where: own });
+      expect(prisma.ticket_messages.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({ by: ['status'], where: own }),
+      );
+    });
+
+    it('pins the caller even for a super admin', async () => {
+      await service.listSentReplies({ ...staff, sub: 'admin-1', role: 'SUPER_ADMIN' });
+      const call = prisma.ticket_messages.findMany.mock.calls[0][0];
+      expect(call.where.sender_user_id).toBe('admin-1');
+    });
+
+    it('filters the list by status but counts every status', async () => {
+      await service.listSentReplies(staff, 'rejected', 20, 40);
+      const call = prisma.ticket_messages.findMany.mock.calls[0][0];
+      expect(call.where).toEqual({
+        sender_type: 'STAFF',
+        sender_user_id: 'staff-1',
+        deleted_at: null,
+        status: { in: [MessageStatus.REJECTED] },
+      });
+      expect(call.take).toBe(20);
+      expect(call.skip).toBe(40);
+      expect(prisma.ticket_messages.groupBy.mock.calls[0][0].where).not.toHaveProperty('status');
+    });
+
+    it('returns items, totals and per-status counts', async () => {
+      const res = await service.listSentReplies(staff, 'rejected', 20, 0);
+      expect(res).toMatchObject({
+        total: 1,
+        take: 20,
+        skip: 0,
+        counts: { all: 8, pending: 2, approved: 5, rejected: 1 },
+      });
+      expect(res.items[0]).toEqual({
+        id: 'm1',
+        message_type: 'TEXT',
+        snippet: 'Your fee has been adjusted.',
+        status: MessageStatus.REJECTED,
+        created_at: new Date('2026-11-10T10:00:00Z'),
+        reviewed_at: new Date('2026-11-10T11:00:00Z'),
+        review_comment: 'Wrong amount',
+        reviewer: { id: 'admin-1', full_name: 'Head Admin' },
+        ticket: expect.objectContaining({
+          id: 't1',
+          status: TicketStatus.ASSIGNED,
+          topic: 'Fee adjustment',
+          lane_name: 'Fees',
+          families: { id: 7, household_name: 'Family of Khan' },
+          students: { cc: 9001, full_name: 'Ali Khan' },
+        }),
+      });
+      expect(res.items[0]).not.toHaveProperty('content');
+    });
+
+    it('fills missing statuses with zero', async () => {
+      prisma.ticket_messages.groupBy.mockResolvedValue([
+        { status: MessageStatus.PENDING, _count: { _all: 3 } },
+      ]);
+      const res = await service.listSentReplies(staff);
+      expect(res.counts).toEqual({ all: 3, pending: 3, approved: 0, rejected: 0 });
+    });
+
+    it('rejects an unknown status before querying', async () => {
+      await expect(service.listSentReplies(staff, 'archived')).rejects.toThrow('Invalid status');
+      expect(prisma.ticket_messages.findMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('resolveRouting', () => {

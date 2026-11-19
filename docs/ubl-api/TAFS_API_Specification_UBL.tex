@@ -40,7 +40,7 @@
 \title{\textbf{TAFS API Specification} \\[4pt]
 \large Bill Inquiry \& Bill Payment \\ for United Bank Limited (UBL)}
 \author{The American Foundation School (TAFS) \\ TAFS IT and Software Department \\[4pt] Aawaiz Ali}
-\date{Version 1.1 \\ 19 October 2026}
+\date{Version 1.2 \\ 18 November 2026}
 
 \begin{document}
 \begin{titlepage}
@@ -51,16 +51,21 @@
 \end{titlepage}
 
 % ---------------------------------------------------------------------------
-\section*{What Changed in Version 1.1}
+\section*{What Changed in Version 1.2}
 \begin{itemize}
-  \item \textbf{New base URL.} The API now lives on TAFS's own domain:
-        \begin{itemize}
-          \item New: \url{https://api.tafs.cloud/api/v1/ubl}
-          \item Previous: \url{https://tafs-backend-production.up.railway.app/api/v1/ubl}
-        \end{itemize}
-        Please point all bill inquiry and bill payment calls at the new address. Section~\ref{sec:baseurl} shows it.
-  \item Nothing else has changed: endpoints, request and response fields, authentication headers, response codes
-        and amount rules are exactly as in version 1.0 (dated 16 October 2026).
+  \item \textbf{1Bill payments send \texttt{payment\_method} \texttt{ONEBILL}.} As agreed with UBL on 18 November 2026,
+        a payment against a 15-digit 1Bill consumer number sends \texttt{"payment\_method": "ONEBILL"}. An empty or
+        \texttt{null} value on a 1Bill payment is treated the same way. Over-the-counter, app and internet-banking payments
+        against a CC still send how the payer actually paid (\texttt{CASH}, \texttt{CHEQUE}, \ldots), and
+        \texttt{ONEBILL} is not accepted for them. See Section~\ref{sec:method}.
+  \item \textbf{More date formats.} \texttt{transaction\_datetime} also accepts \texttt{YYYYMMDD} and
+        \texttt{YYYYMMDDHHmmss}, read as Pakistan time. ISO 8601 with an offset (e.g.\ \texttt{2026-11-18T10:28:57+05:00})
+        is still preferred, because it records the time of payment as well as the date.
+  \item \textbf{Empty optional fields.} \texttt{"\{\}"}, an empty string or \texttt{null} in an optional field
+        (\texttt{payer\_bank\_code}, \texttt{payer\_bank\_name}, \texttt{instrument\_number}, \texttt{branch\_code},
+        \texttt{voucher\_number}) is treated as not sent.
+  \item Nothing else has changed: endpoints, base URL (\url{https://api.tafs.cloud/api/v1/ubl}), authentication,
+        response codes and amount rules are as in version 1.1 (19 October 2026).
 \end{itemize}
 
 \tableofcontents
@@ -337,9 +342,9 @@ Content-Type: application/json
 \texttt{consumer\_number} & digits & Yes & Same value used in the inquiry \\
 \texttt{amount} & number & Yes & Amount collected, whole PKR. Must equal \texttt{amount\_payable} \\
 \texttt{channel} & enum & CC only & For a CC: \texttt{OTC}, \texttt{APP} or \texttt{INTERNET\_BANKING}. For a 15-digit number it may be omitted; it is always recorded as \texttt{ONEBILL} \\
-\texttt{payment\_method} & enum & Yes & See Section~\ref{sec:method} \\
+\texttt{payment\_method} & enum & CC: Yes; 1Bill: \texttt{ONEBILL} or empty & See Section~\ref{sec:method} \\
 \texttt{transaction\_id} & string & Yes & UBL's unique transaction reference (max 100 characters) \\
-\texttt{transaction\_datetime} & ISO 8601 & Yes & With offset, e.g.\ \texttt{2026-10-05T11:00:00+05:00} \\
+\texttt{transaction\_datetime} & ISO 8601 & Yes & With offset, e.g.\ \texttt{2026-10-05T11:00:00+05:00}; or \texttt{YYYYMMDD} / \texttt{YYYYMMDDHHmmss} in Pakistan time \\
 \texttt{voucher\_number} & string & Advised & From the inquiry; rejects the payment (code \texttt{07}) if a newer voucher was issued since \\
 \texttt{branch\_code} & string & OTC & UBL branch code \\
 \texttt{payer\_bank\_code} & string & 1Bill & Bank or wallet the payer paid from \\
@@ -362,6 +367,7 @@ Content-Type: application/json
 \texttt{CREDIT\_CARD} & Credit card \\
 \texttt{WALLET} & Mobile wallet \\
 \texttt{OTHER} & Any other method \\
+\texttt{ONEBILL} & 1Bill payments (15-digit consumer number). Empty or \texttt{null} on a 1Bill payment means the same. Not accepted for a CC \\
 \bottomrule
 \end{tabularx}
 \end{center}
