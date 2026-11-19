@@ -18,7 +18,17 @@ claude mcp add --transport http tafs https://<backend-host>/api/v1/mcp
 ```
 
 In claude.ai: Settings → Connectors → Add custom connector, URL
-`https://<backend-host>/api/v1/mcp`. The client finds everything else itself:
+`https://<backend-host>/api/v1/mcp`.
+
+In ChatGPT (web, developer mode): add a custom MCP server with the same URL
+and OAuth authentication (TAFSD-540). Because this server sends the RFC 9207
+`iss` parameter, ChatGPT uses its stable callback
+`https://chatgpt.com/connector_platform_oauth_redirect`, which is allowed by
+default. If a ChatGPT connector ever shows a per-connector callback
+(`https://chatgpt.com/connector/oauth/<id>`) instead, add that exact URI to
+`MCP_OAUTH_REDIRECT_URIS` (together with the defaults).
+
+The client finds everything else itself:
 
 1. `POST /api/v1/mcp` without a token → **401** with
    `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource/api/v1/mcp"`.
@@ -27,12 +37,16 @@ In claude.ai: Settings → Connectors → Add custom connector, URL
    and `/.well-known/oauth-authorization-server`. The issuer is the backend
    origin.
 3. Dynamic client registration, `POST /api/v1/mcp/oauth/register` (RFC 7591).
-   Public clients only (no secret). Redirect URIs must be loopback
+   Public clients only (no secret). A client asking for `client_secret_post` /
+   `client_secret_basic` is registered as public and told so
+   (`token_endpoint_auth_method: "none"`); other methods are refused.
+   Redirect URIs must be loopback
    `http://localhost` / `127.0.0.1` (any port), or an `https` URI listed
    **exactly** in `MCP_OAUTH_REDIRECT_URIS` (default
-   `https://claude.ai/api/mcp/auth_callback` and
-   `https://claude.com/api/mcp/auth_callback`; no other path, subdomain or
-   port). Rate-limited to 20 registrations per address and 500 overall per
+   `https://claude.ai/api/mcp/auth_callback`,
+   `https://claude.com/api/mcp/auth_callback` and
+   `https://chatgpt.com/connector_platform_oauth_redirect`; no other path,
+   subdomain or port). Rate-limited to 20 registrations per address and 500 overall per
    hour, per instance.
 4. `GET /api/v1/mcp/oauth/authorize` checks the client, the exact redirect URI
    (a loopback port may differ, RFC 8252) and a PKCE **S256** challenge
@@ -116,8 +130,9 @@ No token or code is ever written to a log.
     work); request headers are never trusted to name the issuer there.
     Outside production it falls back to `X-Forwarded-*` / `Host`.
   - `MCP_OAUTH_REDIRECT_URIS` (optional): exact https redirect URIs clients may
-    register, comma-separated. Default the claude.ai and claude.com connector
-    callbacks above. (Replaces `MCP_OAUTH_REDIRECT_HOSTS`, which never
+    register, comma-separated. Default the claude.ai, claude.com and ChatGPT
+    connector callbacks above. Setting it replaces the defaults, so list them
+    too. (Replaces `MCP_OAUTH_REDIRECT_HOSTS`, which never
     shipped.)
 - The backend origin root must route `/.well-known/*` to the backend.
 - CORS with credentials now allows only `tafs-webapp.vercel.app`, this
