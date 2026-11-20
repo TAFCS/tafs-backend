@@ -16,18 +16,21 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { JwtParentGuard } from '../../common/guards/jwt-parent.guard';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
 import { CurrentUser } from '../../decorators/current-user.decorator';
 import { RequireAction } from '../../decorators/require-action.decorator';
 import { createApiResponse } from '../../utils/serializer.util';
-import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
+import type { IJwtParentPayload, IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import {
     ExamFeeDatePreviewDto,
     ExamIssueDto,
     ExamOverrideDto,
     ExamPresetCreateDto,
+    ExamReleaseDto,
     ExamRosterQueryDto,
+    ExamUnreleaseDto,
     ExamScheduleListQueryDto,
     ExamScheduleStatusDto,
     ExamScheduleFeeDateDto,
@@ -256,6 +259,33 @@ export class ExamDocumentsController {
         res.send(buffer);
     }
 
+    // TAFSD-544: its own action, because it reaches every parent in the release.
+    @Post('schedules/:id/documents/release')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Release issued documents to the parent app: a push, and a document card on the Notice Board' })
+    @RequireAction('student.exam_documents#release')
+    async release(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ExamReleaseDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        const out = await this.service.release(id, dto, user);
+        return createApiResponse(out, HttpStatus.OK, `${out.released} released to the app`);
+    }
+
+    @Post('schedules/:id/documents/unrelease')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Undo a release: the card leaves the parent app. No notification is sent' })
+    @RequireAction('student.exam_documents#release')
+    async unrelease(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ExamUnreleaseDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        const out = await this.service.unrelease(id, dto, user);
+        return createApiResponse(out, HttpStatus.OK, `${out.unreleased} taken out of the app`);
+    }
+
     @Post('schedules/:id/documents/override')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'Issue to one student who still owes dues, with a reason' })
@@ -279,5 +309,46 @@ export class ExamDocumentsController {
             'Access-Control-Expose-Headers': 'Content-Disposition, X-Issued-Count, X-Reprinted-Count, X-Skipped-Count, X-Run-Id',
         });
         res.send(out.buffer);
+    }
+}
+
+/**
+ * TAFSD-544: the parent app's side. A family sees the exam documents released to
+ * it as Notice Board cards and opens each one's PDF; nothing else.
+ */
+@ApiTags('Exam Document Notifications')
+@Controller('exam-document-notifications')
+@UseGuards(JwtParentGuard)
+export class ExamDocumentNotificationsController {
+    constructor(private readonly service: ExamDocumentsService) {}
+
+    @Get()
+    @ApiOperation({ summary: "The family's exam document cards, newest first, 20 at a time (cursor: the last id)" })
+    async list(@CurrentUser() user: IJwtParentPayload, @Query('cursor') cursor?: string) {
+        const c = cursor ? parseInt(cursor, 10) : undefined;
+        return createApiResponse(
+            await this.service.familyNotifications(user.familyId, Number.isFinite(c) ? c : undefined),
+            HttpStatus.OK,
+            'Exam documents fetched',
+        );
+    }
+
+    @Post(':id/read')
+    @ApiOperation({ summary: 'Mark a card read' })
+    async read(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtParentPayload) {
+        return createApiResponse(await this.service.markFamilyNotificationRead(id, user.familyId), HttpStatus.OK, 'Marked as read');
+    }
+
+    @Get(':id/pdf')
+    @ApiOperation({ summary: "The document's current PDF. Records that the parent opened it" })
+    async pdf(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtParentPayload, @Res() res: Response) {
+        const { buffer, filename } = await this.service.familyNotificationPdf(id, user.familyId);
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': `inline; filename="${filename}"`,
+            'Content-Length': buffer.length,
+            'Access-Control-Expose-Headers': 'Content-Disposition',
+        });
+        res.send(buffer);
     }
 }

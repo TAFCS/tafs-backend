@@ -290,28 +290,29 @@ model family_credit_ledger {
 }
 
 model families {
-  id                       Int                        @id @default(autoincrement())
-  legacy_pid               String?                    @db.VarChar(50)
-  household_name           String                     @db.VarChar(100)
-  primary_address          String?
-  password_hash            String?                    @db.VarChar(255)
-  created_at               DateTime?                  @default(now()) @db.Timestamp(6)
-  deleted_at               DateTime?                  @db.Timestamp(6)
-  email                    String?                    @db.VarChar(100)
-  home_phone               String?                    @db.VarChar(20)
-  attendance_notifications attendance_notifications[]
-  calendar_notifications   calendar_notifications[]
-  chat_conversations       chat_conversations?
-  family_refresh_tokens    family_refresh_tokens[]
-  fcm_device_tokens        fcm_device_tokens[]
-  message_acknowledgments  message_acknowledgments[]
-  notice_post_reads        notice_post_reads[]
-  parent_change_requests   parent_change_requests[]
-  student_siblings         student_siblings[]
-  students                 students[]
-  support_tickets          support_tickets[]
-  voucher_notifications    voucher_notifications[]
-  family_credit_ledger     family_credit_ledger[]
+  id                          Int                           @id @default(autoincrement())
+  legacy_pid                  String?                       @db.VarChar(50)
+  household_name              String                        @db.VarChar(100)
+  primary_address             String?
+  password_hash               String?                       @db.VarChar(255)
+  created_at                  DateTime?                     @default(now()) @db.Timestamp(6)
+  deleted_at                  DateTime?                     @db.Timestamp(6)
+  email                       String?                       @db.VarChar(100)
+  home_phone                  String?                       @db.VarChar(20)
+  attendance_notifications    attendance_notifications[]
+  calendar_notifications      calendar_notifications[]
+  chat_conversations          chat_conversations?
+  family_refresh_tokens       family_refresh_tokens[]
+  fcm_device_tokens           fcm_device_tokens[]
+  message_acknowledgments     message_acknowledgments[]
+  notice_post_reads           notice_post_reads[]
+  parent_change_requests      parent_change_requests[]
+  student_siblings            student_siblings[]
+  students                    students[]
+  support_tickets             support_tickets[]
+  voucher_notifications       voucher_notifications[]
+  exam_document_notifications exam_document_notifications[]
+  family_credit_ledger        family_credit_ledger[]
 
   // TAFSD-399: parent login and signup look families up by exact email.
   @@index([email], map: "idx_families_email")
@@ -886,6 +887,7 @@ model students {
   student_documents             student_documents[]
   support_tickets               support_tickets[]
   voucher_notifications         voucher_notifications[]
+  exam_document_notifications   exam_document_notifications[]
   vouchers                      vouchers[]
   zk_attendance_scans           zk_attendance_scans[]
 
@@ -3537,29 +3539,35 @@ model exam_schedule_papers {
 /// TAFSD-510: an admit card / statement of entry issued to one student from one
 /// schedule. One per student per schedule; a reprint keeps the serial.
 model exam_documents {
-  id               Int            @id @default(autoincrement())
-  schedule_id      Int
-  student_id       Int
+  id                          Int                           @id @default(autoincrement())
+  schedule_id                 Int
+  student_id                  Int
   /// ADMIT_CARD | STATEMENT_OF_ENTRY
-  doc_type         String         @db.VarChar(30)
+  doc_type                    String                        @db.VarChar(30)
   /// Per schedule, from 1.
-  serial_no        Int
-  class_id         Int
-  section_id       Int?
-  issued_at        DateTime       @default(now()) @db.Timestamp(6)
-  issued_by        String         @db.VarChar(100)
-  print_count      Int            @default(1)
-  last_printed_at  DateTime       @default(now()) @db.Timestamp(6)
+  serial_no                   Int
+  class_id                    Int
+  section_id                  Int?
+  issued_at                   DateTime                      @default(now()) @db.Timestamp(6)
+  issued_by                   String                        @db.VarChar(100)
+  print_count                 Int                           @default(1)
+  last_printed_at             DateTime                      @default(now()) @db.Timestamp(6)
   /// Dues owed through the fee date when it was issued (0 unless overridden).
-  dues_outstanding Decimal        @default(0) @db.Decimal(12, 2)
+  dues_outstanding            Decimal                       @default(0) @db.Decimal(12, 2)
   /// The fee date the student was checked against: the schedule's, or their own.
-  fee_date         DateTime?      @db.Date
-  override_reason  String?
-  overridden_by    String?        @db.VarChar(100)
+  fee_date                    DateTime?                     @db.Date
+  override_reason             String?
+  overridden_by               String?                       @db.VarChar(100)
+  /// TAFSD-544: when the document was released to the parent app, by whom, and
+  /// the school's optional message. Null until released; a reprint keeps it.
+  released_at                 DateTime?                     @db.Timestamp(6)
+  released_by                 String?                       @db.VarChar(100)
+  release_message             String?                       @db.VarChar(500)
   /// Restrict: a schedule with issued documents can't be deleted.
-  exam_schedules   exam_schedules @relation(fields: [schedule_id], references: [id], onDelete: Restrict)
-  students         students       @relation(fields: [student_id], references: [cc], onDelete: Cascade)
-  classes          classes        @relation(fields: [class_id], references: [id])
+  exam_schedules              exam_schedules                @relation(fields: [schedule_id], references: [id], onDelete: Restrict)
+  students                    students                      @relation(fields: [student_id], references: [cc], onDelete: Cascade)
+  classes                     classes                       @relation(fields: [class_id], references: [id])
+  exam_document_notifications exam_document_notifications[]
 
   @@unique([schedule_id, student_id])
   @@unique([schedule_id, serial_no])
@@ -3592,6 +3600,31 @@ model exam_document_runs {
   exam_schedules exam_schedules @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
 
   @@index([schedule_id, created_at])
+}
+
+/// TAFSD-544: a released exam document as it appears in the family's app: the
+/// Notice Board card and the push that announced it. One per document; the card
+/// always opens the document's current PDF, so a reprint needs no new row.
+model exam_document_notifications {
+  id               Int            @id @default(autoincrement())
+  family_id        Int
+  student_cc       Int
+  exam_document_id Int            @unique
+  /// ADMIT_CARD | STATEMENT_OF_ENTRY
+  doc_type         String         @db.VarChar(30)
+  title            String         @db.VarChar(255)
+  body             String
+  /// The school's optional message, shown on the card and above the document.
+  message          String?        @db.VarChar(500)
+  read_at          DateTime?      @db.Timestamp(6)
+  /// First time the parent opened the document.
+  opened_at        DateTime?      @db.Timestamp(6)
+  created_at       DateTime       @default(now()) @db.Timestamp(6)
+  families         families       @relation(fields: [family_id], references: [id], onDelete: Cascade)
+  students         students       @relation(fields: [student_cc], references: [cc], onDelete: Cascade)
+  exam_documents   exam_documents @relation(fields: [exam_document_id], references: [id], onDelete: Cascade)
+
+  @@index([family_id, created_at(sort: Desc)])
 }
 
 /// TAFSD-510: a student's own fee date on a schedule, set from the Students tab.
