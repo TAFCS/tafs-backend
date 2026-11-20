@@ -11,6 +11,7 @@ import {
   Matches,
   MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
 
 /** "1,2,3" or ["1","2"] → [1, 2, 3]. Empty means "all". */
@@ -160,6 +161,16 @@ export class ArchiveDocumentDto {
   @ApiProperty({ example: 'Uploaded on the wrong student' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(500)
+  reason: string;
+}
+
+/** TAFSD-541: why a version is being deleted. Required, at least a few characters. */
+export class DeleteVersionDto {
+  @ApiProperty({ example: 'Wrong student: this is her sister\'s B-Form' })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(5, { message: 'Give a reason of at least 5 characters' })
   @MaxLength(500)
   reason: string;
 }
