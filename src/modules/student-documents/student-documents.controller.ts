@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   HttpStatus,
@@ -31,6 +32,7 @@ import {
   ArchiveDocumentDto,
   ContextQueryDto,
   CreateDocumentTypeDto,
+  DeleteVersionDto,
   LinkQueryDto,
   MissingQueryDto,
   SummaryQueryDto,
@@ -54,13 +56,14 @@ export class StudentDocumentsController {
   constructor(private readonly service: StudentDocumentsService) {}
 
   private perms(user: IJwtStaffPayload): VaultPerms {
-    if (isSuperAdmin(user)) return { upload: true, replace: true, archive: true, viewRestricted: true };
+    if (isSuperAdmin(user)) return { upload: true, replace: true, archive: true, delete: true, viewRestricted: true };
     const held = new Set(user.actions ?? []);
     const has = (id: string) => actionsCover(held, vaultAction(id));
     return {
       upload: has('upload'),
       replace: has('replace'),
       archive: has('archive'),
+      delete: has('delete'),
       viewRestricted: has('view_restricted'),
     };
   }
@@ -182,6 +185,22 @@ export class StudentDocumentsController {
   ) {
     const data = await this.service.makeCurrent(id, versionId, user, this.perms(user), ctx.cc);
     return createApiResponse(data, HttpStatus.OK, 'Version made current');
+  }
+
+  @Delete('versions/:id')
+  @ApiOperation({
+    summary: 'Delete a wrong version (TAFSD-541). The file is removed from storage; the record stays. Reason required.',
+  })
+  @CheckPolicies(canRead)
+  @RequireAction(vaultAction('delete'))
+  async deleteVersion(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: DeleteVersionDto,
+    @Query() ctx: ContextQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.service.deleteVersion(id, dto.reason, user, this.perms(user), ctx.cc);
+    return createApiResponse(data, HttpStatus.OK, 'Version deleted');
   }
 
   @Post(':id/archive')

@@ -207,3 +207,47 @@ export function slug(s: string): string {
     .toLowerCase()
     .slice(0, 60) || 'document';
 }
+
+// ─── Deleted versions (TAFSD-541) ─────────────────────────────────────────
+
+/** Minimum length of the reason for deleting a version. */
+export const MIN_DELETE_REASON = 5;
+
+export type VersionState = { id: number; version_no: number; deleted_at: Date | null };
+
+/** Versions still on file, newest first. Deleted ones never show anywhere. */
+export function liveVersions<T extends VersionState>(versions: T[]): T[] {
+  return versions.filter((v) => v.deleted_at == null).sort((a, b) => b.version_no - a.version_no);
+}
+
+/** The current version: the highest-numbered one that is not deleted, or null when none is left. */
+export function currentVersion<T extends VersionState>(versions: T[]): T | null {
+  return liveVersions(versions)[0] ?? null;
+}
+
+/**
+ * The number the next version gets. Counted over EVERY row, deleted ones
+ * included, so a number is never reused: delete v3 of 3 and the next upload
+ * is v4, not a second v3 (the (document_id, version_no) unique index would
+ * refuse it, and "version 3" would mean two different files in the log).
+ */
+export function nextVersionNo(versions: Pick<VersionState, 'version_no'>[]): number {
+  return versions.reduce((max, v) => Math.max(max, v.version_no), 0) + 1;
+}
+
+/**
+ * A document with no version left is not on file: it drops out of the vault
+ * and the missing-documents checklist the way an archived one does, so its
+ * slot reads "missing" again. Its rows stay as the record.
+ */
+export function isOnFile(versions: VersionState[]): boolean {
+  return versions.some((v) => v.deleted_at == null);
+}
+
+/** Returns an error message, or null when the reason is acceptable. */
+export function checkDeleteReason(reason: string | null | undefined): string | null {
+  const r = (reason ?? '').trim();
+  if (r.length < MIN_DELETE_REASON) return `Give a reason of at least ${MIN_DELETE_REASON} characters`;
+  if (r.length > 500) return 'Keep the reason under 500 characters';
+  return null;
+}
