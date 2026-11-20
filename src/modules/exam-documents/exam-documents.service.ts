@@ -23,6 +23,7 @@ import {
     ExamPresetCreateDto,
     ExamReleaseDto,
     ExamRosterQueryDto,
+    ExamUnreleaseDto,
     ExamScheduleListQueryDto,
     ExamScheduleUpsertDto,
     ExamStudentFeeDatesDto,
@@ -1409,6 +1410,51 @@ export class ExamDocumentsService {
             no_family: count('NO_FAMILY'),
             not_found: count('NOT_FOUND'),
             students: rows.map((r) => ({ cc: r.cc, name: r.name, outcome: r.outcome, reason: RELEASE_OUTCOME_LABEL[r.outcome] })),
+        };
+    }
+
+    /**
+     * Undo a release: the card leaves the family's Notice Board and the document
+     * goes back to "not released". No push. Releasing again later sends a new one.
+     */
+    async unrelease(id: number, dto: ExamUnreleaseDto, user: Staff) {
+        await this.loadSchedule(id, user);
+        const ccs = [...new Set(dto.student_ids)];
+        const students = await this.loadStudents(ccs, user);
+        const docs = await this.prisma.exam_documents.findMany({
+            where: { schedule_id: id, student_id: { in: [...students.keys()] }, released_at: { not: null } },
+        });
+        const released = new Map(docs.map((d) => [d.student_id, d]));
+
+        await this.prisma.$transaction(async (tx) => {
+            for (const d of docs) {
+                await tx.exam_document_notifications.deleteMany({ where: { exam_document_id: d.id } });
+                await tx.exam_documents.update({
+                    where: { id: d.id },
+                    data: { released_at: null, released_by: null, release_message: null },
+                });
+            }
+        });
+        for (const d of docs) {
+            await this.auditLogs.log({
+                entity_type: 'EXAM_DOCUMENT',
+                entity_id: String(d.id),
+                action: 'UPDATED',
+                field: 'RELEASED_TO_APP',
+                old_value: `Released ${d.released_at!.toISOString()} by ${d.released_by ?? 'unknown'}`,
+                new_value: 'Release undone: removed from the parent app',
+                changed_by: this.by(user),
+                student_id: d.student_id,
+            });
+        }
+
+        const outcome = (cc: number) => (!students.has(cc) ? 'NOT_FOUND' : released.has(cc) ? 'UNRELEASED' : 'NOT_RELEASED');
+        const rows = ccs.map((cc) => ({ cc, name: students.get(cc)?.full_name ?? `C.C. ${cc}`, outcome: outcome(cc) }));
+        return {
+            unreleased: rows.filter((r) => r.outcome === 'UNRELEASED').length,
+            not_released: rows.filter((r) => r.outcome === 'NOT_RELEASED').length,
+            not_found: rows.filter((r) => r.outcome === 'NOT_FOUND').length,
+            students: rows,
         };
     }
 

@@ -30,6 +30,7 @@ import {
     ExamPresetCreateDto,
     ExamReleaseDto,
     ExamRosterQueryDto,
+    ExamUnreleaseDto,
     ExamScheduleListQueryDto,
     ExamScheduleStatusDto,
     ExamScheduleFeeDateDto,
@@ -270,6 +271,19 @@ export class ExamDocumentsController {
     ) {
         const out = await this.service.release(id, dto, user);
         return createApiResponse(out, HttpStatus.OK, `${out.released} released to the app`);
+    }
+
+    @Post('schedules/:id/documents/unrelease')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Undo a release: the card leaves the parent app. No notification is sent' })
+    @RequireAction('student.exam_documents#release')
+    async unrelease(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: ExamUnreleaseDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        const out = await this.service.unrelease(id, dto, user);
+        return createApiResponse(out, HttpStatus.OK, `${out.unreleased} taken out of the app`);
     }
 
     @Post('schedules/:id/documents/override')

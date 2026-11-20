@@ -350,6 +350,17 @@ export class ExamReleaseDto {
     message?: string;
 }
 
+/** TAFSD-544: take released documents back out of the parent app. */
+export class ExamUnreleaseDto {
+    @ApiProperty({ type: [Number], description: 'C.C. numbers whose released document should leave the parent app.' })
+    @IsArray()
+    @ArrayMinSize(1)
+    @ArrayMaxSize(800)
+    @Type(() => Number)
+    @IsInt({ each: true })
+    student_ids!: number[];
+}
+
 export class ExamOverrideDto {
     @ApiProperty()
     @Type(() => Number)

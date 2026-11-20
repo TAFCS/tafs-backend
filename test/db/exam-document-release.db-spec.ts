@@ -157,9 +157,27 @@ describe('releasing to the parent app', () => {
         expect((await staff.admin.get('/exam-document-notifications')).status).toBe(401);
     });
 
+    it('undoes a release: the card leaves the app, and a new release sends a new one', async () => {
+        await release({ student_ids: [STUDENT.A1] });
+        const undo = await staff.admin.post(`/exam-documents/schedules/${scheduleId}/documents/unrelease`).send({ student_ids: [STUDENT.A1, STUDENT.A2] });
+        expect(undo.status).toBe(200);
+        expect(undo.body.data).toMatchObject({ unreleased: 1, not_released: 1, not_found: 0 });
+        expect((await parent.get('/exam-document-notifications')).body.data).toEqual([]);
+        const doc = await prisma.exam_documents.findFirstOrThrow({ where: { student_id: STUDENT.A1 } });
+        expect([doc.released_at, doc.released_by, doc.release_message]).toEqual([null, null, null]);
+
+        const again = await release({ student_ids: [STUDENT.A1], message: 'Second time' });
+        expect(again.body.data.released).toBe(1);
+        const feed = (await parent.get('/exam-document-notifications')).body.data;
+        expect(feed).toHaveLength(1);
+        expect(feed[0].message).toBe('Second time');
+    });
+
     it('needs the release action', async () => {
         const res = await staff.clerk.post(`/exam-documents/schedules/${scheduleId}/documents/release`).send({ student_ids: [STUDENT.A1] });
         expect(res.status).toBe(403);
         expect(await prisma.exam_document_notifications.count()).toBe(0);
+        const undo = await staff.clerk.post(`/exam-documents/schedules/${scheduleId}/documents/unrelease`).send({ student_ids: [STUDENT.A1] });
+        expect(undo.status).toBe(403);
     });
 });
