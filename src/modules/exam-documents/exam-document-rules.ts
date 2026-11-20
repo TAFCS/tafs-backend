@@ -1,4 +1,4 @@
-import { CLASS_BAND_IDS } from '../../common/class-band-ids';
+import { CLASS_BAND_IDS, CLASS_IDS } from '../../common/class-band-ids';
 
 /**
  * TAFSD-510: the rules behind admit cards and statements of entry. Pure, so the
@@ -14,6 +14,18 @@ const SECONDARY_CLASS_IDS = new Set<number>(CLASS_BAND_IDS.VI_X);
 
 export function isSecondaryClass(classId: number): boolean {
     return SECONDARY_CLASS_IDS.has(classId);
+}
+
+/** VI–VIII all take Science, so their admit card says so whatever the directory holds. */
+const SCIENCE_FOR_ALL = new Set<number>([CLASS_IDS.VI, CLASS_IDS.VII, CLASS_IDS.VIII]);
+
+/**
+ * TAFSD-528: the GROUP box on an admit card. VI–VIII: SCIENCE. IX–X: the
+ * student's discipline from the directory (COMPUTER / BIOLOGY), empty when none is set.
+ */
+export function examGroup(classId: number, discipline: string | null | undefined): string {
+    if (SCIENCE_FOR_ALL.has(classId)) return 'SCIENCE';
+    return (discipline ?? '').trim().toUpperCase();
 }
 
 /** VI–X get an admit card; every other class gets a statement of entry. */

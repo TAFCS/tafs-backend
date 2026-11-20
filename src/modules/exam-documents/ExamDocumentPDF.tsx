@@ -41,9 +41,9 @@ export const EXAM_LOGO = {
 
 export interface ExamPaperLine {
     day: string;
-    /** "December 22, 2026" (statement of entry) */
+    /** "DECEMBER 22, 2026" (statement of entry) */
     date: string;
-    /** "Monday, 28-09-2026" (admit card) */
+    /** "FRIDAY, DECEMBER 11, 2026" (admit card) */
     dayDate: string;
     time: string;
     subject: string;
@@ -66,6 +66,8 @@ export interface ExamDocPage {
     father: string;
     dob: string;
     gender: string | null;
+    /** Admit card's GROUP box: SCIENCE for VI–VIII, the directory's discipline for IX–X. */
+    group: string;
     photo: string | null;
     initials: string;
     papers: ExamPaperLine[];
@@ -78,7 +80,10 @@ export interface ExamDocPage {
     /** The schedule's title, heading its notes under the notice. */
     assessment: string;
     campusLine: string;
-    addressLines: string[];
+    /** The campus record's address, in capitals; null when the campus has none. */
+    campusAddress: string | null;
+    /** Emails and website, as written. */
+    webLine: string;
     issuedLong: string;
 }
 
@@ -94,6 +99,8 @@ const NAME_BOX_W = 270;
 const s = StyleSheet.create({
     page: { padding: 18, fontFamily: F.r, fontSize: 10, color: INK },
     frame: { flex: 1, borderWidth: 1.2, borderColor: RULE, paddingTop: 10, paddingHorizontal: 16, paddingBottom: 6 },
+    /** The notice page: the same box as the front page, without the border (TAFSD-528). */
+    backFrame: { flex: 1, paddingTop: 9, paddingHorizontal: 17, paddingBottom: 7 },
     logos: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
     logoL: { width: 52, height: 50 },
     logoMotto: { width: 100, height: 29, marginTop: 4 },
@@ -101,7 +108,6 @@ const s = StyleSheet.create({
     school: { fontFamily: HEADING_FONT, fontSize: 18, textAlign: 'center', letterSpacing: 0.3, marginTop: 4 },
     docTitle: { fontFamily: HEADING_FONT, fontSize: 14, textAlign: 'center', marginTop: 4, letterSpacing: 2 },
     titleLine: { fontFamily: F.b, fontSize: 11.5, textAlign: 'center', marginTop: 1.5 },
-    serial: { fontFamily: F.b, fontSize: 8.5, textAlign: 'right', marginTop: -10, color: MUTED },
     row: { flexDirection: 'row', alignItems: 'center' },
     label: { fontFamily: F.b, fontSize: 9.5, letterSpacing: 0.3 },
     box: { borderWidth: 0.9, borderColor: RULE, paddingVertical: 3.5, paddingHorizontal: 6, justifyContent: 'center' },
@@ -116,21 +122,12 @@ const s = StyleSheet.create({
     tr: { flexDirection: 'row', borderTopWidth: 0.5, borderTopColor: '#9a9a9a' },
     td: { fontSize: 10, paddingHorizontal: 5, textAlign: 'center' },
     vline: { borderLeftWidth: 0.5, borderLeftColor: '#9a9a9a' },
-    signBox: { borderWidth: 0.9, borderColor: RULE, flexDirection: 'column', marginTop: 8, paddingBottom: 8, paddingHorizontal: 6 },
-    sign: { flex: 1, alignItems: 'center', marginHorizontal: 14 },
-    signLine: { alignSelf: 'stretch', borderTopWidth: 0.8, borderTopColor: RULE, marginBottom: 3 },
-    signLabel: { fontFamily: F.b, fontSize: 8.5, textAlign: 'center', letterSpacing: 0.3 },
     footerBox: { borderWidth: 0.9, borderColor: RULE, paddingVertical: 4, alignItems: 'center' },
     footCampus: { fontFamily: F.b, fontSize: 9, letterSpacing: 0.4 },
     footText: { fontSize: 7.5, marginTop: 1.5, textAlign: 'center', color: MUTED },
     sysNote: { fontFamily: F.i, fontSize: 7.5, textAlign: 'center', marginTop: 3, color: MUTED },
     pageNo: { fontFamily: F.b, fontSize: 9, textAlign: 'center', marginTop: 3, letterSpacing: 0.3 },
 });
-
-const SIGNATURES = [
-    ['HEAD OF THE SEGMENT', 'ACADEMIC DIRECTRESS', 'HEAD OF THE INSTITUTION'],
-    ['ACCOUNTANT', 'DIRECTRESS ADMIN. & P.-G.', 'DIRECTRESS FINANCE'],
-];
 
 const two = (n: number) => String(n).padStart(2, '0');
 
@@ -163,7 +160,7 @@ function Header({ d }: { d: ExamDocPage }) {
             {d.lines.map((l, i) => (
                 <Text key={i} style={s.titleLine}>{l}</Text>
             ))}
-            <Text style={s.serial}>S. # {d.serial}</Text>
+            {/* TAFSD-528: no serial on the printed document (kept on record for reprints). */}
         </View>
     );
 }
@@ -241,6 +238,7 @@ function AdmitFields({ d }: { d: ExamDocPage }) {
                     <View style={{ flex: 1 }} />
                     <Field label="GENDER" value={d.gender ?? ''} labelW={50} boxW={40} />
                 </View>
+                <Field label="GROUP" value={d.group} boxW={150} fitW={150} />
             </View>
             <Photo d={d} />
         </View>
@@ -271,6 +269,7 @@ const LINE_H = 11.5;
  * An admit card is one page: its rows and the schedule's notes share this height (it has
  * one heading line fewer than a statement of entry and no notice on a back page).
  */
+// TAFSD-528: the signature boxes are gone, which gives back more than the GROUP row takes.
 const ADMIT_BUDGET = 325;
 const ADMIT_NOTE_SIZES = [8.5, 8, 7.5, 7, 6.5];
 
@@ -332,7 +331,7 @@ function PapersTable({ d }: { d: ExamDocPage }) {
     const entry = d.docType === 'STATEMENT_OF_ENTRY';
     const lines = paperLines(d);
     const { pv, size } = entry ? fitTable(lines, ROWS_BUDGET) : fitAdmit(lines, d.notes);
-    const W: Record<string, number | null> = { code: 84, subject: null, day: 84, date: 104, dayDate: 150, time: 74 };
+    const W: Record<string, number | null> = { code: 84, subject: null, day: 84, date: 104, dayDate: 178, time: 74 };
     const cs = (k: string) => (W[k] ? { width: W[k] } : { flex: 1, textAlign: 'left' as const, paddingLeft: 8 });
     const cell = (v: string | null) => (v && v.trim() ? v : '-');
     const td = (k: string, v: string, extra: { fontFamily?: string } = {}) => (
@@ -404,23 +403,6 @@ function AdmitNotes({ notes, size }: { notes: string[]; size: number }) {
     );
 }
 
-function Signatures() {
-    return (
-        <View style={s.signBox}>
-            {SIGNATURES.map((labels, i) => (
-                <View key={i} style={{ flexDirection: 'row', marginTop: 26 }}>
-                    {labels.map((l) => (
-                        <View key={l} style={s.sign}>
-                            <View style={s.signLine} />
-                            <Text style={s.signLabel}>{l}</Text>
-                        </View>
-                    ))}
-                </View>
-            ))}
-        </View>
-    );
-}
-
 function Footer({ d, page, of, right }: { d: ExamDocPage; page: number; of: number; right?: string }) {
     return (
         <View style={{ marginTop: 6 }}>
@@ -430,9 +412,8 @@ function Footer({ d, page, of, right }: { d: ExamDocPage; page: number; of: numb
             </View>
             <View style={s.footerBox}>
                 <Text style={s.footCampus}>{d.campusLine}</Text>
-                {d.addressLines.map((l, i) => (
-                    <Text key={i} style={s.footText}>{l.toUpperCase()}</Text>
-                ))}
+                {d.campusAddress ? <Text style={s.footText}>{d.campusAddress}</Text> : null}
+                <Text style={s.footText}>{d.webLine}</Text>
             </View>
             <Text style={s.sysNote}>
                 THIS IS A SYSTEM GENERATED DOCUMENT ISSUED WITHOUT ALTERATION OR ERASURE, AND DOES NOT REQUIRE A SIGNATURE.
@@ -451,7 +432,7 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
                 <PapersTable d={d} />
                 {d.docType === 'ADMIT_CARD' && d.notes.length ? <AdmitNotes notes={d.notes} size={fitAdmit(paperLines(d), d.notes).noteSize} /> : <FrontNotes d={d} />}
                 <View style={{ flex: 1 }} />
-                <Signatures />
+                {/* TAFSD-528: no signature boxes on either document; the footer says none is needed. */}
                 <Footer d={d} page={1} of={of} right={of > 1 ? 'PLEASE TURN OVER FOR THE RULES OF ASSESSMENTS' : undefined} />
             </View>
         </Page>
@@ -459,7 +440,9 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
 }
 
 /** Usable height and widths of the back page, in points (A4 frame less its header and page number). */
-const BACK = { height: 680, bulletW: 495, boxW: 465, subW: 425 };
+// TAFSD-528: the school's notice sheets have wide side margins and roomy, near double-spaced bullets.
+const BACK = { height: 680, bulletW: 439, boxW: 433, subW: 393 };
+const BULLET_LH = 1.9;
 const NOTICE_SIZES = [11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5];
 const SIGN_SIZES = [92, 74, 58, 46, 0];
 
@@ -472,7 +455,7 @@ function linesFor(text: string, widthPt: number, size: number): number {
 export function noticeLayout(notice: Notice, notes: string[]): { size: number; sign: number } {
     const cambridge = notice.style === 'cambridge';
     const itemsH = (size: number) => {
-        const lh = size * (cambridge ? 1.3 : 1.5);
+        const lh = size * (cambridge ? 1.3 : BULLET_LH);
         const gap = size * 0.5;
         const w = cambridge ? BACK.boxW : BACK.bulletW;
         let h = 0;
@@ -481,8 +464,8 @@ export function noticeLayout(notice: Notice, notes: string[]): { size: number; s
             for (const sub of it.sub ?? []) h += linesFor(sub, BACK.subW, size) * lh + gap;
         }
         if (notes.length) {
-            h += size * 3; // the assessment's heading
-            for (const n of notes) h += linesFor(n, BACK.bulletW, size) * size * 1.5 + gap;
+            if (cambridge) h += size * 1.2; // the gap under the box
+            for (const n of notes) h += linesFor(n, BACK.bulletW, size) * size * BULLET_LH + gap;
         }
         return h + (cambridge ? 28 : 0); // the box's padding
     };
@@ -519,8 +502,8 @@ function BulletList({ items, size }: { items: string[]; size: number }) {
         <View>
             {items.map((n, i) => (
                 <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? size * 0.5 : 0 }]} wrap={false}>
-                    <Text style={{ width: 18, fontSize: size, lineHeight: 1.5 }}>•</Text>
-                    <Text style={{ flex: 1, fontFamily: F.i, fontSize: size, lineHeight: 1.5 }}>{n.toUpperCase()}</Text>
+                    <Text style={{ width: 18, fontSize: size, lineHeight: BULLET_LH }}>•</Text>
+                    <Text style={{ flex: 1, fontFamily: F.i, fontSize: size, lineHeight: BULLET_LH }}>{n.toUpperCase()}</Text>
                 </View>
             ))}
         </View>
@@ -536,14 +519,14 @@ function CambridgeRules({ items, size, sign }: { items: NoticeItem[]; size: numb
                         <Text style={{ width: 20, fontSize: size, lineHeight: 1.3 }}>{`${i + 1}.`}</Text>
                         <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3, textAlign: 'justify' }}>
                             {it.parts.map((p, j) => (
-                                <Text key={j} style={p.bold ? { fontFamily: F.b } : {}}>{p.text.toUpperCase()}</Text>
+                                <Text key={j} style={p.bold ? { fontFamily: F.b } : {}}>{p.text}</Text>
                             ))}
                         </Text>
                     </View>
                     {(it.sub ?? []).map((t, j) => (
                         <View key={j} style={[s.row, { alignItems: 'flex-start', marginTop: size * 0.5, paddingLeft: 40 }]}>
                             <Text style={{ width: 22, fontSize: size, lineHeight: 1.3 }}>•</Text>
-                            <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3 }}>{t.toUpperCase()}</Text>
+                            <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3, textAlign: 'justify' }}>{t}</Text>
                         </View>
                     ))}
                     {it.sub && sign ? (
@@ -562,26 +545,25 @@ function NoticePage({ d, notice, of }: { d: ExamDocPage; notice: Notice; of: num
     const { size, sign } = noticeLayout(notice, d.notes);
     return (
         <Page size="A4" style={s.page}>
-            <View style={[s.frame, { paddingTop: 8 }]}>
-                <Text style={{ fontFamily: F.b, fontSize: 8, color: MUTED, textAlign: 'right', letterSpacing: 0.3 }}>
-                    {`${d.name}  ·  C.C. # ${d.cc}  ·  ${klassOf(d).toUpperCase()}  ·  S. # ${d.serial}`}
-                </Text>
-                <Text style={{ fontFamily: F.b, fontSize: 22, textAlign: 'center', marginTop: 18 }}>{notice.title}</Text>
+            {/* TAFSD-528: the same notice for everyone, so no name, C.C., class or serial on it. */}
+            {/* No border round the page: the school's notice sheets have none. */}
+            <View style={s.backFrame}>
+                <Text style={{ fontFamily: F.b, fontSize: 22, textAlign: 'center', marginTop: 40 }}>{notice.title}</Text>
                 <Text style={{ fontFamily: F.b, fontSize: 12.5, textAlign: 'center', marginTop: 8, marginBottom: 16 }}>{notice.subtitle}</Text>
-                <View style={{ paddingHorizontal: notice.style === 'cambridge' ? 14 : 8 }}>
+                <View style={{ paddingHorizontal: notice.style === 'cambridge' ? 30 : 36 }}>
+                    {/* The schedule's notes (the PTM line…) are the last bullets of the list, as on the school's sheets. */}
                     {notice.style === 'cambridge' ? (
-                        <CambridgeRules items={notice.items} size={size} sign={sign} />
+                        <>
+                            <CambridgeRules items={notice.items} size={size} sign={sign} />
+                            {d.notes.length ? (
+                                <View style={{ marginTop: size * 1.2 }}>
+                                    <BulletList items={d.notes} size={size} />
+                                </View>
+                            ) : null}
+                        </>
                     ) : (
-                        <BulletList items={notice.items.map(noticeItemText)} size={size} />
+                        <BulletList items={[...notice.items.map(noticeItemText), ...d.notes]} size={size} />
                     )}
-                    {d.notes.length ? (
-                        <View style={{ marginTop: size * 1.2 }}>
-                            <Text style={{ fontFamily: F.b, fontSize: size + 0.5, textDecoration: 'underline', marginBottom: size * 0.6 }}>
-                                {d.assessment}
-                            </Text>
-                            <BulletList items={d.notes} size={size} />
-                        </View>
-                    ) : null}
                 </View>
                 <View style={{ flex: 1 }} />
                 <Text style={s.pageNo}>{pageCountLabel(2, of)}</Text>

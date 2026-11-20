@@ -30,7 +30,7 @@ describe('TAFSD-528 exam document page', () => {
         expect(longDate('2027-01-05T00:00:00.000Z')).toBe('January 5, 2027');
         const d = buildExamDocPage(base());
         expect(d.papers).toEqual([
-            { day: 'TUESDAY', date: 'December 22, 2026', dayDate: 'Tuesday, 22-12-2026', time: '8:00 – 11:30', subject: 'History', code: null },
+            { day: 'TUESDAY', date: 'DECEMBER 22, 2026', dayDate: 'TUESDAY, DECEMBER 22, 2026', time: '8:00 – 11:30', subject: 'History', code: null },
         ]);
     });
 
@@ -60,12 +60,12 @@ describe('TAFSD-528 exam document page', () => {
         }
     });
 
-    it('writes every date with dashes: date of birth and the admit card\'s day & date', () => {
+    it('writes the date of birth with dashes and the admit card\'s day & date in full capitals', () => {
         const d = buildExamDocPage(base({ classId: 15, className: 'VI', schedule: { ...base().schedule, papers: [
             { class_id: 15, paper_date: new Date('2026-09-28T00:00:00Z'), time_text: '8:00 – 11:30', subject: 'Science', code: null },
         ] } }));
         expect(d.dob).toBe('22-05-2014');
-        expect(d.papers[0].dayDate).toBe('Monday, 28-09-2026');
+        expect(d.papers[0].dayDate).toBe('MONDAY, SEPTEMBER 28, 2026');
     });
 
     it('leaves missing G.R., father and date of birth empty for the PDF to dash', () => {
@@ -106,6 +106,25 @@ describe('TAFSD-528 exam document page', () => {
         const fit = fitAdmit(Array<number>(10).fill(1), Array<string>(9).fill('NO PRE OR POST ASSESSMENT WILL BE CONDUCTED, AND THE RESULT WILL BE ANNOUNCED IN THE PTM.'));
         expect(fit.size).toBe(10);
         expect(fit.noteSize).toBeGreaterThanOrEqual(8);
+    });
+
+    it('fills the admit card GROUP: SCIENCE for VI–VIII, the directory discipline for IX–X', () => {
+        const at = (classId: number, discipline: string | null) =>
+            buildExamDocPage(base({ classId, className: 'X', student: { ...base().student, discipline } })).group;
+        expect(at(15, null)).toBe('SCIENCE');
+        expect(at(17, 'Pre-Medical')).toBe('SCIENCE');
+        expect(at(18, 'Computer')).toBe('COMPUTER');
+        expect(at(19, ' biology ')).toBe('BIOLOGY');
+        expect(at(18, null)).toBe('');
+        // A statement of entry has no GROUP box.
+        expect(at(9, 'Computer')).toBe('');
+    });
+
+    it('fills the schedule title into the notice, as on the school\'s sheets', () => {
+        const d = buildExamDocPage(base({ classId: 4, className: 'Jr. I' }));
+        expect(d.notice!.items.map((i) => i.parts.map((p) => p.text).join(''))).toContain(
+            'IN FAILURE TO BRING STATEMENT OF ENTRY, NO STUDENT WILL BE ALLOWED TO APPEAR IN THE FIRST SEMESTER ASSESSMENTS.',
+        );
     });
 
     it('keeps a long name on one line of its box', () => {

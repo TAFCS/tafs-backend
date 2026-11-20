@@ -21,8 +21,8 @@ const CLASS_NAME: Record<number, string> = {
 };
 
 const STUDENTS: ExamDocPageInput['student'][] = [
-    { cc: 4137, gr: '6120', fullName: 'Hamza Arif', father: 'Muhammad Arif Siddiqui', dob: new Date('2014-05-22'), gender: 'Male' },
-    // Missing G.R., father and date of birth: those boxes show a centred dash.
+    { cc: 4137, gr: '6120', fullName: 'Hamza Arif', father: 'Muhammad Arif Siddiqui', dob: new Date('2014-05-22'), gender: 'Male', discipline: 'Computer' },
+    // Missing G.R., father, date of birth and (IX–X) group: those boxes show a centred dash.
     { cc: 7412, gr: null, fullName: 'Ayesha Kamran Qureshi', father: '', dob: null, gender: 'Female' },
 ];
 
@@ -59,8 +59,9 @@ async function main() {
                     segmentLine: b.segment_line ?? null,
                     academicYear: b.academic_year,
                     notes: b.notes,
-                    campusName: 'CAMPUS # II',
-                    campusAddress: null,
+                    // As stored on the Gulistan-e-Johar campus record in production (saved there 2026-11-21).
+                    campusName: 'Gulistan-e-Johar Campus',
+                    campusAddress: 'C-61, 62, 63, 64 & 65, Block 13, Gulistan-e-Jauhar, Karachi · Phone (92-21) 3476-5111-13 · Fax (92-21) 3476-5114',
                     papers: b.papers.map((p: any) => ({ ...p, paper_date: new Date(`${p.paper_date}T00:00:00Z`), code: p.code ?? null })),
                 },
                 classId: set.classId,

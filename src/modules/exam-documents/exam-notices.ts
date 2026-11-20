@@ -32,14 +32,18 @@ const rich = (...parts: (string | [string])[]): NoticeItem => ({
     parts: parts.map((p) => (typeof p === 'string' ? { text: p } : { text: p[0], bold: true })),
 });
 
+/** Stands for the schedule's title in a notice line; see noticeForSchedule. */
+export const ASSESSMENT = '{ASSESSMENT}';
+
 const REVIEW = 'KINDLY REVIEW THE WORK DONE AS PER THE SYLLABUS OUTLINE WITH YOUR CHILD SO THAT HE / SHE MAY ACHIEVE THE BEST GRADES.';
 const RESOURCES = 'RESOURCE MATERIALS : LECTURES, TEXT BOOKS, REFERENCE BOOKS, REGISTERS / NOTE BOOKS & DLCB PORTAL.';
 const SHARED_TAIL = [
     'NO BAGS AND NOTEBOOKS ARE ALLOWED DURING THE ASSESSMENTS.',
     'USAGE OF ASSESSMENT BOARD IS NOT ALLOWED.',
     'NO LENDING OR BORROWING WILL BE ALLOWED, STUDENTS HAVE TO BRING TRANSPARENT POUCHES FOR THEIR STATIONERY.',
-    'IN FAILURE TO BRING STATEMENT OF ENTRY, NO STUDENT WILL BE ALLOWED TO APPEAR IN THE ASSESSMENTS.',
-    "IN CASE OF SCHOOL'S CLOSURE DUE TO ANY CITY DISTURBANCE, ASSESSMENT OF THAT DAY WILL BE ASSESSED AFTER THE LAST SCHEDULED ASSESSMENT.",
+    // {ASSESSMENT} is the schedule's title, e.g. "FIRST SEMESTER ASSESSMENTS", as on the school's sheets.
+    `IN FAILURE TO BRING STATEMENT OF ENTRY, NO STUDENT WILL BE ALLOWED TO APPEAR IN THE ${ASSESSMENT}.`,
+    'IN CASE OF SCHOOL’S CLOSURE DUE TO ANY CITY DISTURBANCE, ASSESSMENT OF THAT DAY WILL BE ASSESSED AFTER THE LAST SCHEDULED ASSESSMENT.',
     'NO PRE OR POST ASSESSMENT WILL BE CONDUCTED.',
     "IF A STUDENT FAILS TO BE PRESENT ON THE DAY OF ASSESSMENT THEN THAT SUBJECT WILL BE MARKED AS 'NO RESULT' IN THE STATEMENT OF RESULT.",
 ];
@@ -104,3 +108,31 @@ export function noticeForClass(classId: number): Notice {
 }
 
 export const noticeItemText = (i: NoticeItem) => i.parts.map((p) => p.text).join('');
+
+/**
+ * TAFSD-528: which of the schedule's notes go on a statement of entry's back page.
+ * The schedule's notes are written for the schedule sheet and repeat most of the
+ * notice, so the back page keeps to the school's notice sheets: for Junior and
+ * Senior, only the results / PTM line as the last bullet; the Cambridge notice
+ * (O and A Level) stands on its own.
+ */
+export function backPageNotes(notice: Notice, notes: string[]): string[] {
+    if (notice.style === 'cambridge') return [];
+    const results = notes.find((n) => /\bRESULTS?\b[^.]*\b(DISTRIBUTED|ANNOUNCED)\b/i.test(n));
+    return results ? [results] : [];
+}
+
+/**
+ * TAFSD-528: the notice for this class with the schedule's title filled in, so a
+ * line reads "... APPEAR IN THE FIRST SEMESTER ASSESSMENTS." as on the school's
+ * sheets (Junior / Senior / O and A Level, shared in the group).
+ */
+export function noticeForSchedule(classId: number, assessment: string): Notice {
+    const base = noticeForClass(classId);
+    const title = assessment.trim().toUpperCase() || 'ASSESSMENTS';
+    const fill = (t: string) => t.split(ASSESSMENT).join(title);
+    return {
+        ...base,
+        items: base.items.map((it) => ({ ...it, parts: it.parts.map((p) => ({ ...p, text: fill(p.text) })), sub: it.sub?.map(fill) })),
+    };
+}

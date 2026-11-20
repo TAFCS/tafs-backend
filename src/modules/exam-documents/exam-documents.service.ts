@@ -1638,7 +1638,15 @@ export class ExamDocumentsService {
             sectionName: doc.section_id != null ? sections.get(doc.section_id) ?? null : null,
             serialNo: doc.serial_no,
             issuedAt: doc.issued_at,
-            student: { cc: s.cc, gr: s.gr_number, fullName: s.full_name, father, dob: s.dob, gender: s.gender },
+            student: {
+                cc: s.cc,
+                gr: s.gr_number,
+                fullName: s.full_name,
+                father,
+                dob: s.dob,
+                gender: s.gender,
+                discipline: s.student_admissions[0]?.discipline ?? null,
+            },
             photo: photos.get(s.cc) ?? null,
         });
     }
