@@ -62,8 +62,10 @@ $ npm run start:prod
 # unit tests
 $ npm run test
 
-# e2e tests
-$ npm run test:e2e
+# DB tests: the whole app over HTTP against a throwaway Postgres
+# (never the repo's .env; see test/db/README.md)
+$ DATABASE_URL=postgresql://postgres@localhost:55432/tafs_test npm run test:db:setup
+$ DATABASE_URL=postgresql://postgres@localhost:55432/tafs_test npm run test:db
 
 # test coverage
 $ npm run test:cov
