@@ -13,6 +13,7 @@ import {
 import { BulkVoucherJobsService } from './bulk-voucher-jobs.service';
 import { PreviewBulkRequestDto } from './dto/preview-bulk-request.dto';
 import { StartBulkJobDto } from './dto/start-bulk-job.dto';
+import { StartHeldBackJobDto } from './dto/start-held-back-job.dto';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
 import { PoliciesGuard } from '../../common/guards/policies.guard';
 import { TileActionGuard } from '../../common/guards/tile-action.guard';
@@ -127,6 +128,36 @@ export class BulkVoucherJobsController {
         return {
             success: true,
             message: `Bulk voucher job #${id} resumed as job #${result.job_id}`,
+            data: result,
+        };
+    }
+
+    /**
+     * POST /api/v1/bulk-voucher-jobs/:id/held-back
+     *
+     * TAFSD-547: starts a new job for the students job :id held back for
+     * arrears, with the settings in the body (prefilled from :id in the
+     * webapp). Same grant as starting any bulk job; every student must be in
+     * the caller's scope. The new job is linked back to :id.
+     */
+    @Post(':id/held-back')
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @HttpCode(HttpStatus.ACCEPTED)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Create, 'Voucher') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    @RequireAction('finance.bulk_voucher#start')
+    async startHeldBackJob(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: StartHeldBackJobDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        const result = await this.bulkVoucherJobsService.startHeldBackJob(id, dto, user);
+        return {
+            success: true,
+            message: `Bulk voucher job #${result.job_id} started for the ${result.student_count} student(s) held back by job #${id}`,
             data: result,
         };
     }
