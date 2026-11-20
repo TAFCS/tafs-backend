@@ -3481,6 +3481,7 @@ model exam_schedules {
   exam_schedule_papers    exam_schedule_papers[]
   exam_documents          exam_documents[]
   exam_schedule_fee_dates exam_schedule_fee_dates[]
+  exam_document_runs      exam_document_runs[]
 
   @@index([campus_id, academic_year])
 }
@@ -3563,6 +3564,34 @@ model exam_documents {
   @@unique([schedule_id, student_id])
   @@unique([schedule_id, serial_no])
   @@index([student_id])
+}
+
+/// TAFSD-543: one press of Issue on a schedule (a class, a selection, or every
+/// listed student). Every student the run was asked for is in `students` with
+/// what happened to them: ISSUED, REPRINTED or SKIPPED with a reason, plus any
+/// gaps the document was printed with (no photo, no father, no date of birth).
+/// Written once, after the documents, and never edited: it is the report of
+/// that run, kept so it can be opened again.
+model exam_document_runs {
+  id             Int            @id @default(autoincrement())
+  schedule_id    Int
+  /// What was selected, e.g. "Sr. I – A, Sr. I – B"
+  label          String         @db.VarChar(300)
+  requested      Int
+  issued         Int
+  reprinted      Int
+  skipped        Int
+  /// Documents printed with a missing photo, father or date of birth.
+  with_gaps      Int            @default(0)
+  /// [{ cc, gr, name, class, section, outcome, reason_code, reason, owed, fee_date, serial, gaps }]
+  students       Json           @default("[]")
+  /// Set when the documents were issued but the PDF could not be made.
+  error          String?
+  created_by     String         @db.VarChar(100)
+  created_at     DateTime       @default(now()) @db.Timestamp(6)
+  exam_schedules exam_schedules @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+
+  @@index([schedule_id, created_at])
 }
 
 /// TAFSD-510: a student's own fee date on a schedule, set from the Students tab.

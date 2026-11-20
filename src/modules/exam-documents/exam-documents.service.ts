@@ -47,6 +47,18 @@ import type { ExamScheduleStatus } from './exam-document-rules';
 import { ExamDocPage, ExamDocumentsPDF } from './ExamDocumentPDF';
 import { buildExamDocPage, dmy } from './exam-document-page';
 import { buildScheduleWorkbook } from './exam-schedule-export';
+import {
+    RunStudent,
+    SKIP_REASONS,
+    SkipCode,
+    buildRunWorkbook,
+    duesSkip,
+    eligibilitySkip,
+    gapsOf,
+    runCounts,
+    runLabel,
+    sortRunStudents,
+} from './exam-document-runs';
 import { campusOnSheet, inferScheduleLayout, isScheduleLayout, presetRows } from './exam-schedule-layouts';
 
 type Staff = IJwtStaffPayload;
@@ -92,6 +104,22 @@ const STUDENT_SELECT = {
 } satisfies Prisma.studentsSelect;
 
 type StudentRow = Prisma.studentsGetPayload<{ select: typeof STUDENT_SELECT }>;
+
+const fatherOf = (s: StudentRow) =>
+    s.student_guardians.find((g) => g.relationship?.toLowerCase() === 'father')?.guardians?.full_name ?? '';
+
+/** TAFSD-543: what one Issue run hands back. No buffer when nothing could be printed. */
+export interface IssueOutcome {
+    buffer: Buffer | null;
+    filename: string;
+    issued: number;
+    reprinted: number;
+    skipped: number;
+    /** The saved report, or null if it could not be saved. */
+    run_id: number | null;
+    /** Documents issued but the PDF failed. */
+    error: string | null;
+}
 
 /**
  * TAFSD-510: exam schedules, and the admit cards (VI–X) / statements of entry
@@ -932,54 +960,80 @@ export class ExamDocumentsService {
     }
 
     /**
-     * Issue to cleared students and reprint for holders, as one PDF. Refuses the
-     * whole request if any student without a document still owes anything dated on
-     * or before their fee date, billed or not; those go through `override`.
+     * TAFSD-543: one Issue run. Cleared students get a new document, holders a
+     * reprint (or, with `skip_holders`, are left alone), and everyone else is
+     * skipped with the reason: nothing stops the run. The run is saved as a report
+     * (exam_document_runs) whose id goes back with the PDF. When nothing could be
+     * printed there is no PDF, only the report.
      */
-    async issue(id: number, dto: ExamIssueDto, user: Staff) {
+    async issue(id: number, dto: ExamIssueDto, user: Staff): Promise<IssueOutcome> {
         const schedule = await this.loadSchedule(id, user);
         this.assertIssuable(schedule);
         const ccs = [...new Set(dto.student_ids)];
         const students = await this.loadStudents(ccs, user);
         const existing = await this.prisma.exam_documents.findMany({ where: { schedule_id: id, student_id: { in: ccs } } });
         const held = new Map(existing.map((d) => [d.student_id, d]));
+        const classNames = new Map(schedule.exam_schedule_classes.map((c) => [c.class_id, c.classes.description]));
+        const scheduleClassIds = schedule.exam_schedule_classes.map((c) => c.class_id);
 
-        const fresh = ccs.filter((cc) => !held.has(cc));
-        const problems = fresh
-            .map((cc) => ({ cc, why: this.ineligibility(schedule, students.get(cc)) }))
-            .filter((p) => p.why);
-        if (problems.length) {
-            throw new BadRequestException(
-                `Cannot issue: ${problems.slice(0, 5).map((p) => `C.C. ${p.cc} ${p.why}`).join('; ')}${problems.length > 5 ? ` and ${problems.length - 5} more` : ''}`,
-            );
+        const report = new Map<number, RunStudent>();
+        const entry = (cc: number, over: Partial<RunStudent>): RunStudent => {
+            const s = students.get(cc);
+            const doc = held.get(cc);
+            const row: RunStudent = {
+                cc,
+                gr: s?.gr_number ?? null,
+                name: s?.full_name ?? `C.C. ${cc}`,
+                class: (doc ? classNames.get(doc.class_id) : null) ?? s?.classes?.description ?? null,
+                section: s?.sections?.description ?? null,
+                outcome: 'SKIPPED',
+                reason_code: null,
+                reason: null,
+                owed: null,
+                fee_date: null,
+                serial: null,
+                gaps: [],
+                ...over,
+            };
+            report.set(cc, row);
+            return row;
+        };
+        const skip = (cc: number, code: SkipCode, reason: string, more: Partial<RunStudent> = {}) =>
+            entry(cc, { outcome: 'SKIPPED', reason_code: code, reason, ...more });
+
+        // Holders: a reprint, unless the run was asked to leave them alone.
+        const reprint = existing.filter((d) => {
+            if (!students.has(d.student_id)) {
+                skip(d.student_id, 'NOT_FOUND', SKIP_REASONS.NOT_FOUND);
+                return false;
+            }
+            if (dto.skip_holders) {
+                skip(
+                    d.student_id,
+                    'ALREADY_ISSUED',
+                    `Already has #${formatSerial(d.serial_no)}, issued ${dmy(iso(d.issued_at)!, '-')} by ${d.issued_by}. Reprint it from the student's row if needed.`,
+                    { serial: formatSerial(d.serial_no) },
+                );
+                return false;
+            }
+            return true;
+        });
+
+        // Everyone else: their record, then their dues through their fee date.
+        const candidates: number[] = [];
+        for (const cc of ccs.filter((c) => !held.has(c))) {
+            const why = eligibilitySkip(students.get(cc), { campus_id: schedule.campus_id, class_ids: scheduleClassIds });
+            if (why) skip(cc, why.code, why.reason);
+            else candidates.push(cc);
         }
-        const reprintOutOfScope = existing.filter((d) => !students.has(d.student_id));
-        if (reprintOutOfScope.length) throw new NotFoundException('A requested student is outside your access');
-
-        const feeDateOf = await this.feeDatesFor(schedule, fresh);
+        const feeDateOf = await this.feeDatesFor(schedule, candidates);
         const dues = await this.duesForEach(feeDateOf);
-        const stateOf = (cc: number) => rosterState(false, dues.get(cc) ?? NO_DUES);
-        const blocked = fresh.filter((cc) => stateOf(cc) !== 'CLEARED');
-        if (blocked.length) {
-            // The global exception filter passes `message` and `code` through, nothing else.
-            const notBilled = blocked.filter((cc) => stateOf(cc) === 'NOT_BILLED').length;
-            const list = blocked
-                .slice(0, 10)
-                .map((cc) => {
-                    const d = dues.get(cc)!;
-                    const tag = stateOf(cc) === 'NOT_BILLED' ? ', not billed yet' : '';
-                    return `${students.get(cc)?.full_name ?? 'C.C.'} (C.C. ${cc}) Rs ${totalOwed(d).toLocaleString('en-US')} through ${feeDateLabel(feeDateOf.get(cc)!)}${tag}`;
-                })
-                .join('; ');
-            throw new UnprocessableEntityException({
-                code: 'DUES_NOT_CLEARED',
-                message:
-                    `Nothing was issued. ${blocked.length} student(s) still owe fees dated on or before their fee date: ${list}` +
-                    `${blocked.length > 10 ? ` and ${blocked.length - 10} more` : ''}.` +
-                    (notBilled ? ` ${notBilled} of them only owe fees that were never put on a voucher: generate their vouchers first.` : '') +
-                    ' Clear them, or issue with an override.',
-            });
-        }
+        const fresh = candidates.filter((cc) => {
+            const feeDate = feeDateOf.get(cc)!;
+            const why = duesSkip(dues.get(cc) ?? NO_DUES, feeDate);
+            if (why) skip(cc, why.code, why.reason, { owed: why.owed, fee_date: feeDate });
+            return !why;
+        });
 
         const now = new Date();
         const docs = await this.prisma.$transaction(async (tx) => {
@@ -1006,16 +1060,14 @@ export class ExamDocumentsService {
                     );
                 }
             }
-            const reprinted = existing.length
-                ? await Promise.all(
-                      existing.map((d) =>
-                          tx.exam_documents.update({
-                              where: { id: d.id },
-                              data: { print_count: { increment: 1 }, last_printed_at: now },
-                          }),
-                      ),
-                  )
-                : [];
+            const reprinted = await Promise.all(
+                reprint.map((d) =>
+                    tx.exam_documents.update({
+                        where: { id: d.id },
+                        data: { print_count: { increment: 1 }, last_printed_at: now },
+                    }),
+                ),
+            );
             return { created, reprinted };
         });
 
@@ -1029,16 +1081,156 @@ export class ExamDocumentsService {
                 changed_by: this.by(user),
                 student_id: d.student_id,
             });
+            entry(d.student_id, { outcome: 'ISSUED', serial: formatSerial(d.serial_no), fee_date: iso(d.fee_date) });
+        }
+        for (const d of docs.reprinted) {
+            entry(d.student_id, { outcome: 'REPRINTED', serial: formatSerial(d.serial_no), fee_date: iso(d.fee_date) });
         }
 
         const all = [...docs.created, ...docs.reprinted];
-        const buffer = await this.render(schedule, all, students);
+        let buffer: Buffer | null = null;
+        let error: string | null = null;
+        if (all.length) {
+            try {
+                const out = await this.render(schedule, all, students);
+                buffer = out.buffer;
+                for (const d of all) {
+                    const s = students.get(d.student_id)!;
+                    report.get(d.student_id)!.gaps = gapsOf({
+                        has_photo_on_file: Boolean(s.photo_blue_bg_url || s.photograph_url),
+                        photo_embedded: Boolean(out.photos.get(s.cc)),
+                        has_father: Boolean(fatherOf(s).trim()),
+                        has_dob: Boolean(s.dob),
+                    });
+                }
+            } catch (e) {
+                // The documents are issued and stay issued; reprinting them makes the PDF again.
+                this.logger.error(`Exam documents PDF failed for schedule ${id}: ${(e as Error).stack ?? e}`);
+                error = 'The documents were issued but the PDF could not be made. Reprint them from the list.';
+            }
+        }
+
+        const rows = sortRunStudents(ccs.map((cc) => report.get(cc)!).filter(Boolean));
+        const runId = await this.saveRun(schedule, rows, error, user);
+        const counts = runCounts(rows);
         return {
             buffer,
             filename: this.filename(schedule, all.length === 1 ? students.get(all[0].student_id) : undefined),
-            issued: docs.created.length,
-            reprinted: docs.reprinted.length,
+            issued: counts.issued,
+            reprinted: counts.reprinted,
+            skipped: counts.skipped,
+            run_id: runId,
+            error,
         };
+    }
+
+    /**
+     * Keep the run's report. Never fails the run: the documents are already
+     * issued, so a report that can't be saved (say, before the TAFSD-543
+     * migration is applied) only costs the "open it again later".
+     */
+    private async saveRun(schedule: ScheduleRow, rows: RunStudent[], error: string | null, user: Staff): Promise<number | null> {
+        try {
+            const run = await this.prisma.exam_document_runs.create({
+                data: {
+                    schedule_id: schedule.id,
+                    label: runLabel(rows),
+                    ...runCounts(rows),
+                    students: rows as unknown as Prisma.InputJsonValue,
+                    error,
+                    created_by: this.by(user),
+                },
+                select: { id: true },
+            });
+            return run.id;
+        } catch (e) {
+            this.logger.error(`Could not save the issue run report for schedule ${schedule.id}: ${(e as Error).message}`);
+            return null;
+        }
+    }
+
+    // ─── Run reports (TAFSD-543) ───────────────────────────────────────────
+
+    async listRuns(id: number, user: Staff) {
+        await this.loadSchedule(id, user);
+        const runs = await this.prisma.exam_document_runs.findMany({
+            where: { schedule_id: id },
+            orderBy: { created_at: 'desc' },
+            take: 100,
+            select: {
+                id: true,
+                label: true,
+                requested: true,
+                issued: true,
+                reprinted: true,
+                skipped: true,
+                with_gaps: true,
+                error: true,
+                created_by: true,
+                created_at: true,
+            },
+        });
+        return runs;
+    }
+
+    private async loadRun(id: number, runId: number, user: Staff) {
+        const schedule = await this.loadSchedule(id, user);
+        const run = await this.prisma.exam_document_runs.findFirst({ where: { id: runId, schedule_id: id } });
+        if (!run) throw new NotFoundException('Issue run not found');
+        // The report was written for whoever ran it; a viewer with a narrower scope
+        // sees only the students they can see today.
+        const rows = (run.students as unknown as RunStudent[]) ?? [];
+        const visible = new Set(
+            (
+                await this.prisma.students.findMany({
+                    where: {
+                        AND: [this.scope.whereForStudents(user) as Prisma.studentsWhereInput, { cc: { in: rows.map((r) => r.cc) } }],
+                    },
+                    select: { cc: true },
+                })
+            ).map((s) => s.cc),
+        );
+        // A NOT_FOUND row carries only the C.C. that was typed, so everyone sees it.
+        const students = rows.filter((r) => visible.has(r.cc) || r.reason_code === 'NOT_FOUND');
+        return { schedule, run, students };
+    }
+
+    async getRun(id: number, runId: number, user: Staff) {
+        const { run, students } = await this.loadRun(id, runId, user);
+        return {
+            id: run.id,
+            schedule_id: run.schedule_id,
+            label: run.label,
+            created_by: run.created_by,
+            created_at: run.created_at,
+            error: run.error,
+            counts: runCounts(students),
+            hidden: (run.students as unknown as RunStudent[]).length - students.length,
+            students: sortRunStudents(students),
+        };
+    }
+
+    async exportRun(id: number, runId: number, user: Staff): Promise<{ buffer: Buffer; filename: string }> {
+        const { schedule, run, students } = await this.loadRun(id, runId, user);
+        const createdAt = new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Asia/Karachi',
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+        }).format(run.created_at);
+        const buffer = await buildRunWorkbook({
+            scheduleTitle: schedule.title,
+            academicYear: schedule.academic_year,
+            campus: schedule.campuses.campus_name,
+            label: run.label,
+            createdBy: run.created_by,
+            createdAt,
+            students,
+        });
+        const base = `${schedule.title}-${schedule.academic_year}-issue-report-${run.id}`.replace(/[^A-Za-z0-9-]+/g, '-').replace(/-+/g, '-');
+        return { buffer, filename: `${base}.xlsx` };
     }
 
     /** Issue to one student who still owes dues, with a recorded reason. */
@@ -1094,7 +1286,7 @@ export class ExamDocumentsService {
             note: reason,
         });
 
-        const buffer = await this.render(schedule, [doc], students);
+        const { buffer } = await this.render(schedule, [doc], students);
         return { buffer, filename: this.filename(schedule, s), issued: 1, reprinted: 0 };
     }
 
@@ -1132,7 +1324,7 @@ export class ExamDocumentsService {
         schedule: ScheduleRow,
         docs: { student_id: number; class_id: number; section_id: number | null; serial_no: number; issued_at: Date; doc_type: string }[],
         students: Map<number, StudentRow>,
-    ): Promise<Buffer> {
+    ): Promise<{ buffer: Buffer; photos: Map<number, string | null> }> {
         const sectionIds = [...new Set(docs.map((d) => d.section_id).filter((x): x is number => x != null))];
         const sections = new Map(
             (await this.prisma.sections.findMany({ where: { id: { in: sectionIds } }, select: { id: true, description: true } })).map(
@@ -1149,7 +1341,7 @@ export class ExamDocumentsService {
         const photos = await this.photos(ordered.map((d) => students.get(d.student_id)!).filter(Boolean));
         const pages = ordered.map((d) => this.page(schedule, d, students.get(d.student_id)!, classNames, sections, photos));
         const element = React.createElement(ExamDocumentsPDF, { pages, title: schedule.title }) as any;
-        return Buffer.from(await renderToBuffer(element));
+        return { buffer: Buffer.from(await renderToBuffer(element)), photos };
     }
 
     private page(
@@ -1160,7 +1352,7 @@ export class ExamDocumentsService {
         sections: Map<number, string>,
         photos: Map<number, string | null>,
     ): ExamDocPage {
-        const father = s.student_guardians.find((g) => g.relationship?.toLowerCase() === 'father')?.guardians?.full_name ?? '';
+        const father = fatherOf(s);
         return buildExamDocPage({
             schedule: {
                 title: schedule.title,

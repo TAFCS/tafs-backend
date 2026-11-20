@@ -4,6 +4,7 @@ import {
     ArrayMaxSize,
     ArrayMinSize,
     IsArray,
+    IsBoolean,
     IsDateString,
     IsIn,
     IsInt,
@@ -322,6 +323,14 @@ export class ExamIssueDto {
     @Type(() => Number)
     @IsInt({ each: true })
     student_ids!: number[];
+
+    @ApiPropertyOptional({
+        description:
+            'TAFSD-543: leave students who already hold a document alone (they show in the report as already issued) instead of reprinting them. For "issue to the whole class" runs.',
+    })
+    @IsOptional()
+    @IsBoolean()
+    skip_holders?: boolean;
 }
 
 export class ExamOverrideDto {
