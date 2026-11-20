@@ -59,9 +59,9 @@ async function main() {
                     segmentLine: b.segment_line ?? null,
                     academicYear: b.academic_year,
                     notes: b.notes,
-                    // As stored on the Kaneez Fatima campus record in production.
-                    campusName: 'Kaneez Fatima Campus',
-                    campusAddress: 'B 2 Gulshan E Kaneez Fatima Society, Scheme 33, Karachi, Pakistan',
+                    // As stored on the Gulistan-e-Johar campus record in production (saved there 2026-11-21).
+                    campusName: 'Gulistan-e-Johar Campus',
+                    campusAddress: 'C-61, 62, 63, 64 & 65, Block 13, Gulistan-e-Jauhar, Karachi · Phone (92-21) 3476-5111-13 · Fax (92-21) 3476-5114',
                     papers: b.papers.map((p: any) => ({ ...p, paper_date: new Date(`${p.paper_date}T00:00:00Z`), code: p.code ?? null })),
                 },
                 classId: set.classId,
