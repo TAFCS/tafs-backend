@@ -1614,6 +1614,69 @@ export class StudentFeesService {
         };
     }
 
+    /**
+     * Gives each student one head of `fee_type_id` on `fee_date` in
+     * `academic_year`, skipping every student who already has one, in any
+     * status. That is exactly what the bulk-add previews report as "already
+     * exists" (TAFSD-545).
+     *
+     * Nothing in the schema enforces it: student_fees has no unique
+     * constraint, so the createMany({ skipDuplicates }) this replaces never
+     * skipped anything, and running a bulk add twice billed students twice.
+     * The check and the insert therefore share one transaction, under an
+     * advisory lock every bulk add takes, so two concurrent requests (a double
+     * click, a retry, two tabs) can't both see the head as missing.
+     */
+    private async addHeadsWhereMissing(args: {
+        studentIds: number[];
+        fee_type_id: number;
+        academic_year: string;
+        month: number;
+        fee_date: Date;
+        amount: number;
+        termByStudent: Map<number, number>;
+    }): Promise<{ added: number[]; existing: number[] }> {
+        const { fee_type_id, academic_year, month, fee_date, amount, termByStudent } = args;
+        const studentIds = [...new Set(args.studentIds)];
+        if (studentIds.length === 0) return { added: [], existing: [] };
+
+        return this.prisma.$transaction(
+            async (tx) => {
+                await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('student_fees.bulk_add'))`;
+
+                const have = new Set(
+                    (await tx.student_fees.findMany({
+                        where: { student_id: { in: studentIds }, fee_type_id, fee_date, academic_year },
+                        select: { student_id: true },
+                    })).map((r) => r.student_id),
+                );
+                const added = studentIds.filter((id) => !have.has(id));
+
+                if (added.length > 0) {
+                    // One createMany, not a transaction per student: opening
+                    // one per student in parallel exhausts the connection pool.
+                    await tx.student_fees.createMany({
+                        data: added.map((studentId) => ({
+                            student_id: studentId,
+                            fee_type_id,
+                            month,
+                            target_month: month,
+                            term_start_month: termByStudent.get(studentId) ?? DEFAULT_TERM_START_MONTH,
+                            academic_year,
+                            amount: new Prisma.Decimal(amount),
+                            amount_before_discount: new Prisma.Decimal(amount),
+                            amount_after_discount: new Prisma.Decimal(amount),
+                            fee_date,
+                            status: 'NOT_ISSUED' as any,
+                        })),
+                    });
+                }
+                return { added, existing: studentIds.filter((id) => have.has(id)) };
+            },
+            { maxWait: 10000, timeout: 30000 },
+        );
+    }
+
     // ─── Tab 1: Confirm ───────────────────────────────────────────────────────
 
     async bulkAdd(dto: import('./dto/bulk-add.dto').BulkAddDto, user: IJwtStaffPayload, changedBy: string = 'system') {
@@ -1622,26 +1685,18 @@ export class StudentFeesService {
         const targetDate = new Date(fee_date);
         const { termByStudent } = await this.resolveTermsForStudents(student_ids);
 
-        // Use a single createMany with skipDuplicates instead of N parallel transactions.
-        // Opening one transaction per student in parallel exhausts the connection pool.
-        const result = await this.prisma.student_fees.createMany({
-            data: student_ids.map(studentId => ({
-                student_id: studentId,
-                fee_type_id,
-                month,
-                target_month: month,
-                term_start_month: termByStudent.get(studentId) ?? DEFAULT_TERM_START_MONTH,
-                academic_year,
-                amount: new Prisma.Decimal(amount),
-                amount_before_discount: new Prisma.Decimal(amount),
-                amount_after_discount: new Prisma.Decimal(amount),
-                fee_date: targetDate,
-                status: 'NOT_ISSUED' as any,
-            })),
-            skipDuplicates: true,
+        const { added: addedIds, existing } = await this.addHeadsWhereMissing({
+            studentIds: student_ids,
+            fee_type_id,
+            academic_year,
+            month,
+            fee_date: targetDate,
+            amount,
+            termByStudent,
         });
 
-        const added = result.count;
+        const added = addedIds.length;
+        // Also counts a student listed twice in the request: they get one head.
         const skipped = student_ids.length - added;
 
         await this.auditLogs.log({
@@ -1653,7 +1708,11 @@ export class StudentFeesService {
             note: `Bulk-added fee (type #${fee_type_id}, ${academic_year}, due ${this.fmtDate(targetDate)}, ${this.fmtMoney(amount)}) targeting ${student_ids.length} student(s): ${added} row(s) created, ${skipped} already existed and were skipped.`,
         });
 
-        return { added, skipped, skipped_reasons: [] };
+        return {
+            added,
+            skipped,
+            skipped_reasons: existing.map((student_id) => ({ student_id, reason: 'already_exists' as const })),
+        };
     }
 
     // ─── Tab 2: Conflict Check ────────────────────────────────────────────────
@@ -1752,28 +1811,20 @@ export class StudentFeesService {
             const feeDateStr = `${calYear}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
             const date = new Date(feeDateStr);
 
-            // Using createMany for high-performance bulk operations (avoids timeouts on large campuses)
-            const bulkData = student_ids.map(studentId => ({
-                student_id: studentId,
+            // Students who already have this head on this date are skipped
+            // (TAFSD-545), matching the "existing" count the conflicts preview
+            // shows. The range tab sends every student in scope, so this is the
+            // normal case for a range that overlaps months added before.
+            const { added: addedIds } = await this.addHeadsWhereMissing({
+                studentIds: student_ids,
                 fee_type_id,
-                month,
-                target_month: month,
-                term_start_month: termByStudent.get(studentId) ?? DEFAULT_TERM_START_MONTH,
                 academic_year,
-                amount: new Prisma.Decimal(amount),
-                amount_before_discount: new Prisma.Decimal(amount),
-                amount_after_discount: new Prisma.Decimal(amount),
+                month,
                 fee_date: date,
-                status: 'NOT_ISSUED' as any,
-            }));
-
-            // Prisma createMany with skipDuplicates: true translates to INSERT IGNORE or ON CONFLICT DO NOTHING
-            const result = await this.prisma.student_fees.createMany({
-                data: bulkData,
-                skipDuplicates: true,
+                amount,
+                termByStudent,
             });
-
-            const added = result.count;
+            const added = addedIds.length;
             const skipped = student_ids.length - added;
 
             totalAddedNum += added;
