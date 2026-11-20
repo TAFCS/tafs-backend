@@ -3398,7 +3398,8 @@ model student_document_types {
 }
 
 /// One logical document. Exactly one of student_id / guardian_id is set. The
-/// current file is the highest version_no; versions are never edited or deleted.
+/// current file is the highest version_no that is not deleted (TAFSD-541). A
+/// document whose versions are all deleted is treated as not on file.
 model student_documents {
   id             Int                         @id @default(autoincrement())
   type_id        Int
@@ -3437,6 +3438,11 @@ model student_document_versions {
   note              String?           @db.VarChar(500)
   uploaded_by       String            @db.VarChar(255)
   uploaded_at       DateTime          @default(now()) @db.Timestamp(6)
+  /// TAFSD-541: a wrong upload, deleted. The file is gone from storage; the row
+  /// stays as the record of who deleted it and why. Its version_no is never reused.
+  deleted_at        DateTime?         @db.Timestamp(6)
+  deleted_by        String?           @db.VarChar(255)
+  delete_reason     String?           @db.VarChar(500)
   document          student_documents @relation(fields: [document_id], references: [id], onDelete: Cascade)
 
   @@unique([document_id, version_no])

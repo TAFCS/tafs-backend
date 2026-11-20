@@ -267,6 +267,8 @@ const STUDENT_DOCUMENTS_ACTIONS: TileAction[] = [
   { id: 'upload', label: 'File new documents', implies: ['view'] },
   { id: 'replace', label: 'Upload a clearer copy, or bring an older version back', implies: ['view'] },
   { id: 'archive', label: 'Archive or restore a document', implies: ['view'] },
+  // TAFSD-541: removes the file from storage for good. Off by default.
+  { id: 'delete', label: 'Delete a wrong version of a document (the file is removed for good)', implies: ['view'] },
   { id: 'view_restricted', label: 'See restricted documents (medical records)', implies: ['view'] },
   { id: 'export', label: 'Export the missing-documents report', implies: ['view'] },
   { id: 'manage_types', label: 'Manage document types', implies: ['view'] },

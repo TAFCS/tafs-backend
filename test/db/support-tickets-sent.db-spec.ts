@@ -311,3 +311,33 @@ describe('reply, then review', () => {
         expect((await as.ayesha.get('/support-tickets/sent')).body.total).toBe(0);
     });
 });
+
+// TAFSD-542: a lane removed from the flow is only soft-deleted (is_active false).
+// The lane filter keeps it only while tickets are filed under it.
+describe('lane filter (GET /support-tickets/lanes)', () => {
+    // Fixed ids: the fixture inserts the fees lane by id, so the sequence is not advanced.
+    const lane = (id: number, key: string, is_active: boolean) =>
+        prisma.ticket_lanes.upsert({
+            where: { key },
+            update: { is_active },
+            create: { id, key, name: key, icon: 'tag', color: '#64748B', legacy_category: 'GENERAL', is_active },
+        });
+
+    afterAll(async () => {
+        await prisma.ticket_lanes.deleteMany({ where: { key: { in: ['deleted-unused', 'deleted-used'] } } });
+    });
+
+    it('drops a deleted lane nobody used, keeps a deleted lane that still has tickets', async () => {
+        await lane(9101, 'deleted-unused', false);
+        const used = await lane(9102, 'deleted-used', false);
+        const t = await ticket(RESPONDERS.ayesha);
+        await prisma.support_tickets.update({ where: { id: t.id }, data: { lane_id: used.id } });
+
+        const res = await as.ayesha.get('/support-tickets/lanes');
+        expect(res.status).toBe(200);
+        const keys = (res.body.data ?? res.body).map((l: { key: string }) => l.key);
+        expect(keys).toContain('fees');
+        expect(keys).toContain('deleted-used');
+        expect(keys).not.toContain('deleted-unused');
+    });
+});

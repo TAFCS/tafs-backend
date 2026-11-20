@@ -192,6 +192,19 @@ export class StorageService {
     }
 
     /**
+     * Delete an object by its storage KEY (not a URL), e.g. a private vault
+     * file (TAFSD-541). Unlike `deleteByUrl` this throws on failure, so the
+     * caller decides whether a leftover object is acceptable and logs it.
+     */
+    async deleteByKey(key: string): Promise<void> {
+        if (!this.client) {
+            this.logger.log(`Mocking delete of ${key} (storage not configured)`);
+            return;
+        }
+        await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+    }
+
+    /**
      * Delete an object from DigitalOcean Spaces by its full CDN/public URL.
      * Silently ignores errors (best-effort cleanup).
      */
