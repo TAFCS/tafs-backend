@@ -21,8 +21,8 @@ const CLASS_NAME: Record<number, string> = {
 };
 
 const STUDENTS: ExamDocPageInput['student'][] = [
-    { cc: 4137, gr: '6120', fullName: 'Hamza Arif', father: 'Muhammad Arif Siddiqui', dob: new Date('2014-05-22'), gender: 'Male' },
-    // Missing G.R., father and date of birth: those boxes show a centred dash.
+    { cc: 4137, gr: '6120', fullName: 'Hamza Arif', father: 'Muhammad Arif Siddiqui', dob: new Date('2014-05-22'), gender: 'Male', discipline: 'Computer' },
+    // Missing G.R., father, date of birth and (IX–X) group: those boxes show a centred dash.
     { cc: 7412, gr: null, fullName: 'Ayesha Kamran Qureshi', father: '', dob: null, gender: 'Female' },
 ];
 

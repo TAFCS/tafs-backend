@@ -1,4 +1,4 @@
-import { CAMBRIDGE_NOTICE, JUNIOR_NOTICE, SENIOR_NOTICE, noticeForClass, noticeItemText } from './exam-notices';
+import { CAMBRIDGE_NOTICE, JUNIOR_NOTICE, SENIOR_NOTICE, noticeForClass, noticeItemText, backPageNotes } from './exam-notices';
 import { noticeLayout } from './ExamDocumentPDF';
 import { buildExamDocPage } from './exam-document-page';
 import { DEC_2026_SCHEDULES } from '../../../scripts/data/exam-schedules-dec-2026';
@@ -32,9 +32,23 @@ describe('TAFSD-528 notice to candidates', () => {
             student: { cc: 1, gr: null, fullName: 'A B', father: '', dob: null, gender: null },
             photo: null,
         });
-        expect(buildExamDocPage(input(9)).notice).toBe(SENIOR_NOTICE);
+        const senior = buildExamDocPage(input(9)).notice!;
+        expect([senior.style, senior.title, senior.items.length]).toEqual([SENIOR_NOTICE.style, SENIOR_NOTICE.title, SENIOR_NOTICE.items.length]);
         expect(buildExamDocPage(input(9)).assessment).toBe('FINAL');
         expect(buildExamDocPage(input(15)).notice).toBeNull();
+    });
+
+    it('keeps the back page to the school sheets: the results line for Junior / Senior, nothing for Cambridge', () => {
+        const presetNotes = [
+            'STATEMENTS OF ENTRY WILL BE ISSUED ON WEDNESDAY, DECEMBER 09, 2026, SUBJECT TO THE CLEARANCE OF DUES TILL DECEMBER 2026.',
+            'NO PRE OR POST ASSESSMENT WILL BE CONDUCTED.',
+            'THE RESULTS WILL BE DISTRIBUTED FOR THE STUDENTS OF SR.I TO SR.III IN THE PTM SCHEDULED ON SATURDAY, JANUARY 16, 2027. IN SHA ALLAH.',
+            'KINDLY CLEAR THE OUTSTANDING DUES TILL DECEMBER 2026 ON OR BEFORE, TUESDAY, DECEMBER 08, 2026 IF THERE ARE ANY.',
+        ];
+        expect(backPageNotes(SENIOR_NOTICE, presetNotes)).toEqual([presetNotes[2]]);
+        expect(backPageNotes(JUNIOR_NOTICE, ['THE RESULT WILL BE ANNOUNCED ON FRIDAY, JANUARY 15, 2027 IN SHA ALLAH.'])).toHaveLength(1);
+        expect(backPageNotes(CAMBRIDGE_NOTICE, presetNotes)).toEqual([]);
+        expect(backPageNotes(SENIOR_NOTICE, [])).toEqual([]);
     });
 
     it('fits the Cambridge notice and ten O Level notes on one page, sign included', () => {

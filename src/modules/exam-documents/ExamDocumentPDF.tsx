@@ -41,9 +41,9 @@ export const EXAM_LOGO = {
 
 export interface ExamPaperLine {
     day: string;
-    /** "December 22, 2026" (statement of entry) */
+    /** "DECEMBER 22, 2026" (statement of entry) */
     date: string;
-    /** "Monday, 28-09-2026" (admit card) */
+    /** "FRIDAY, DECEMBER 11, 2026" (admit card) */
     dayDate: string;
     time: string;
     subject: string;
@@ -66,6 +66,8 @@ export interface ExamDocPage {
     father: string;
     dob: string;
     gender: string | null;
+    /** Admit card's GROUP box: SCIENCE for VI–VIII, the directory's discipline for IX–X. */
+    group: string;
     photo: string | null;
     initials: string;
     papers: ExamPaperLine[];
@@ -101,7 +103,6 @@ const s = StyleSheet.create({
     school: { fontFamily: HEADING_FONT, fontSize: 18, textAlign: 'center', letterSpacing: 0.3, marginTop: 4 },
     docTitle: { fontFamily: HEADING_FONT, fontSize: 14, textAlign: 'center', marginTop: 4, letterSpacing: 2 },
     titleLine: { fontFamily: F.b, fontSize: 11.5, textAlign: 'center', marginTop: 1.5 },
-    serial: { fontFamily: F.b, fontSize: 8.5, textAlign: 'right', marginTop: -10, color: MUTED },
     row: { flexDirection: 'row', alignItems: 'center' },
     label: { fontFamily: F.b, fontSize: 9.5, letterSpacing: 0.3 },
     box: { borderWidth: 0.9, borderColor: RULE, paddingVertical: 3.5, paddingHorizontal: 6, justifyContent: 'center' },
@@ -163,7 +164,7 @@ function Header({ d }: { d: ExamDocPage }) {
             {d.lines.map((l, i) => (
                 <Text key={i} style={s.titleLine}>{l}</Text>
             ))}
-            <Text style={s.serial}>S. # {d.serial}</Text>
+            {/* TAFSD-528: no serial on the printed document (kept on record for reprints). */}
         </View>
     );
 }
@@ -241,6 +242,7 @@ function AdmitFields({ d }: { d: ExamDocPage }) {
                     <View style={{ flex: 1 }} />
                     <Field label="GENDER" value={d.gender ?? ''} labelW={50} boxW={40} />
                 </View>
+                <Field label="GROUP" value={d.group} boxW={150} fitW={150} />
             </View>
             <Photo d={d} />
         </View>
@@ -271,7 +273,8 @@ const LINE_H = 11.5;
  * An admit card is one page: its rows and the schedule's notes share this height (it has
  * one heading line fewer than a statement of entry and no notice on a back page).
  */
-const ADMIT_BUDGET = 325;
+// TAFSD-528: lower since the GROUP row was added (290 is the most the IX and VI schedules allow).
+const ADMIT_BUDGET = 288;
 const ADMIT_NOTE_SIZES = [8.5, 8, 7.5, 7, 6.5];
 
 /** Height of the admit card's NOTE box; with no notes it carries the two front-page lines. */
@@ -332,7 +335,7 @@ function PapersTable({ d }: { d: ExamDocPage }) {
     const entry = d.docType === 'STATEMENT_OF_ENTRY';
     const lines = paperLines(d);
     const { pv, size } = entry ? fitTable(lines, ROWS_BUDGET) : fitAdmit(lines, d.notes);
-    const W: Record<string, number | null> = { code: 84, subject: null, day: 84, date: 104, dayDate: 150, time: 74 };
+    const W: Record<string, number | null> = { code: 84, subject: null, day: 84, date: 104, dayDate: 178, time: 74 };
     const cs = (k: string) => (W[k] ? { width: W[k] } : { flex: 1, textAlign: 'left' as const, paddingLeft: 8 });
     const cell = (v: string | null) => (v && v.trim() ? v : '-');
     const td = (k: string, v: string, extra: { fontFamily?: string } = {}) => (
@@ -431,7 +434,8 @@ function Footer({ d, page, of, right }: { d: ExamDocPage; page: number; of: numb
             <View style={s.footerBox}>
                 <Text style={s.footCampus}>{d.campusLine}</Text>
                 {d.addressLines.map((l, i) => (
-                    <Text key={i} style={s.footText}>{l.toUpperCase()}</Text>
+                    // The address in capitals; the email and website line as written (TAFSD-528).
+                    <Text key={i} style={s.footText}>{i === 0 ? l.toUpperCase() : l}</Text>
                 ))}
             </View>
             <Text style={s.sysNote}>
@@ -451,7 +455,8 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
                 <PapersTable d={d} />
                 {d.docType === 'ADMIT_CARD' && d.notes.length ? <AdmitNotes notes={d.notes} size={fitAdmit(paperLines(d), d.notes).noteSize} /> : <FrontNotes d={d} />}
                 <View style={{ flex: 1 }} />
-                <Signatures />
+                {/* TAFSD-528: the statement of entry carries no signature boxes. */}
+                {d.docType === 'ADMIT_CARD' ? <Signatures /> : null}
                 <Footer d={d} page={1} of={of} right={of > 1 ? 'PLEASE TURN OVER FOR THE RULES OF ASSESSMENTS' : undefined} />
             </View>
         </Page>
@@ -481,7 +486,7 @@ export function noticeLayout(notice: Notice, notes: string[]): { size: number; s
             for (const sub of it.sub ?? []) h += linesFor(sub, BACK.subW, size) * lh + gap;
         }
         if (notes.length) {
-            h += size * 3; // the assessment's heading
+            if (cambridge) h += size * 1.2; // the gap under the box
             for (const n of notes) h += linesFor(n, BACK.bulletW, size) * size * 1.5 + gap;
         }
         return h + (cambridge ? 28 : 0); // the box's padding
@@ -562,26 +567,24 @@ function NoticePage({ d, notice, of }: { d: ExamDocPage; notice: Notice; of: num
     const { size, sign } = noticeLayout(notice, d.notes);
     return (
         <Page size="A4" style={s.page}>
+            {/* TAFSD-528: the same notice for everyone, so no name, C.C., class or serial on it. */}
             <View style={[s.frame, { paddingTop: 8 }]}>
-                <Text style={{ fontFamily: F.b, fontSize: 8, color: MUTED, textAlign: 'right', letterSpacing: 0.3 }}>
-                    {`${d.name}  ·  C.C. # ${d.cc}  ·  ${klassOf(d).toUpperCase()}  ·  S. # ${d.serial}`}
-                </Text>
-                <Text style={{ fontFamily: F.b, fontSize: 22, textAlign: 'center', marginTop: 18 }}>{notice.title}</Text>
+                <Text style={{ fontFamily: F.b, fontSize: 22, textAlign: 'center', marginTop: 28 }}>{notice.title}</Text>
                 <Text style={{ fontFamily: F.b, fontSize: 12.5, textAlign: 'center', marginTop: 8, marginBottom: 16 }}>{notice.subtitle}</Text>
                 <View style={{ paddingHorizontal: notice.style === 'cambridge' ? 14 : 8 }}>
+                    {/* The schedule's notes (the PTM line…) are the last bullets of the list, as on the school's sheets. */}
                     {notice.style === 'cambridge' ? (
-                        <CambridgeRules items={notice.items} size={size} sign={sign} />
+                        <>
+                            <CambridgeRules items={notice.items} size={size} sign={sign} />
+                            {d.notes.length ? (
+                                <View style={{ marginTop: size * 1.2 }}>
+                                    <BulletList items={d.notes} size={size} />
+                                </View>
+                            ) : null}
+                        </>
                     ) : (
-                        <BulletList items={notice.items.map(noticeItemText)} size={size} />
+                        <BulletList items={[...notice.items.map(noticeItemText), ...d.notes]} size={size} />
                     )}
-                    {d.notes.length ? (
-                        <View style={{ marginTop: size * 1.2 }}>
-                            <Text style={{ fontFamily: F.b, fontSize: size + 0.5, textDecoration: 'underline', marginBottom: size * 0.6 }}>
-                                {d.assessment}
-                            </Text>
-                            <BulletList items={d.notes} size={size} />
-                        </View>
-                    ) : null}
                 </View>
                 <View style={{ flex: 1 }} />
                 <Text style={s.pageNo}>{pageCountLabel(2, of)}</Text>

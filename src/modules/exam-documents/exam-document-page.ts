@@ -1,6 +1,6 @@
 import { EXAM_LOGO, ExamDocPage } from './ExamDocumentPDF';
-import { docTypeForClass, formatSerial, isSecondaryClass } from './exam-document-rules';
-import { noticeForClass } from './exam-notices';
+import { docTypeForClass, examGroup, formatSerial, isSecondaryClass } from './exam-document-rules';
+import { backPageNotes, noticeForSchedule } from './exam-notices';
 
 /**
  * TAFSD-528: what one student's admit card / statement of entry shows, from plain
@@ -36,8 +36,6 @@ export function dmy(isoDate: string, sep = '-'): string {
     const [y, m, d] = isoDate.slice(0, 10).split('-');
     return [d, m, y].join(sep);
 }
-
-const titleCase = (w: string) => w.charAt(0) + w.slice(1).toLowerCase();
 
 /** "December 22, 2026" for a 'YYYY-MM-DD' date. */
 export function longDate(isoDate: string): string {
@@ -77,6 +75,8 @@ export interface ExamDocPageInput {
         father: string;
         dob: Date | null;
         gender: string | null;
+        /** From the student's latest admission: "Computer", "Biology"… Feeds the admit card's GROUP. */
+        discipline?: string | null;
     };
     photo: string | null;
 }
@@ -90,12 +90,14 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         .filter((x) => x.class_id === p.classId)
         .map((x) => ({
             day: DAYS[x.paper_date.getUTCDay()],
-            date: longDate(iso(x.paper_date)),
-            dayDate: `${titleCase(DAYS[x.paper_date.getUTCDay()])}, ${dmy(iso(x.paper_date))}`,
+            // TAFSD-528: dates in capitals: "DECEMBER 22, 2026"; the admit card's "FRIDAY, DECEMBER 11, 2026".
+            date: longDate(iso(x.paper_date)).toUpperCase(),
+            dayDate: `${DAYS[x.paper_date.getUTCDay()]}, ${longDate(iso(x.paper_date)).toUpperCase()}`,
             time: x.time_text,
             subject: x.subject,
             code: x.code,
         }));
+    const notice = secondary ? null : noticeForSchedule(p.classId, schedule.title);
     return {
         docType: docTypeForClass(p.classId),
         serial: formatSerial(p.serialNo),
@@ -119,12 +121,14 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         father: s.father.toUpperCase(),
         dob: s.dob ? dmy(iso(s.dob)) : '',
         gender: s.gender ? s.gender.trim().charAt(0).toUpperCase() : null,
+        group: secondary ? examGroup(p.classId, s.discipline) : '',
         photo: p.photo,
         initials: initialsOf(s.fullName),
         papers,
-        notes: schedule.notes,
+        // Admit card: every schedule note, under the table. Statement of entry: only what the back page takes.
+        notes: notice ? backPageNotes(notice, schedule.notes) : schedule.notes,
         centre: CAMBRIDGE_CENTRE,
-        notice: secondary ? null : noticeForClass(p.classId),
+        notice,
         assessment: schedule.title.toUpperCase(),
         campusLine: [schedule.campusName.toUpperCase(), segment].filter(Boolean).join(' : '),
         addressLines: [schedule.campusAddress?.trim() || DEFAULT_ADDRESS, WEB_LINE],
