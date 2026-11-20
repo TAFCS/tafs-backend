@@ -333,6 +333,23 @@ export class ExamIssueDto {
     skip_holders?: boolean;
 }
 
+/** TAFSD-544: release issued documents to the parent app. */
+export class ExamReleaseDto {
+    @ApiProperty({ type: [Number], description: 'C.C. numbers. Only students holding a document from this schedule are released.' })
+    @IsArray()
+    @ArrayMinSize(1)
+    @ArrayMaxSize(800)
+    @Type(() => Number)
+    @IsInt({ each: true })
+    student_ids!: number[];
+
+    @ApiPropertyOptional({ description: 'Shown on the card, above the document and in the push. Same text for every student in the release.' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(300)
+    message?: string;
+}
+
 export class ExamOverrideDto {
     @ApiProperty()
     @Type(() => Number)

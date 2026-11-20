@@ -649,6 +649,8 @@ const EXAM_DOCUMENTS_ACTIONS: TileAction[] = [
   { id: 'issue', label: 'Issue and reprint documents', description: 'Only to students whose dues are cleared through their fee date', implies: ['view'] },
   { id: 'change_fee_dates', label: "Change selected students' fee date", description: 'Checks those students against an earlier or later fee date than the schedule. Recorded in the activity log', implies: ['view'] },
   { id: 'override_dues', label: 'Issue to a student who owes dues', description: 'Needs a reason, which is recorded in the activity log', implies: ['issue'] },
+  // TAFSD-544: reaches every parent in the release, so it is its own grant.
+  { id: 'release', label: 'Release documents to the parent app', description: 'Parents get a notification and the document on their Notice Board, with an optional message', implies: ['view'] },
 ];
 
 // Transfers had NO guard of any kind: TransferController carried no

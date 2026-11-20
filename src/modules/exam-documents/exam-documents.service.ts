@@ -11,6 +11,7 @@ import { renderToBuffer } from '@react-pdf/renderer';
 import React from 'react';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ScopeService } from '../../common/scope/scope.service';
+import { FcmService } from '../../common/fcm/fcm.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -20,6 +21,7 @@ import {
     ExamIssueDto,
     ExamOverrideDto,
     ExamPresetCreateDto,
+    ExamReleaseDto,
     ExamRosterQueryDto,
     ExamScheduleListQueryDto,
     ExamScheduleUpsertDto,
@@ -43,9 +45,17 @@ import {
     rosterState,
     totalOwed,
 } from './exam-document-rules';
-import type { ExamScheduleStatus } from './exam-document-rules';
+import type { ExamDocType, ExamScheduleStatus } from './exam-document-rules';
+import {
+    RELEASE_OUTCOME_LABEL,
+    ReleaseOutcome,
+    cleanReleaseMessage,
+    releaseBody,
+    releaseOutcome,
+    releaseTitle,
+} from './exam-document-release';
 import { ExamDocPage, ExamDocumentsPDF } from './ExamDocumentPDF';
-import { buildExamDocPage, dmy } from './exam-document-page';
+import { CAMBRIDGE_CENTRE, buildExamDocPage, dmy } from './exam-document-page';
 import { buildScheduleWorkbook } from './exam-schedule-export';
 import {
     RunStudent,
@@ -135,6 +145,7 @@ export class ExamDocumentsService {
         private readonly scope: ScopeService,
         private readonly auditLogs: AuditLogsService,
         private readonly storage: StorageService,
+        private readonly fcm: FcmService,
     ) {}
 
     private by(user: Staff) {
@@ -770,6 +781,15 @@ export class ExamDocumentsService {
 
         const docs = await this.prisma.exam_documents.findMany({ where: { schedule_id: id } });
         const docByStudent = new Map(docs.map((d) => [d.student_id, d]));
+        // TAFSD-544: when the parent first opened a released document.
+        const openedAt = new Map(
+            (
+                await this.prisma.exam_document_notifications.findMany({
+                    where: { exam_document_id: { in: docs.filter((d) => d.released_at).map((d) => d.id) } },
+                    select: { exam_document_id: true, opened_at: true },
+                })
+            ).map((n) => [n.exam_document_id, n.opened_at]),
+        );
 
         let searchCcs: number[] | null = null;
         if (query.q?.trim()) {
@@ -854,6 +874,10 @@ export class ExamDocumentsService {
                               override_reason: doc.override_reason,
                               dues_outstanding_at_issue: Number(doc.dues_outstanding),
                               fee_date: iso(doc.fee_date),
+                              released_at: doc.released_at,
+                              released_by: doc.released_by,
+                              release_message: doc.release_message,
+                              parent_opened_at: openedAt.get(doc.id) ?? null,
                           }
                         : null,
                 };
@@ -1288,6 +1312,206 @@ export class ExamDocumentsService {
 
         const { buffer } = await this.render(schedule, [doc], students);
         return { buffer, filename: this.filename(schedule, s), issued: 1, reprinted: 0 };
+    }
+
+    // ─── Release to the parent app (TAFSD-544) ─────────────────────────────
+
+    /**
+     * Release issued documents to the parent app: each family gets a push and a
+     * document card on its Notice Board. Students without a document, already
+     * released, or with no parent account are reported, not refused.
+     */
+    async release(id: number, dto: ExamReleaseDto, user: Staff) {
+        const schedule = await this.loadSchedule(id, user);
+        const message = cleanReleaseMessage(dto.message);
+        const ccs = [...new Set(dto.student_ids)];
+        const students = await this.loadStudents(ccs, user);
+        const docs = await this.prisma.exam_documents.findMany({ where: { schedule_id: id, student_id: { in: ccs } } });
+        const docOf = new Map(docs.map((d) => [d.student_id, d]));
+        const families = new Map(
+            (
+                await this.prisma.students.findMany({
+                    where: { cc: { in: [...students.keys()] }, deleted_at: null },
+                    select: { cc: true, family_id: true },
+                })
+            ).map((s) => [s.cc, s.family_id]),
+        );
+
+        const rows = ccs.map((cc) => {
+            const s = students.get(cc);
+            const d = docOf.get(cc);
+            const outcome = releaseOutcome({
+                found: Boolean(s),
+                hasDocument: Boolean(d),
+                releasedAt: d?.released_at ?? null,
+                familyId: families.get(cc) ?? null,
+            });
+            return { cc, name: s?.full_name ?? `C.C. ${cc}`, outcome, doc: d, familyId: families.get(cc) ?? null };
+        });
+
+        const now = new Date();
+        const toRelease = rows.filter((r) => r.outcome === 'RELEASED');
+        const created = await this.prisma.$transaction(async (tx) => {
+            const out: { cc: number; familyId: number; notificationId: number; documentId: number; title: string; body: string }[] = [];
+            for (const r of toRelease) {
+                const doc = r.doc!;
+                // Another release may have landed between the read and here.
+                const claimed = await tx.exam_documents.updateMany({
+                    where: { id: doc.id, released_at: null },
+                    data: { released_at: now, released_by: this.by(user), release_message: message },
+                });
+                if (!claimed.count) {
+                    r.outcome = 'ALREADY_RELEASED';
+                    continue;
+                }
+                const docType = doc.doc_type as ExamDocType;
+                const title = releaseTitle(docType);
+                const body = releaseBody(r.name, schedule.title, docType, message);
+                const n = await tx.exam_document_notifications.create({
+                    data: { family_id: r.familyId!, student_cc: r.cc, exam_document_id: doc.id, doc_type: docType, title, body, message },
+                    select: { id: true },
+                });
+                out.push({ cc: r.cc, familyId: r.familyId!, notificationId: n.id, documentId: doc.id, title, body });
+            }
+            return out;
+        });
+
+        for (const c of created) {
+            await this.auditLogs.log({
+                entity_type: 'EXAM_DOCUMENT',
+                entity_id: String(c.documentId),
+                action: 'UPDATED',
+                field: 'RELEASED_TO_APP',
+                new_value: `Released to the parent app${message ? ` with the message: ${message}` : ''}`,
+                changed_by: this.by(user),
+                student_id: c.cc,
+            });
+            // The card is already on the Notice Board; a failed push only costs the alert.
+            try {
+                await this.fcm.sendToFamily(c.familyId, c.title, c.body, {
+                    type: 'exam_document',
+                    notification_id: String(c.notificationId),
+                    exam_document_id: String(c.documentId),
+                    student_cc: String(c.cc),
+                    title: c.title,
+                    body: c.body,
+                });
+            } catch (e) {
+                this.logger.warn(`Exam document push failed for family ${c.familyId}: ${(e as Error).message}`);
+            }
+        }
+
+        const count = (o: ReleaseOutcome) => rows.filter((r) => r.outcome === o).length;
+        return {
+            released: count('RELEASED'),
+            already_released: count('ALREADY_RELEASED'),
+            not_issued: count('NOT_ISSUED'),
+            no_family: count('NO_FAMILY'),
+            not_found: count('NOT_FOUND'),
+            students: rows.map((r) => ({ cc: r.cc, name: r.name, outcome: r.outcome, reason: RELEASE_OUTCOME_LABEL[r.outcome] })),
+        };
+    }
+
+    // ─── The parent app's side (TAFSD-544) ─────────────────────────────────
+
+    /** The family's exam document cards, newest first, 20 at a time. */
+    async familyNotifications(familyId: number, cursor?: number) {
+        const rows = await this.prisma.exam_document_notifications.findMany({
+            where: { family_id: familyId, ...(cursor ? { id: { lt: cursor } } : {}) },
+            orderBy: { id: 'desc' },
+            take: 20,
+            include: {
+                students: { select: { cc: true, full_name: true } },
+                exam_documents: {
+                    select: {
+                        id: true,
+                        serial_no: true,
+                        class_id: true,
+                        section_id: true,
+                        classes: { select: { description: true } },
+                        exam_schedules: {
+                            select: { id: true, title: true, academic_year: true, campuses: { select: { campus_name: true } } },
+                        },
+                    },
+                },
+            },
+        });
+        if (!rows.length) return [];
+
+        const sectionIds = [...new Set(rows.map((r) => r.exam_documents.section_id).filter((x): x is number => x != null))];
+        const sections = new Map(
+            (await this.prisma.sections.findMany({ where: { id: { in: sectionIds } }, select: { id: true, description: true } })).map((s) => [
+                s.id,
+                s.description,
+            ]),
+        );
+        const firstPapers = await this.prisma.exam_schedule_papers.groupBy({
+            by: ['schedule_id', 'class_id'],
+            where: { OR: rows.map((r) => ({ schedule_id: r.exam_documents.exam_schedules.id, class_id: r.exam_documents.class_id })) },
+            _min: { paper_date: true },
+        });
+        const firstPaper = new Map(firstPapers.map((p) => [`${p.schedule_id}:${p.class_id}`, iso(p._min.paper_date)]));
+
+        return rows.map((r) => {
+            const d = r.exam_documents;
+            const soe = r.doc_type === 'STATEMENT_OF_ENTRY';
+            return {
+                id: r.id,
+                family_id: r.family_id,
+                student_cc: r.student_cc,
+                exam_document_id: r.exam_document_id,
+                doc_type: r.doc_type,
+                title: r.title,
+                body: r.body,
+                message: r.message,
+                read_at: r.read_at,
+                opened_at: r.opened_at,
+                created_at: r.created_at,
+                student: {
+                    cc: r.students.cc,
+                    full_name: r.students.full_name,
+                    class_name: d.classes?.description ?? null,
+                    section_name: d.section_id != null ? sections.get(d.section_id) ?? null : null,
+                },
+                document: {
+                    serial: formatSerial(d.serial_no),
+                    assessment: d.exam_schedules.title,
+                    academic_year: d.exam_schedules.academic_year,
+                    first_paper_date: firstPaper.get(`${d.exam_schedules.id}:${d.class_id}`) ?? null,
+                    centre: soe ? CAMBRIDGE_CENTRE : null,
+                    // A statement of entry has the notice to candidates on its back.
+                    pages: soe ? 2 : 1,
+                    campus_name: d.exam_schedules.campuses.campus_name,
+                },
+            };
+        });
+    }
+
+    async markFamilyNotificationRead(id: number, familyId: number) {
+        const n = await this.prisma.exam_document_notifications.findFirst({ where: { id, family_id: familyId } });
+        if (!n) throw new NotFoundException('Notification not found');
+        return this.prisma.exam_document_notifications.update({ where: { id }, data: { read_at: n.read_at ?? new Date() } });
+    }
+
+    /** The document's current PDF for the family that holds the card. Records the first open. */
+    async familyNotificationPdf(id: number, familyId: number): Promise<{ buffer: Buffer; filename: string }> {
+        const n = await this.prisma.exam_document_notifications.findFirst({
+            where: { id, family_id: familyId },
+            include: { exam_documents: true },
+        });
+        if (!n) throw new NotFoundException('Document not found');
+        const doc = n.exam_documents;
+        const schedule = await this.prisma.exam_schedules.findUnique({ where: { id: doc.schedule_id }, include: SCHEDULE_INCLUDE });
+        const student = await this.prisma.students.findUnique({ where: { cc: doc.student_id }, select: STUDENT_SELECT });
+        if (!schedule || !student) throw new NotFoundException('Document not found');
+
+        const { buffer } = await this.render(schedule, [doc], new Map([[student.cc, student]]));
+        const at = new Date();
+        await this.prisma.exam_document_notifications.update({
+            where: { id },
+            data: { opened_at: n.opened_at ?? at, read_at: n.read_at ?? at },
+        });
+        return { buffer, filename: this.filename(schedule, student) };
     }
 
     // ─── PDF ───────────────────────────────────────────────────────────────
