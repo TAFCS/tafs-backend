@@ -10,8 +10,6 @@ import { backPageNotes, noticeForSchedule } from './exam-notices';
 
 const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-export const DEFAULT_ADDRESS =
-    'C-61, 62, 63, 64 & 65, Block 13, Gulistan-e-Jauhar, Karachi  ·  Phone (92-21) 3476-5111-13  ·  Fax (92-21) 3476-5114';
 /** The school's Cambridge centre number, the same on every campus (confirmed 2026-11-17). */
 export const CAMBRIDGE_CENTRE = 'PK 564';
 export const WEB_LINE = 'info@tafs.edu.pk  ·  american@cyber.net.pk  ·  www.tafs.edu.pk';
@@ -131,7 +129,9 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         notice,
         assessment: schedule.title.toUpperCase(),
         campusLine: [schedule.campusName.toUpperCase(), segment].filter(Boolean).join(' : '),
-        addressLines: [schedule.campusAddress?.trim() || DEFAULT_ADDRESS, WEB_LINE],
+        // TAFSD-528: the campus's own address from its record; nothing hard-coded. No address, no line.
+        campusAddress: schedule.campusAddress?.trim().toUpperCase() || null,
+        webLine: WEB_LINE,
         issuedLong: karachiLong(p.issuedAt),
     };
 }

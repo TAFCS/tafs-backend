@@ -294,12 +294,9 @@ export const LAYOUTS: Record<ScheduleLayout, LayoutSpec> = {
  * How the school names a campus on its sheets. Only Gulistan-e-Johar is known
  * ("CAMPUS - II" on every sheet sent); the others print their own name.
  */
-const CAMPUS_LABELS: Record<string, { label: string; address: string }> = {
-    GEJ: {
-        label: 'CAMPUS - II',
-        address:
-            'C - 61, 62, 63, 64 & 65, BLOCK # 13, GULISTAN-E-JAUHAR, KARACHI. HELLO # : (92-21) 3476-5111-13 | FAX # : (92-21) 3476-5114',
-    },
+/** The school's own name for a campus on its sheets. The address is never hard-coded: it is the campus record's. */
+const CAMPUS_LABELS: Record<string, { label: string }> = {
+    GEJ: { label: 'CAMPUS - II' },
 };
 
 export function campusOnSheet(campus: { campus_code: string | null; campus_name: string; address: string | null }) {
@@ -308,7 +305,8 @@ export function campusOnSheet(campus: { campus_code: string | null; campus_name:
         (/gulistan|johar|jauhar/i.test(campus.campus_name) ? CAMPUS_LABELS.GEJ : undefined);
     return {
         label: known?.label ?? campus.campus_name.toUpperCase(),
-        address: known?.address ?? (campus.address?.trim().toUpperCase() || CAMPUS_LABELS.GEJ.address),
+        // TAFSD-528: the address as entered on the campus in the system (Setup → Campuses).
+        address: campus.address?.trim().toUpperCase() ?? '',
     };
 }
 

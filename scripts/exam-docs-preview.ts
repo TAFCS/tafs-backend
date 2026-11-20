@@ -59,8 +59,9 @@ async function main() {
                     segmentLine: b.segment_line ?? null,
                     academicYear: b.academic_year,
                     notes: b.notes,
-                    campusName: 'CAMPUS # II',
-                    campusAddress: null,
+                    // As stored on the Kaneez Fatima campus record in production.
+                    campusName: 'Kaneez Fatima Campus',
+                    campusAddress: 'B 2 Gulshan E Kaneez Fatima Society, Scheme 33, Karachi, Pakistan',
                     papers: b.papers.map((p: any) => ({ ...p, paper_date: new Date(`${p.paper_date}T00:00:00Z`), code: p.code ?? null })),
                 },
                 classId: set.classId,

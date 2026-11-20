@@ -80,7 +80,10 @@ export interface ExamDocPage {
     /** The schedule's title, heading its notes under the notice. */
     assessment: string;
     campusLine: string;
-    addressLines: string[];
+    /** The campus record's address, in capitals; null when the campus has none. */
+    campusAddress: string | null;
+    /** Emails and website, as written. */
+    webLine: string;
     issuedLong: string;
 }
 
@@ -119,21 +122,12 @@ const s = StyleSheet.create({
     tr: { flexDirection: 'row', borderTopWidth: 0.5, borderTopColor: '#9a9a9a' },
     td: { fontSize: 10, paddingHorizontal: 5, textAlign: 'center' },
     vline: { borderLeftWidth: 0.5, borderLeftColor: '#9a9a9a' },
-    signBox: { borderWidth: 0.9, borderColor: RULE, flexDirection: 'column', marginTop: 8, paddingBottom: 8, paddingHorizontal: 6 },
-    sign: { flex: 1, alignItems: 'center', marginHorizontal: 14 },
-    signLine: { alignSelf: 'stretch', borderTopWidth: 0.8, borderTopColor: RULE, marginBottom: 3 },
-    signLabel: { fontFamily: F.b, fontSize: 8.5, textAlign: 'center', letterSpacing: 0.3 },
     footerBox: { borderWidth: 0.9, borderColor: RULE, paddingVertical: 4, alignItems: 'center' },
     footCampus: { fontFamily: F.b, fontSize: 9, letterSpacing: 0.4 },
     footText: { fontSize: 7.5, marginTop: 1.5, textAlign: 'center', color: MUTED },
     sysNote: { fontFamily: F.i, fontSize: 7.5, textAlign: 'center', marginTop: 3, color: MUTED },
     pageNo: { fontFamily: F.b, fontSize: 9, textAlign: 'center', marginTop: 3, letterSpacing: 0.3 },
 });
-
-const SIGNATURES = [
-    ['HEAD OF THE SEGMENT', 'ACADEMIC DIRECTRESS', 'HEAD OF THE INSTITUTION'],
-    ['ACCOUNTANT', 'DIRECTRESS ADMIN. & P.-G.', 'DIRECTRESS FINANCE'],
-];
 
 const two = (n: number) => String(n).padStart(2, '0');
 
@@ -275,8 +269,8 @@ const LINE_H = 11.5;
  * An admit card is one page: its rows and the schedule's notes share this height (it has
  * one heading line fewer than a statement of entry and no notice on a back page).
  */
-// TAFSD-528: lower since the GROUP row was added (290 is the most the IX and VI schedules allow).
-const ADMIT_BUDGET = 288;
+// TAFSD-528: the signature boxes are gone, which gives back more than the GROUP row takes.
+const ADMIT_BUDGET = 325;
 const ADMIT_NOTE_SIZES = [8.5, 8, 7.5, 7, 6.5];
 
 /** Height of the admit card's NOTE box; with no notes it carries the two front-page lines. */
@@ -409,23 +403,6 @@ function AdmitNotes({ notes, size }: { notes: string[]; size: number }) {
     );
 }
 
-function Signatures() {
-    return (
-        <View style={s.signBox}>
-            {SIGNATURES.map((labels, i) => (
-                <View key={i} style={{ flexDirection: 'row', marginTop: 26 }}>
-                    {labels.map((l) => (
-                        <View key={l} style={s.sign}>
-                            <View style={s.signLine} />
-                            <Text style={s.signLabel}>{l}</Text>
-                        </View>
-                    ))}
-                </View>
-            ))}
-        </View>
-    );
-}
-
 function Footer({ d, page, of, right }: { d: ExamDocPage; page: number; of: number; right?: string }) {
     return (
         <View style={{ marginTop: 6 }}>
@@ -435,10 +412,8 @@ function Footer({ d, page, of, right }: { d: ExamDocPage; page: number; of: numb
             </View>
             <View style={s.footerBox}>
                 <Text style={s.footCampus}>{d.campusLine}</Text>
-                {d.addressLines.map((l, i) => (
-                    // The address in capitals; the email and website line as written (TAFSD-528).
-                    <Text key={i} style={s.footText}>{i === 0 ? l.toUpperCase() : l}</Text>
-                ))}
+                {d.campusAddress ? <Text style={s.footText}>{d.campusAddress}</Text> : null}
+                <Text style={s.footText}>{d.webLine}</Text>
             </View>
             <Text style={s.sysNote}>
                 THIS IS A SYSTEM GENERATED DOCUMENT ISSUED WITHOUT ALTERATION OR ERASURE, AND DOES NOT REQUIRE A SIGNATURE.
@@ -457,8 +432,7 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
                 <PapersTable d={d} />
                 {d.docType === 'ADMIT_CARD' && d.notes.length ? <AdmitNotes notes={d.notes} size={fitAdmit(paperLines(d), d.notes).noteSize} /> : <FrontNotes d={d} />}
                 <View style={{ flex: 1 }} />
-                {/* TAFSD-528: the statement of entry carries no signature boxes. */}
-                {d.docType === 'ADMIT_CARD' ? <Signatures /> : null}
+                {/* TAFSD-528: no signature boxes on either document; the footer says none is needed. */}
                 <Footer d={d} page={1} of={of} right={of > 1 ? 'PLEASE TURN OVER FOR THE RULES OF ASSESSMENTS' : undefined} />
             </View>
         </Page>
