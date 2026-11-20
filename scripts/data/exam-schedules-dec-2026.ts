@@ -110,16 +110,9 @@ export const DEC_2026_SCHEDULES: SeedSchedule[] = [
                 ['2026-12-21', 'ENGLISH GRAMMAR & ENGLISH LITERATURE'],
             ],
         },
+        // TAFSD-528: the standing rules print from the Junior Notice to Candidates on the back
+        // of the statement of entry (src/modules/exam-documents/exam-notices.ts).
         notes: [
-            'IN FAILURE TO BRING STATEMENT OF ENTRY, STUDENT WILL NOT BE ALLOWED TO APPEAR IN THE FIRST SEMESTER ASSESSMENTS.',
-            "IN CASE OF SCHOOL'S CLOSURE DUE TO ANY CITY DISTURBANCE, ASSESSMENT OF THAT DAY WILL BE ASSESSED AFTER THE LAST SCHEDULED ASSESSMENT.",
-            'NO PRE OR POST ASSESSMENT WILL BE HELD.',
-            "IF A STUDENT FAILS TO BE PRESENT ON THE DAY OF ASSESSMENT THEN THAT SUBJECT WILL BE MARKED AS 'NO RESULT' IN THE STATEMENT OF RESULT.",
-            COMMON_RULES.review,
-            'RESOURCE MATERIALS : LECTURES, TEXT BOOKS, REFERENCE BOOKS, REGISTERS / NOTE BOOKS & DLCB PORTAL.',
-            COMMON_RULES.pouches,
-            COMMON_RULES.bags,
-            'USING ASSESSMENT BOARD IS NOT ALLOWED.',
             'THE RESULTS WILL BE DISTRIBUTED IN THE PTM SCHEDULED ON SATURDAY, JANUARY 16, 2027 AT CAMPUS – III IN SHA ALLAH.',
         ],
     },
@@ -150,15 +143,8 @@ export const DEC_2026_SCHEDULES: SeedSchedule[] = [
                 ['2026-12-21', 'HISTORY'], ['2026-12-22', 'CHEMISTRY'],
             ],
         },
+        // TAFSD-528: the standing rules print from the Senior Notice to Candidates.
         notes: [
-            'IN FAILURE TO BRING STATEMENT OF ENTRY, NO STUDENT WILL BE ALLOWED TO APPEAR IN THE FIRST SEMESTER ASSESSMENTS.',
-            COMMON_RULES.closure,
-            COMMON_RULES.noPrePost,
-            COMMON_RULES.review,
-            'RESOURCE MATERIALS : LECTURES, TEXT BOOKS, REFERENCE BOOKS, REGISTERS / NOTE BOOKS.',
-            COMMON_RULES.pouches,
-            COMMON_RULES.bags,
-            COMMON_RULES.board,
             'THE RESULTS WILL BE DISTRIBUTED FOR THE STUDENTS OF SR.I TO SR.III IN THE PTM SCHEDULED ON SATURDAY, JANUARY 16, 2027. IN SHA ALLAH.',
         ],
     },

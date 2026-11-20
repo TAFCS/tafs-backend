@@ -37,7 +37,6 @@ import {
     effectiveFeeDate,
     feeDateLabel,
     formatSerial,
-    isSecondaryClass,
     isSessionLabel,
     issueWindowOpen,
     notOfferedClasses,
@@ -45,7 +44,8 @@ import {
     totalOwed,
 } from './exam-document-rules';
 import type { ExamScheduleStatus } from './exam-document-rules';
-import { EXAM_LOGO, ExamDocPage, ExamDocumentsPDF } from './ExamDocumentPDF';
+import { ExamDocPage, ExamDocumentsPDF } from './ExamDocumentPDF';
+import { buildExamDocPage, dmy } from './exam-document-page';
 import { buildScheduleWorkbook } from './exam-schedule-export';
 import { campusOnSheet, inferScheduleLayout, isScheduleLayout, presetRows } from './exam-schedule-layouts';
 
@@ -56,10 +56,6 @@ const SERIAL_LOCK_NS = 510;
 const ROSTER_CAP = 3000;
 const PHOTO_CONCURRENCY = 8;
 
-const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
-const DEFAULT_ADDRESS =
-    'C-61, 62, 63, 64 & 65, Block 13, Gulistan-e-Jauhar, Karachi  ·  Phone (92-21) 3476-5111-13  ·  Fax (92-21) 3476-5114';
-const WEB_LINE = 'info@tafs.edu.pk  ·  american@cyber.net.pk  ·  www.tafs.edu.pk';
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
 
@@ -67,33 +63,6 @@ function karachiToday(): string {
     return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date());
 }
 
-function karachiLong(d: Date): string {
-    return new Intl.DateTimeFormat('en-US', {
-        timeZone: 'Asia/Karachi',
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-    }).format(d);
-}
-
-/** "2026-2027" → "2026 – 2027" */
-const sessionLabel = (y: string) => y.replace(/\s*-\s*/, ' – ');
-
-function dmy(isoDate: string, sep = '-'): string {
-    const [y, m, d] = isoDate.split('-');
-    return [d, m, y].join(sep);
-}
-
-function initialsOf(name: string): string {
-    return name
-        .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((w) => w[0])
-        .join('')
-        .toUpperCase();
-}
 
 const SCHEDULE_INCLUDE = {
     campuses: { select: { id: true, campus_name: true, campus_code: true, address: true } },
@@ -1191,50 +1160,24 @@ export class ExamDocumentsService {
         sections: Map<number, string>,
         photos: Map<number, string | null>,
     ): ExamDocPage {
-        const secondary = isSecondaryClass(doc.class_id);
-        const docType = docTypeForClass(doc.class_id);
-        const session = sessionLabel(schedule.academic_year);
         const father = s.student_guardians.find((g) => g.relationship?.toLowerCase() === 'father')?.guardians?.full_name ?? '';
-        const segment = secondary ? 'SECONDARY SEGMENT' : schedule.segment_line ? `${schedule.segment_line.toUpperCase()} SEGMENT` : '';
-        const papers = schedule.exam_schedule_papers
-            .filter((p) => p.class_id === doc.class_id)
-            .map((p) => {
-                const date = iso(p.paper_date)!;
-                return {
-                    day: DAYS[p.paper_date.getUTCDay()],
-                    date: dmy(date),
-                    time: p.time_text,
-                    subject: p.subject,
-                    code: p.code,
-                };
-            });
-        return {
-            docType,
-            serial: formatSerial(doc.serial_no),
-            school: secondary ? 'THE AMERICAN FOUNDATION SECONDARY SCHOOL' : 'THE AMERICAN FOUNDATION SCHOOL FOR A LEVEL STUDIES',
-            title: secondary ? 'ADMIT CARD' : 'STATEMENT OF ENTRY',
-            lines: [
-                schedule.title.toUpperCase(),
-                ...(schedule.segment_line ? [schedule.segment_line.toUpperCase()] : []),
-                secondary ? `SESSION ${session}` : `SESSION : ${session}`,
-            ],
-            leftLogo: secondary ? EXAM_LOGO.secondary : EXAM_LOGO.alevel,
-            rightLogo: secondary ? 'motto' : 'cambridge',
+        return buildExamDocPage({
+            schedule: {
+                title: schedule.title,
+                segmentLine: schedule.segment_line,
+                academicYear: schedule.academic_year,
+                notes: schedule.notes,
+                campusName: schedule.campuses.campus_name,
+                campusAddress: schedule.campuses.address,
+                papers: schedule.exam_schedule_papers,
+            },
+            classId: doc.class_id,
             className: classNames.get(doc.class_id) ?? s.classes?.description ?? '',
             sectionName: doc.section_id != null ? sections.get(doc.section_id) ?? null : null,
-            cc: String(s.cc),
-            gr: s.gr_number ?? '',
-            name: s.full_name.toUpperCase(),
-            father: father.toUpperCase(),
-            dob: s.dob ? dmy(iso(s.dob)!, '.') : '',
-            gender: s.gender ? s.gender.trim().charAt(0).toUpperCase() : null,
+            serialNo: doc.serial_no,
+            issuedAt: doc.issued_at,
+            student: { cc: s.cc, gr: s.gr_number, fullName: s.full_name, father, dob: s.dob, gender: s.gender },
             photo: photos.get(s.cc) ?? null,
-            initials: initialsOf(s.full_name),
-            papers,
-            notes: schedule.notes,
-            campusLine: [schedule.campuses.campus_name.toUpperCase(), segment].filter(Boolean).join(' : '),
-            addressLines: [schedule.campuses.address?.trim() || DEFAULT_ADDRESS, WEB_LINE],
-            issuedLong: karachiLong(doc.issued_at),
-        };
+        });
     }
 }
