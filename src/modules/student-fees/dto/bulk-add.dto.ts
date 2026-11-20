@@ -17,6 +17,7 @@ export class BulkAddDto {
     fee_date: string; // Sets the fee_date column — independent from month
 
     @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0)
     amount: number; // Used for both amount and amount_before_discount
 
     @IsArray()

@@ -24,6 +24,7 @@ export class BulkAddRangeDto {
     day: number; // Applied to every month — months where day is invalid are skipped
 
     @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0)
     amount: number;
 
     @IsArray()

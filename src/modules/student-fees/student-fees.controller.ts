@@ -27,6 +27,11 @@ import { BulkSaveStudentFeesDto } from './dto/bulk-save-student-fees.dto';
 import { CreateDiscountDto } from './dto/create-discount.dto';
 import { ApplyScholarshipDto } from './dto/apply-scholarship.dto';
 import { TransferHeadsDto } from './dto/transfer-heads.dto';
+import { CreateBundleDto } from './dto/create-bundle.dto';
+import { UpdateBundleDto } from './dto/update-bundle.dto';
+import { BulkAddDto } from './dto/bulk-add.dto';
+import { BulkAddRangeDto } from './dto/bulk-add-range.dto';
+import { BulkDeleteDto } from './dto/bulk-delete.dto';
 
 /**
  * Sub-permissions live on the `finance.student_overrides` tile
@@ -162,7 +167,7 @@ export class StudentFeesController {
     @Post('bundles')
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee'))
     @RequireAction('finance.student_overrides#bundle.manage')
-    async createBundle(@Body() dto: any, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
+    async createBundle(@Body() dto: CreateBundleDto, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const bundle = await this.studentFeesService.createBundle(dto, user, changedBy);
         return {
@@ -175,7 +180,7 @@ export class StudentFeesController {
     @Patch('bundles/:id')
     @CheckPolicies((ability) => ability.can(Action.Update, 'StudentFee'))
     @RequireAction('finance.student_overrides#bundle.manage')
-    async updateBundle(@Param('id', ParseIntPipe) id: number, @Body() dto: any, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
+    async updateBundle(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateBundleDto, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const bundle = await this.studentFeesService.updateBundle(id, dto, user, changedBy);
         return {
@@ -234,7 +239,7 @@ export class StudentFeesController {
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee') || ability.can(Action.Manage, 'all'))
     @RequireAction('finance.student_overrides#bulk_ops.add')
-    async bulkAdd(@Body() dto: any, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
+    async bulkAdd(@Body() dto: BulkAddDto, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const data = await this.studentFeesService.bulkAdd(dto, user, changedBy);
         return { success: true, data };
@@ -266,7 +271,7 @@ export class StudentFeesController {
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Create, 'StudentFee') || ability.can(Action.Manage, 'all'))
     @RequireAction('finance.student_overrides#bulk_ops.add')
-    async bulkAddRange(@Body() dto: any, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
+    async bulkAddRange(@Body() dto: BulkAddRangeDto, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const data = await this.studentFeesService.bulkAddRange(dto, user, changedBy);
         return { success: true, data };
@@ -320,7 +325,7 @@ export class StudentFeesController {
     @HttpCode(HttpStatus.OK)
     @CheckPolicies((ability) => ability.can(Action.Delete, 'StudentFee') || ability.can(Action.Manage, 'all'))
     @RequireAction('finance.student_overrides#bulk_ops.delete')
-    async bulkDelete(@Body() dto: any, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
+    async bulkDelete(@Body() dto: BulkDeleteDto, @Req() req: Request, @CurrentUser() user: IJwtStaffPayload) {
         const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
         const data = await this.studentFeesService.bulkDelete(dto, user, changedBy);
         return { success: true, data };
