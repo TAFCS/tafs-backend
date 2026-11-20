@@ -51,11 +51,10 @@ describe('TAFSD-528 notice to candidates', () => {
         expect(backPageNotes(SENIOR_NOTICE, [])).toEqual([]);
     });
 
-    it('fits the Cambridge notice and ten O Level notes on one page, sign included', () => {
-        const o = DEC_2026_SCHEDULES.find((s) => s.key === 'o')!;
-        const withNotes = noticeLayout(CAMBRIDGE_NOTICE, o.notes);
-        expect(withNotes.sign).toBeGreaterThan(0);
-        expect(withNotes.size).toBeGreaterThanOrEqual(9);
+    it('fits each back page on one page: Cambridge with its sign, Senior with its PTM line', () => {
         expect(noticeLayout(CAMBRIDGE_NOTICE, [])).toEqual({ size: 11, sign: 92 });
+        const sr = DEC_2026_SCHEDULES.find((s) => s.key === 'sr')!;
+        const senior = noticeLayout(SENIOR_NOTICE, backPageNotes(SENIOR_NOTICE, sr.notes));
+        expect(senior.size).toBeGreaterThanOrEqual(9);
     });
 });

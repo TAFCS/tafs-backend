@@ -96,6 +96,8 @@ const NAME_BOX_W = 270;
 const s = StyleSheet.create({
     page: { padding: 18, fontFamily: F.r, fontSize: 10, color: INK },
     frame: { flex: 1, borderWidth: 1.2, borderColor: RULE, paddingTop: 10, paddingHorizontal: 16, paddingBottom: 6 },
+    /** The notice page: the same box as the front page, without the border (TAFSD-528). */
+    backFrame: { flex: 1, paddingTop: 9, paddingHorizontal: 17, paddingBottom: 7 },
     logos: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
     logoL: { width: 52, height: 50 },
     logoMotto: { width: 100, height: 29, marginTop: 4 },
@@ -464,7 +466,9 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
 }
 
 /** Usable height and widths of the back page, in points (A4 frame less its header and page number). */
-const BACK = { height: 680, bulletW: 495, boxW: 465, subW: 425 };
+// TAFSD-528: the school's notice sheets have wide side margins and roomy, near double-spaced bullets.
+const BACK = { height: 680, bulletW: 439, boxW: 433, subW: 393 };
+const BULLET_LH = 1.9;
 const NOTICE_SIZES = [11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5];
 const SIGN_SIZES = [92, 74, 58, 46, 0];
 
@@ -477,7 +481,7 @@ function linesFor(text: string, widthPt: number, size: number): number {
 export function noticeLayout(notice: Notice, notes: string[]): { size: number; sign: number } {
     const cambridge = notice.style === 'cambridge';
     const itemsH = (size: number) => {
-        const lh = size * (cambridge ? 1.3 : 1.5);
+        const lh = size * (cambridge ? 1.3 : BULLET_LH);
         const gap = size * 0.5;
         const w = cambridge ? BACK.boxW : BACK.bulletW;
         let h = 0;
@@ -487,7 +491,7 @@ export function noticeLayout(notice: Notice, notes: string[]): { size: number; s
         }
         if (notes.length) {
             if (cambridge) h += size * 1.2; // the gap under the box
-            for (const n of notes) h += linesFor(n, BACK.bulletW, size) * size * 1.5 + gap;
+            for (const n of notes) h += linesFor(n, BACK.bulletW, size) * size * BULLET_LH + gap;
         }
         return h + (cambridge ? 28 : 0); // the box's padding
     };
@@ -524,8 +528,8 @@ function BulletList({ items, size }: { items: string[]; size: number }) {
         <View>
             {items.map((n, i) => (
                 <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? size * 0.5 : 0 }]} wrap={false}>
-                    <Text style={{ width: 18, fontSize: size, lineHeight: 1.5 }}>•</Text>
-                    <Text style={{ flex: 1, fontFamily: F.i, fontSize: size, lineHeight: 1.5 }}>{n.toUpperCase()}</Text>
+                    <Text style={{ width: 18, fontSize: size, lineHeight: BULLET_LH }}>•</Text>
+                    <Text style={{ flex: 1, fontFamily: F.i, fontSize: size, lineHeight: BULLET_LH }}>{n.toUpperCase()}</Text>
                 </View>
             ))}
         </View>
@@ -541,14 +545,14 @@ function CambridgeRules({ items, size, sign }: { items: NoticeItem[]; size: numb
                         <Text style={{ width: 20, fontSize: size, lineHeight: 1.3 }}>{`${i + 1}.`}</Text>
                         <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3, textAlign: 'justify' }}>
                             {it.parts.map((p, j) => (
-                                <Text key={j} style={p.bold ? { fontFamily: F.b } : {}}>{p.text.toUpperCase()}</Text>
+                                <Text key={j} style={p.bold ? { fontFamily: F.b } : {}}>{p.text}</Text>
                             ))}
                         </Text>
                     </View>
                     {(it.sub ?? []).map((t, j) => (
                         <View key={j} style={[s.row, { alignItems: 'flex-start', marginTop: size * 0.5, paddingLeft: 40 }]}>
                             <Text style={{ width: 22, fontSize: size, lineHeight: 1.3 }}>•</Text>
-                            <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3 }}>{t.toUpperCase()}</Text>
+                            <Text style={{ flex: 1, fontSize: size, lineHeight: 1.3, textAlign: 'justify' }}>{t}</Text>
                         </View>
                     ))}
                     {it.sub && sign ? (
@@ -568,10 +572,11 @@ function NoticePage({ d, notice, of }: { d: ExamDocPage; notice: Notice; of: num
     return (
         <Page size="A4" style={s.page}>
             {/* TAFSD-528: the same notice for everyone, so no name, C.C., class or serial on it. */}
-            <View style={[s.frame, { paddingTop: 8 }]}>
-                <Text style={{ fontFamily: F.b, fontSize: 22, textAlign: 'center', marginTop: 28 }}>{notice.title}</Text>
+            {/* No border round the page: the school's notice sheets have none. */}
+            <View style={s.backFrame}>
+                <Text style={{ fontFamily: F.b, fontSize: 22, textAlign: 'center', marginTop: 40 }}>{notice.title}</Text>
                 <Text style={{ fontFamily: F.b, fontSize: 12.5, textAlign: 'center', marginTop: 8, marginBottom: 16 }}>{notice.subtitle}</Text>
-                <View style={{ paddingHorizontal: notice.style === 'cambridge' ? 14 : 8 }}>
+                <View style={{ paddingHorizontal: notice.style === 'cambridge' ? 30 : 36 }}>
                     {/* The schedule's notes (the PTM line…) are the last bullets of the list, as on the school's sheets. */}
                     {notice.style === 'cambridge' ? (
                         <>
