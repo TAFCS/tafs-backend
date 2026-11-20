@@ -14,6 +14,7 @@ import { VouchersService } from '../vouchers/vouchers.service';
 import { VoucherNotificationService } from '../vouchers/voucher-notification.service';
 import { PreviewBulkRequestDto } from './dto/preview-bulk-request.dto';
 import { StartBulkJobDto } from './dto/start-bulk-job.dto';
+import { StartHeldBackJobDto } from './dto/start-held-back-job.dto';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { deriveAcademicYear } from '../../common/utils/academic-labels';
@@ -44,6 +45,65 @@ function percentile(sorted: number[], p: number): number {
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** TAFSD-547: report `status` of a student the job held back for arrears. */
+export const HELD_BACK_ARREARS = 'HELD_BACK_ARREARS';
+
+/** Job statuses after which a job will not write to its report again. */
+const FINISHED_JOB_STATUSES: BulkJobStatus[] = ['DONE', 'PARTIAL_FAILURE', 'FAILED', 'INTERRUPTED'];
+
+/**
+ * TAFSD-547: the report row for a student held back because they owe arrears.
+ * `arrears` is VouchersService.computeArrears() as of `asOfFeeDate`, the fee
+ * date of the first voucher the job would have issued them.
+ */
+export function heldBackReportRow(
+    student: {
+        cc: number;
+        full_name: string;
+        campus_id: number | null;
+        classes?: { description: string | null } | null;
+        sections?: { description: string | null } | null;
+    },
+    campusName: string | null,
+    arrears: { total_arrears: number; surcharge_groups: unknown[]; rows: Array<{ isSurcharge: boolean; fee_date: string }> },
+    asOfFeeDate: string,
+    itemsHeld: number,
+) {
+    const unpaid = arrears.rows.filter((r) => !r.isSurcharge);
+    const oldest = unpaid.length > 0 ? unpaid[0].fee_date : null;
+    const months = arrears.surcharge_groups.length;
+    const amount = arrears.total_arrears;
+    return {
+        cc: student.cc,
+        student_name: student.full_name,
+        status: HELD_BACK_ARREARS,
+        reason:
+            `Held back: arrears of Rs ${amount.toLocaleString('en-US')}` +
+            (months > 0 ? ` over ${months} month(s)` : '') +
+            (oldest ? `, oldest unpaid fee date ${oldest}` : '') +
+            `. No voucher issued.`,
+        arrears_amount: amount,
+        arrears_months: months,
+        oldest_unpaid_fee_date: oldest,
+        arrears_as_of: asOfFeeDate,
+        class_name: student.classes?.description ?? null,
+        section_name: student.sections?.description ?? null,
+        campus_id: student.campus_id,
+        campus_name: campusName,
+        items_held: itemsHeld,
+    };
+}
+
+/** TAFSD-547: the distinct ccs a job held back for arrears, in report order. */
+export function heldBackCcs(report: unknown): number[] {
+    if (!Array.isArray(report)) return [];
+    const out: number[] = [];
+    for (const r of report as any[]) {
+        if (r?.status === HELD_BACK_ARREARS && typeof r.cc === 'number' && !out.includes(r.cc)) out.push(r.cc);
+    }
+    return out;
+}
+
 export interface BulkStudentPreview {
     cc: number;
     student_full_name: string;
@@ -52,6 +112,27 @@ export interface BulkStudentPreview {
     section_name: string;
     is_already_issued: boolean;
 }
+
+/**
+ * The settings a job was started with, all columns that predate TAFSD-547.
+ * The status endpoint returns them so the webapp can prefill a follow-up job.
+ */
+const JOB_SETTINGS_SELECT = {
+    academic_year: true,
+    fee_date_from: true,
+    fee_date_to: true,
+    issue_date: true,
+    due_date: true,
+    validity_date: true,
+    bank_account_id: true,
+    skip_already_issued: true,
+    apply_late_fee: true,
+    late_fee_amount: true,
+    waive_surcharge: true,
+    send_notification: true,
+    hold_for_release: true,
+    job_type: true,
+} as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Service
@@ -151,6 +232,7 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
             if (err?.code === 'P2022' || err?.message?.includes('does not exist')) {
                 delete workingData.phase;
                 delete workingData.pdf_rendered_count;
+                delete workingData.held_back_count;
             }
             if (err?.message?.includes('BulkJobStatus') || err?.message?.includes('INTERRUPTED')) {
                 if (workingData.status === 'INTERRUPTED') {
@@ -387,6 +469,7 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
         createdBy: string,
         createdByDisplayName: string | undefined,
         user: IJwtStaffPayload,
+        opts: { sourceJobId?: number } = {},
     ): Promise<{ job_id: number }> {
         if (!dto.student_ccs || dto.student_ccs.length === 0) {
             throw new BadRequestException('student_ccs cannot be empty.');
@@ -455,6 +538,16 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                 hold_for_release: dto.hold_for_release ?? false,
                 job_type: dto.job_type || 'BULK',
                 updated_at: new Date(),
+                // TAFSD-547 columns are written only by jobs that use the
+                // feature, so an ordinary job never depends on the migration.
+                ...(dto.hold_back_arrears || opts.sourceJobId
+                    ? {
+                        hold_back_arrears: dto.hold_back_arrears ?? false,
+                        pay_immediately_custom_dates: dto.pay_immediately_custom_dates ?? false,
+                        is_revised: dto.is_revised ?? false,
+                        ...(opts.sourceJobId ? { source_job_id: opts.sourceJobId } : {}),
+                    }
+                    : {}),
             },
         });
 
@@ -472,6 +565,8 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                 `Academic year=${academicYear}`,
                 `Instant parent notification=${dto.send_notification === false ? 'No' : 'Yes'}`,
                 `Hold for release=${dto.hold_for_release ? 'Yes' : 'No'}`,
+                ...(dto.hold_back_arrears ? ['Hold back students with arrears=Yes'] : []),
+                ...(opts.sourceJobId ? [`Issues the students held back by job #${opts.sourceJobId}`] : []),
             ].join(' | '),
         });
 
@@ -528,6 +623,17 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                     class_ids: true,
                     section_ids: true,
                     report: true,
+                    ...JOB_SETTINGS_SELECT,
+                    // TAFSD-547 (defensive fallback below until the migration lands)
+                    hold_back_arrears: true,
+                    held_back_count: true,
+                    pay_immediately_custom_dates: true,
+                    is_revised: true,
+                    source_job_id: true,
+                    follow_up_jobs: {
+                        select: { id: true, status: true, created_at: true },
+                        orderBy: { id: 'asc' },
+                    },
                 },
             });
         } catch (err: any) {
@@ -550,11 +656,16 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                         class_ids: true,
                         section_ids: true,
                         report: true,
+                        ...JOB_SETTINGS_SELECT,
                     },
                 });
                 if (job) {
                     job.phase = job.status === 'DONE' ? 'DONE' : 'ISSUING';
                     job.pdf_rendered_count = 0;
+                    job.hold_back_arrears = false;
+                    job.held_back_count = 0;
+                    job.source_job_id = null;
+                    job.follow_up_jobs = [];
                 }
             } else {
                 throw err;
@@ -573,7 +684,15 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
               })
             : [];
 
-        return { ...job, campuses: campusList };
+        // TAFSD-547: a held-back student stands for every month the job would
+        // have issued them, so progress counts their items as processed.
+        const heldBackItemCount = Array.isArray(job.report)
+            ? (job.report as any[])
+                .filter((r) => r?.status === HELD_BACK_ARREARS)
+                .reduce((n, r) => n + (Number(r.items_held) || 0), 0)
+            : 0;
+
+        return { ...job, campuses: campusList, held_back_item_count: heldBackItemCount };
     }
 
     // ── Job History ─────────────────────────────────────────────────────────
@@ -614,6 +733,10 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                     created_at: true,
                     campus_ids: true,
                     report: true,
+                    // TAFSD-547 (defensive fallback below until the migration lands)
+                    hold_back_arrears: true,
+                    held_back_count: true,
+                    source_job_id: true,
                 },
             });
         } catch (err: any) {
@@ -646,6 +769,9 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                     ...j,
                     phase: j.status === 'DONE' ? 'DONE' : 'ISSUING',
                     pdf_rendered_count: 0,
+                    hold_back_arrears: false,
+                    held_back_count: 0,
+                    source_job_id: null,
                 }));
             }
             throw err;
@@ -757,10 +883,21 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
             send_notification: oldJob.send_notification,
             hold_for_release: oldJob.hold_for_release,
             job_type: oldJob.job_type,
+            // TAFSD-547: a resumed job keeps holding back students with arrears,
+            // and a resumed follow-up still points at the job it follows up.
+            ...(oldJob.hold_back_arrears || oldJob.source_job_id
+                ? {
+                    hold_back_arrears: oldJob.hold_back_arrears,
+                    pay_immediately_custom_dates: oldJob.pay_immediately_custom_dates,
+                    is_revised: oldJob.is_revised,
+                }
+                : {}),
         };
 
         const createdBy = user.username ?? user.sub;
-        const result = await this.startJob(dto, createdBy, user.fullName, user);
+        const result = await this.startJob(dto, createdBy, user.fullName, user, {
+            sourceJobId: oldJob.source_job_id ?? undefined,
+        });
 
         await this.auditLogs.log({
             entity_type: 'BULK_VOUCHER',
@@ -771,6 +908,69 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
         });
 
         return { job_id: result.job_id, resumed_from: jobId };
+    }
+
+    /**
+     * TAFSD-547: start a new job for the students `sourceJobId` held back for
+     * arrears, with the settings in `dto` (the webapp prefills the original
+     * job's). The new job records `source_job_id`, so both jobs show the link.
+     *
+     * - Only students the original job reported HELD_BACK_ARREARS; `student_ccs`
+     *   can narrow that list, never widen it.
+     * - Every one must be in the caller's scope (startJob refuses otherwise).
+     * - `skip_already_issued` is forced on: a student issued since the original
+     *   job ran is reported SKIPPED ("Voucher already issued ..."), and create()'s
+     *   one-live-voucher-per-head check (TAFSD-511) still stands behind that.
+     * - `hold_back_arrears` defaults off, since the point is to issue them.
+     */
+    async startHeldBackJob(
+        sourceJobId: number,
+        dto: StartHeldBackJobDto,
+        user: IJwtStaffPayload,
+    ): Promise<{ job_id: number; source_job_id: number; student_count: number }> {
+        const source = await this.prisma.bulk_voucher_jobs.findUnique({
+            where: { id: sourceJobId },
+        });
+        if (!source || !this.canSeeJob(user, source)) {
+            throw new NotFoundException(`Job #${sourceJobId} not found.`);
+        }
+        if (!FINISHED_JOB_STATUSES.includes(source.status) || this.activeJobIds.has(sourceJobId)) {
+            throw new BadRequestException(`Job #${sourceJobId} has not finished yet.`);
+        }
+
+        const heldBack = heldBackCcs(source.report);
+        if (heldBack.length === 0) {
+            throw new BadRequestException(`Job #${sourceJobId} held back no students.`);
+        }
+
+        let studentCcs = heldBack;
+        if (dto.student_ccs?.length) {
+            const allowed = new Set(heldBack);
+            const extra = dto.student_ccs.filter((cc) => !allowed.has(cc));
+            if (extra.length > 0) {
+                throw new BadRequestException(
+                    `Job #${sourceJobId} did not hold back student CC ${[...new Set(extra)].join(', ')}.`,
+                );
+            }
+            const wanted = new Set(dto.student_ccs);
+            studentCcs = heldBack.filter((cc) => wanted.has(cc));
+        }
+
+        const startDto: StartBulkJobDto = {
+            ...dto,
+            campus_ids: dto.campus_ids ?? (dto.campus_id ? undefined : source.campus_ids),
+            class_ids: dto.class_ids ?? (dto.class_id ? undefined : source.class_ids),
+            section_ids: dto.section_ids ?? (dto.section_id ? undefined : source.section_ids),
+            skip_already_issued: true,
+            hold_back_arrears: dto.hold_back_arrears ?? false,
+            student_ccs: studentCcs,
+        };
+
+        const createdBy = user.username ?? user.sub;
+        const result = await this.startJob(startDto, createdBy, user.fullName, user, {
+            sourceJobId,
+        });
+        return { job_id: result.job_id, source_job_id: sourceJobId, student_count: studentCcs.length };
     }
 
     // ── Async Pipeline ──────────────────────────────────────────────────────
@@ -808,6 +1008,9 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
         let successCount = 0;
         let failCountTotal = 0;
         let skipCountTotal = 0;
+        // TAFSD-547: students held back because they owe arrears.
+        const holdBackArrears = dto.hold_back_arrears === true;
+        let heldBackTotal = 0;
 
         // Per-step timing collectors (ms) — filled by processWorkItem.
         const timings = {
@@ -868,14 +1071,33 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                 academic_year_override: dto.academic_year,
             });
 
-            skipCountTotal = skips.length;
-            jobReport.push(...skips.map(s => ({
+            // TAFSD-547: a "new voucher was split off" note belongs to a work item,
+            // so with hold-back on it waits until that student is actually issued.
+            // A held-back student gets no voucher, and the note would be false.
+            const deferredSkipsByCc = new Map<number, typeof skips>();
+            let upfrontSkips = skips;
+            if (holdBackArrears) {
+                const workItemKeys = new Set(workItems.map((w) => `${w.cc}|${w.dateStr}`));
+                upfrontSkips = [];
+                for (const sk of skips) {
+                    if (sk.partially_paid && workItemKeys.has(`${sk.cc}|${sk.dateStr}`)) {
+                        if (!deferredSkipsByCc.has(sk.cc)) deferredSkipsByCc.set(sk.cc, []);
+                        deferredSkipsByCc.get(sk.cc)!.push(sk);
+                    } else {
+                        upfrontSkips.push(sk);
+                    }
+                }
+            }
+            const skipReportRow = (s: (typeof skips)[number]) => ({
                 cc: s.cc,
                 student_name: s.student_name,
                 status: s.status,
                 reason: s.reason,
                 ...(s.partially_paid ? { partially_paid: true } : {}),
-            })));
+            });
+
+            skipCountTotal = upfrontSkips.length;
+            jobReport.push(...upfrontSkips.map(skipReportRow));
 
             // Fix 3: Persist skips and initial report immediately
             if (skipCountTotal > 0) {
@@ -922,6 +1144,19 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
             }
             const studentGroups = [...itemsByStudent.values()];
 
+            // TAFSD-547: campus names for the held-back rows of the report.
+            const campusNameById = new Map<number, string>();
+            if (holdBackArrears && studentRecords.length > 0) {
+                const campusIdsInJob = [
+                    ...new Set(studentRecords.map((s) => s.campus_id).filter((id): id is number => id != null)),
+                ];
+                const campusRows = await this.prisma.campuses.findMany({
+                    where: { id: { in: campusIdsInJob } },
+                    select: { id: true, campus_name: true },
+                });
+                for (const c of campusRows) campusNameById.set(c.id, c.campus_name);
+            }
+
             for (let i = 0; i < studentGroups.length; i += STUDENT_BATCH_SIZE) {
                 // Fix 2: Check SIGTERM shutdown between batches
                 if (this.isShuttingDown) {
@@ -940,6 +1175,42 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                             value?: { voucher_id: number };
                             error?: string;
                         }> = [];
+
+                        // TAFSD-547: hold back a student who owes arrears. Arrears
+                        // come only from computeArrears, as of the fee date of the
+                        // first voucher this job would issue them (their work items
+                        // run in fee-date order), and are read just before issuing.
+                        if (holdBackArrears) {
+                            const first = studentItems[0];
+                            try {
+                                const arrears = await this.vouchersService.computeArrears(
+                                    first.cc,
+                                    new Date(first.dateStr),
+                                    false,
+                                );
+                                if (arrears.total_arrears > 0) {
+                                    return {
+                                        perItem,
+                                        heldBack: heldBackReportRow(
+                                            first.student,
+                                            campusNameById.get(first.student.campus_id) ?? null,
+                                            arrears,
+                                            first.dateStr,
+                                            studentItems.length,
+                                        ),
+                                    };
+                                }
+                            } catch (err) {
+                                // The caller asked not to bill students with arrears;
+                                // if that can't be checked, issue nothing to them.
+                                const errorMsg = `Arrears check failed, no voucher issued: ${String((err as any)?.message ?? err)}`;
+                                this.logger.error(`[Job #${jobId}] cc ${first.cc}: ${errorMsg}`);
+                                for (const workItem of studentItems) {
+                                    perItem.push({ workItem, outcome: 'FAILED', error: errorMsg });
+                                }
+                                return { perItem, heldBack: null };
+                            }
+                        }
 
                         for (const workItem of studentItems) {
                             try {
@@ -968,15 +1239,28 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                                 }
                             }
                         }
-                        return perItem;
+                        return { perItem, heldBack: null };
                     }),
                 );
 
                 let chunkSuccess = 0;
                 let chunkFail = 0;
                 let chunkSkip = 0;
+                let chunkHeldBack = 0;
 
-                for (const perItem of chunkOutcomes) {
+                for (const { perItem, heldBack } of chunkOutcomes) {
+                    if (heldBack) {
+                        chunkHeldBack++;
+                        heldBackTotal++;
+                        jobReport.push(heldBack);
+                        continue;
+                    }
+                    if (holdBackArrears && perItem.length > 0) {
+                        const deferred = deferredSkipsByCc.get(perItem[0].workItem.cc) ?? [];
+                        chunkSkip += deferred.length;
+                        skipCountTotal += deferred.length;
+                        jobReport.push(...deferred.map(skipReportRow));
+                    }
                     const successes = perItem.filter((r) => r.outcome === 'SUCCESS');
                     const survivor = successes.length > 0 ? successes[successes.length - 1] : null;
 
@@ -1038,11 +1322,13 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                     ...(chunkSuccess > 0 ? { success_count: { increment: chunkSuccess } } : {}),
                     ...(chunkFail > 0 ? { fail_count: { increment: chunkFail } } : {}),
                     ...(chunkSkip > 0 ? { skip_count: { increment: chunkSkip } } : {}),
+                    ...(chunkHeldBack > 0 ? { held_back_count: { increment: chunkHeldBack } } : {}),
                     report: jobReport as any,
                 });
 
                 this.logger.log(
-                    `[Job #${jobId}] Phase A batch ${Math.floor(i / STUDENT_BATCH_SIZE) + 1}/${Math.ceil(studentGroups.length / STUDENT_BATCH_SIZE)}: ${chunkSuccess} ok, ${chunkFail} failed, ${chunkSkip} skipped/folded`,
+                    `[Job #${jobId}] Phase A batch ${Math.floor(i / STUDENT_BATCH_SIZE) + 1}/${Math.ceil(studentGroups.length / STUDENT_BATCH_SIZE)}: ${chunkSuccess} ok, ${chunkFail} failed, ${chunkSkip} skipped/folded` +
+                    (holdBackArrears ? `, ${chunkHeldBack} held back for arrears` : ''),
                 );
             }
 
@@ -1188,7 +1474,8 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
             });
 
             this.logger.log(
-                `[Job #${jobId}] Complete → status=${finalStatus} success=${successCount} skip=${skipCountTotal} fail=${failCountTotal}`,
+                `[Job #${jobId}] Complete → status=${finalStatus} success=${successCount} skip=${skipCountTotal} fail=${failCountTotal}` +
+                (holdBackArrears ? ` held_back=${heldBackTotal}` : ''),
             );
 
             await this.auditLogs.log({
@@ -1204,6 +1491,7 @@ export class BulkVoucherJobsService implements OnModuleInit, BeforeApplicationSh
                     `Success=${successCount}`,
                     `Skip=${skipCountTotal}`,
                     `Fail=${failCountTotal}`,
+                    ...(holdBackArrears ? [`Held back for arrears=${heldBackTotal}`] : []),
                     `Period=${dto.fee_date_from}→${dto.fee_date_to}`,
                 ].join(' | '),
             });

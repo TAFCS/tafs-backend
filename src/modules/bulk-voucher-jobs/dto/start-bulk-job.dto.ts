@@ -121,6 +121,17 @@ export class StartBulkJobDto {
     @IsOptional()
     late_fee_amount?: number;
 
+    /**
+     * TAFSD-547: when true, a student whose arrears (VouchersService.computeArrears,
+     * as of the fee date of the first voucher this job would issue them) are above
+     * zero gets nothing; the report lists them as HELD_BACK_ARREARS so they can be
+     * issued later with POST /bulk-voucher-jobs/:id/held-back. Default false: the
+     * job behaves exactly as before.
+     */
+    @IsBoolean()
+    @IsOptional()
+    hold_back_arrears?: boolean;
+
     // ── Confirmed student list (from Step 2 preview) ───────────────────────
     /**
      * Explicit CC list confirmed by the admin after preview.

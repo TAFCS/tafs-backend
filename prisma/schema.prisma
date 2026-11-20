@@ -39,39 +39,51 @@ model student_flags {
 }
 
 model bulk_voucher_jobs {
-  id                  Int           @id @default(autoincrement())
-  created_by          String        @db.VarChar(255)
-  academic_year       String        @db.VarChar(10)
-  fee_date_from       DateTime      @db.Date
-  fee_date_to         DateTime      @db.Date
-  issue_date          DateTime      @db.Date
-  due_date            DateTime      @db.Date
-  validity_date       DateTime?     @db.Date
-  bank_account_id     Int
-  skip_already_issued Boolean       @default(true)
-  apply_late_fee      Boolean       @default(true)
-  late_fee_amount     Int           @default(1000)
-  status              BulkJobStatus @default(PENDING)
-  total_count         Int           @default(0)
-  success_count       Int           @default(0)
-  skip_count          Int           @default(0)
-  fail_count          Int           @default(0)
-  phase               String?       @default("ISSUING") @db.VarChar(20)
-  pdf_rendered_count  Int           @default(0)
-  merged_pdf_url      String?
-  created_at          DateTime      @default(now()) @db.Timestamp(6)
-  updated_at          DateTime      @updatedAt
-  report              Json?         @default("[]")
-  waive_surcharge     Boolean       @default(false)
-  campus_ids          Int[]         @default([])
-  class_ids           Int[]         @default([])
-  section_ids         Int[]         @default([])
-  job_type            String        @default("BULK") @db.VarChar(20)
-  send_notification   Boolean       @default(true)
-  hold_for_release    Boolean       @default(false)
-  bank_accounts       bank_accounts @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  vouchers            vouchers[]
+  id                           Int                 @id @default(autoincrement())
+  created_by                   String              @db.VarChar(255)
+  academic_year                String              @db.VarChar(10)
+  fee_date_from                DateTime            @db.Date
+  fee_date_to                  DateTime            @db.Date
+  issue_date                   DateTime            @db.Date
+  due_date                     DateTime            @db.Date
+  validity_date                DateTime?           @db.Date
+  bank_account_id              Int
+  skip_already_issued          Boolean             @default(true)
+  apply_late_fee               Boolean             @default(true)
+  late_fee_amount              Int                 @default(1000)
+  status                       BulkJobStatus       @default(PENDING)
+  total_count                  Int                 @default(0)
+  success_count                Int                 @default(0)
+  skip_count                   Int                 @default(0)
+  fail_count                   Int                 @default(0)
+  phase                        String?             @default("ISSUING") @db.VarChar(20)
+  pdf_rendered_count           Int                 @default(0)
+  merged_pdf_url               String?
+  created_at                   DateTime            @default(now()) @db.Timestamp(6)
+  updated_at                   DateTime            @updatedAt
+  report                       Json?               @default("[]")
+  waive_surcharge              Boolean             @default(false)
+  campus_ids                   Int[]               @default([])
+  class_ids                    Int[]               @default([])
+  section_ids                  Int[]               @default([])
+  job_type                     String              @default("BULK") @db.VarChar(20)
+  send_notification            Boolean             @default(true)
+  hold_for_release             Boolean             @default(false)
+  /// TAFSD-547: students with arrears (computeArrears) were held back, not issued.
+  hold_back_arrears            Boolean             @default(false)
+  /// TAFSD-547: number of students held back for arrears.
+  held_back_count              Int                 @default(0)
+  /// TAFSD-547: the job settings, kept so a follow-up job can be prefilled.
+  pay_immediately_custom_dates Boolean             @default(false)
+  is_revised                   Boolean             @default(false)
+  /// TAFSD-547: the job whose held-back students this job issues.
+  source_job_id                Int?
+  source_job                   bulk_voucher_jobs?  @relation("bulk_voucher_job_follow_ups", fields: [source_job_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  follow_up_jobs               bulk_voucher_jobs[] @relation("bulk_voucher_job_follow_ups")
+  bank_accounts                bank_accounts       @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vouchers                     vouchers[]
 
+  @@index([source_job_id], map: "idx_bulk_jobs_source_job_id")
   @@index([created_at(sort: Desc)], map: "idx_bulk_jobs_created_at")
   @@index([status], map: "idx_bulk_jobs_status")
 }
