@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, type student_status } from '@prisma/client';
@@ -20,8 +21,11 @@ import {
   UploadDocumentDto,
 } from './dto/student-documents.dto';
 import {
+  checkDeleteReason,
   checkUploadBatch,
+  liveVersions,
   missingFor,
+  nextVersionNo,
   prepareUpload,
   requiredSlotCount,
   slug,
@@ -39,8 +43,18 @@ export type VaultPerms = {
   upload: boolean;
   replace: boolean;
   archive: boolean;
+  /** TAFSD-541: delete a wrong version (`student.documents#delete`). */
+  delete: boolean;
   viewRestricted: boolean;
 };
+
+/**
+ * TAFSD-541: a version is on file unless it was deleted. Every read of
+ * versions goes through this, and a document counts as held only while it has
+ * at least one (ON_FILE_DOCUMENT).
+ */
+const LIVE_VERSION = { deleted_at: null } satisfies Prisma.student_document_versionsWhereInput;
+const ON_FILE_DOCUMENT = { versions: { some: LIVE_VERSION } } satisfies Prisma.student_documentsWhereInput;
 
 const STUDENT_HEADER_SELECT = {
   cc: true,
@@ -75,9 +89,16 @@ const VERSION_SELECT = {
  * through a short-lived signed link minted here after a scope check. Versions
  * are append-only: a clearer copy is a new version, "make current" copies an
  * old one forward, archiving hides a document without deleting anything.
+ *
+ * The one exception is a wrong upload (TAFSD-541): `deleteVersion` removes that
+ * version's file from storage and marks its row deleted. Deleted versions are
+ * invisible everywhere; the current version is the highest-numbered one left,
+ * and a document with none left is not on file (its slot reads missing).
  */
 @Injectable()
 export class StudentDocumentsService {
+  private readonly logger = new Logger(StudentDocumentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
@@ -92,7 +113,7 @@ export class StudentDocumentsService {
       where: includeInactive ? {} : { is_active: true },
       orderBy: [{ display_order: 'asc' }, { name: 'asc' }],
       include: {
-        _count: { select: { student_documents: { where: { archived_at: null } } } },
+        _count: { select: { student_documents: { where: { archived_at: null, ...ON_FILE_DOCUMENT } } } },
       },
     });
     return rows.map(({ _count, ...t }) => ({ ...t, document_count: _count.student_documents }));
@@ -141,6 +162,10 @@ export class StudentDocumentsService {
         SELECT COUNT(*)::int AS n FROM (
           SELECT 1 FROM student_documents
           WHERE type_id = ${id} AND archived_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM student_document_versions v
+              WHERE v.document_id = student_documents.id AND v.deleted_at IS NULL
+            )
           GROUP BY COALESCE(student_id, 0), COALESCE(guardian_id, 0)
           HAVING COUNT(*) > 1
         ) x`;
@@ -221,12 +246,15 @@ export class StudentDocumentsService {
 
     const [types, docs, required] = await Promise.all([
       this.prisma.student_document_types.findMany({ orderBy: [{ display_order: 'asc' }, { name: 'asc' }] }),
+      // A document whose every version was deleted is not on file: left out
+      // entirely, so its required slot shows as missing.
       this.prisma.student_documents.findMany({
         where: {
           OR: [{ student_id: cc }, ...(guardianIds.length ? [{ guardian_id: { in: guardianIds } }] : [])],
+          ...ON_FILE_DOCUMENT,
         },
         orderBy: [{ created_at: 'desc' }],
-        include: { versions: { orderBy: { version_no: 'desc' }, select: VERSION_SELECT } },
+        include: { versions: { where: LIVE_VERSION, orderBy: { version_no: 'desc' }, select: VERSION_SELECT } },
       }),
       this.requiredTypes(),
     ]);
@@ -274,6 +302,7 @@ export class StudentDocumentsService {
         archive_reason: d.archive_reason,
         created_by: d.created_by,
         created_at: d.created_at,
+        // Highest-numbered version still on file (deleted ones are filtered out above).
         current: d.versions[0] ?? null,
         versions: d.versions,
       })),
@@ -316,6 +345,7 @@ export class StudentDocumentsService {
       ? await this.prisma.student_documents.findMany({
           where: {
             archived_at: null,
+            ...ON_FILE_DOCUMENT,
             type_id: { in: requiredIds },
             OR: [
               { student_id: { in: ccs } },
@@ -452,7 +482,7 @@ export class StudentDocumentsService {
     const rows = await this.prisma.audit_logs.findMany({
       where: {
         entity_type: ENTITY,
-        action: { in: ['UPLOADED', 'REPLACED', 'ARCHIVED', 'RESTORED', 'MADE_CURRENT'] },
+        action: { in: ['UPLOADED', 'REPLACED', 'ARCHIVED', 'RESTORED', 'MADE_CURRENT', 'VERSION_DELETED'] },
         student_id: { not: null },
         ...(Object.keys(scopeWhere).length ? { students: scopeWhere } : {}),
         ...(query.before ? { id: { lt: query.before } } : {}),
@@ -547,19 +577,34 @@ export class StudentDocumentsService {
       if (dto.document_id && !doc) throw new NotFoundException('That document is not on this student');
       if (doc?.archived_at) throw new BadRequestException('Restore the document before adding a version');
       if (!doc && !type.allow_multiple) {
-        doc = await tx.student_documents.findFirst({ where: { type_id: type.id, archived_at: null, ...ownerWhere } });
+        // The one on file first; failing that, one whose versions were all
+        // deleted (TAFSD-541), reused so its numbering carries on.
+        doc =
+          (await tx.student_documents.findFirst({
+            where: { type_id: type.id, archived_at: null, ...ownerWhere, ...ON_FILE_DOCUMENT },
+          })) ??
+          (await tx.student_documents.findFirst({
+            where: { type_id: type.id, archived_at: null, ...ownerWhere },
+            orderBy: { id: 'desc' },
+          }));
       }
 
-      const isReplace = !!doc;
+      // The current version is the highest one not deleted. A document with
+      // none left is not on file, so filing into it is a new upload, not a
+      // replacement.
+      const current = doc
+        ? await tx.student_document_versions.findFirst({
+            where: { document_id: doc.id, ...LIVE_VERSION },
+            orderBy: { version_no: 'desc' },
+            select: { sha256: true, version_no: true },
+          })
+        : null;
+      const isReplace = !!current;
+      const reused = !!doc;
       if (isReplace && !perms.replace) throw new ForbiddenException('You can add documents but not replace them');
       if (!isReplace && !perms.upload) throw new ForbiddenException('You can replace documents but not add new ones');
 
       if (doc) {
-        const current = await tx.student_document_versions.findFirst({
-          where: { document_id: doc.id },
-          orderBy: { version_no: 'desc' },
-          select: { sha256: true, version_no: true },
-        });
         if (current?.sha256 === prepared.sha256) {
           throw new ConflictException('This exact file is already the current version');
         }
@@ -575,6 +620,7 @@ export class StudentDocumentsService {
         });
       }
 
+      // Over every row, deleted ones included: a version number is never reused.
       const last = await tx.student_document_versions.aggregate({
         where: { document_id: doc.id },
         _max: { version_no: true },
@@ -599,7 +645,7 @@ export class StudentDocumentsService {
         },
         select: VERSION_SELECT,
       });
-      if (isReplace && (dto.title !== undefined || dto.academic_year !== undefined)) {
+      if (reused && (dto.title !== undefined || dto.academic_year !== undefined)) {
         await tx.student_documents.update({
           where: { id: doc.id },
           data: {
@@ -670,6 +716,9 @@ export class StudentDocumentsService {
     const version = await this.prisma.student_document_versions.findUnique({ where: { id: versionId } });
     if (!version) throw new NotFoundException('Document not found');
     const { doc, cc, ownerLabel } = await this.scopedDocument(version.document_id, user, preferCc);
+    // TAFSD-541: the file is gone. Refused only after the scope check, so an
+    // out-of-scope caller can't learn that the version existed.
+    if (version.deleted_at) throw new NotFoundException('That version was deleted');
     if (doc.type.restricted && !perms.viewRestricted) throw new NotFoundException('Document not found');
 
     const ext = version.mime_type === 'application/pdf' ? 'pdf' : version.mime_type === 'image/png' ? 'png' : 'jpg';
@@ -702,13 +751,14 @@ export class StudentDocumentsService {
         where: { document_id: documentId },
         orderBy: { version_no: 'desc' },
       });
-      const source = versions.find((v) => v.id === versionId);
+      const live = liveVersions(versions);
+      const source = live.find((v) => v.id === versionId);
       if (!source) throw new NotFoundException('That version is not on this document');
-      if (versions[0].id === versionId) throw new BadRequestException('That version is already current');
+      if (live[0].id === versionId) throw new BadRequestException('That version is already current');
       return tx.student_document_versions.create({
         data: {
           document_id: documentId,
-          version_no: versions[0].version_no + 1,
+          version_no: nextVersionNo(versions),
           storage_key: source.storage_key,
           mime_type: source.mime_type,
           size_bytes: source.size_bytes,
@@ -758,6 +808,101 @@ export class StudentDocumentsService {
     return { ok: true };
   }
 
+  /**
+   * TAFSD-541: delete a wrong version (wrong student's B-Form, a blurry scan).
+   * The row stays, marked deleted with who/when/why, and drops out of every
+   * list, link, count and report. The file is removed from storage unless
+   * another version still on file points at it ("make current" copies the key
+   * forward). The previous version becomes current; with none left the
+   * document is no longer on file and its slot reads missing. Unlike archive
+   * this cannot be undone.
+   */
+  async deleteVersion(versionId: number, reason: string, user: IJwtStaffPayload, perms: VaultPerms, preferCc?: number) {
+    if (!perms.delete) throw new ForbiddenException('You cannot delete document versions');
+    const problem = checkDeleteReason(reason);
+    if (problem) throw new BadRequestException(problem);
+    const why = reason.trim();
+
+    const version = await this.prisma.student_document_versions.findUnique({ where: { id: versionId } });
+    if (!version) throw new NotFoundException('Document not found');
+    // Held to the caller's campus/class scope exactly like archive.
+    const { doc, cc, ownerLabel } = await this.scopedDocument(version.document_id, user, preferCc);
+    if (doc.type.restricted && !perms.viewRestricted) throw new NotFoundException('Document not found');
+    if (version.deleted_at) throw new BadRequestException('That version was already deleted');
+    if (doc.archived_at) throw new BadRequestException('Restore the document first');
+    const by = user.username || user.sub;
+
+    const { remaining, current, keyStillUsed } = await this.prisma.$transaction(async (tx) => {
+      // Same lock row as upload, so a delete and an upload on this document
+      // can't interleave.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`sdv:${doc.type_id}:${doc.guardian_id ? `g${doc.guardian_id}` : `s${doc.student_id}`}`}))`;
+      const marked = await tx.student_document_versions.updateMany({
+        where: { id: versionId, ...LIVE_VERSION },
+        data: { deleted_at: new Date(), deleted_by: by, delete_reason: why },
+      });
+      if (marked.count !== 1) throw new BadRequestException('That version was already deleted');
+      const left = await tx.student_document_versions.findMany({
+        where: { document_id: doc.id, ...LIVE_VERSION },
+        orderBy: { version_no: 'desc' },
+        select: { id: true, version_no: true },
+      });
+      const shared = await tx.student_document_versions.count({
+        where: { storage_key: version.storage_key, ...LIVE_VERSION },
+      });
+      return { remaining: left.length, current: left[0] ?? null, keyStillUsed: shared > 0 };
+    });
+
+    // After the commit: the record is what matters. A storage failure leaves
+    // an orphaned private object, logged for cleanup, but never fails the request.
+    let fileRemoved = false;
+    if (!keyStillUsed) {
+      try {
+        await this.storage.deleteByKey(version.storage_key);
+        fileRemoved = true;
+      } catch (err) {
+        this.logger.error(
+          `TAFSD-541: version ${versionId} of document ${doc.id} marked deleted, but its file could not be removed from storage (key ${version.storage_key}): ${(err as Error)?.message}`,
+        );
+      }
+    }
+
+    const filename = version.original_filename ?? 'unnamed file';
+    await this.auditLogs.log({
+      entity_type: ENTITY,
+      entity_id: String(doc.id),
+      action: 'VERSION_DELETED',
+      field: doc.type.code,
+      changed_by: by,
+      student_id: cc,
+      old_value: JSON.stringify({
+        document_id: doc.id,
+        version_id: version.id,
+        version_no: version.version_no,
+        original_filename: version.original_filename,
+        uploaded_by: version.uploaded_by,
+        uploaded_at: version.uploaded_at,
+        file_removed: fileRemoved,
+      }),
+      new_value: why,
+      note:
+        `Deleted version ${version.version_no} (${filename}) of ${doc.type.name}${doc.title ? ` "${doc.title}"` : ''} of ${ownerLabel}. Reason: ${why}` +
+        (current
+          ? ` Version ${current.version_no} is current now.`
+          : ' No version is left, so it is no longer on file.'),
+    });
+
+    return {
+      document_id: doc.id,
+      version_id: version.id,
+      version_no: version.version_no,
+      remaining_versions: remaining,
+      current_version_id: current?.id ?? null,
+      current_version_no: current?.version_no ?? null,
+      on_file: remaining > 0,
+      file_removed: fileRemoved,
+    };
+  }
+
   async restore(documentId: number, user: IJwtStaffPayload, perms: VaultPerms, preferCc?: number) {
     const { doc, cc, ownerLabel } = await this.scopedDocument(documentId, user, preferCc);
     if (doc.type.restricted && !perms.viewRestricted) throw new NotFoundException('Document not found');
@@ -767,6 +912,7 @@ export class StudentDocumentsService {
         where: {
           type_id: doc.type_id,
           archived_at: null,
+          ...ON_FILE_DOCUMENT,
           ...(doc.guardian_id ? { guardian_id: doc.guardian_id } : { student_id: doc.student_id }),
         },
         select: { id: true },

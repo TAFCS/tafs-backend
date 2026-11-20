@@ -205,9 +205,15 @@ export class TicketFlowService {
     };
   }
 
-  /** Lanes for staff filters and chips: every lane ever published, active first. */
+  /**
+   * Lanes for staff filters and chips: every active lane, plus a lane removed
+   * from the flow (is_active false) only while tickets are still filed under
+   * it, so those old tickets stay filterable. A deleted lane nobody used
+   * (e.g. one made for testing) drops out of the filter (TAFSD-542).
+   */
   lanes() {
     return this.prisma.ticket_lanes.findMany({
+      where: { OR: [{ is_active: true }, { tickets: { some: {} } }] },
       select: {
         id: true,
         key: true,
