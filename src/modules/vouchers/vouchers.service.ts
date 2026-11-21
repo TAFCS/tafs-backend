@@ -14,6 +14,7 @@ import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
+import { challanClassLabel } from '../voucher-pdf/challan-class-label';
 import { getMonthYearLabel, getConsolidatedMonthsLabel, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel, termOfHead, resolveTermStartMonth, monthAbsoluteIndex, termRelativeSlot, DEFAULT_TERM_START_MONTH, isEligibleForDisciplineGroup, type TermContext } from '../../common/utils/academic-labels';
 import { getClassTermMap } from '../../common/utils/class-terms.util';
 import { buildGraduationFilterWhere } from '../../common/utils/graduation-filter.util';
@@ -2554,7 +2555,7 @@ export class VouchersService {
                     ).toUpperCase(),
                     gender: (voucher.students?.gender || 'N/A').toUpperCase(),
                     grNumber: voucher.students.gr_number || 'N/A',
-                    className: (voucher.classes?.description || 'N/A').toUpperCase(),
+                    className: challanClassLabel(voucher.classes),
                     sectionName: (voucher.sections?.description || 'N/A').toUpperCase(),
                     houseName: (voucher.students?.houses?.house_color || voucher.students?.houses?.house_name || 'N/A').toUpperCase(),
                     classId: voucher.class_id,
@@ -2564,7 +2565,7 @@ export class VouchersService {
                     cc: s.cc,
                     fullName: (s.full_name || '').toUpperCase(),
                     grNumber: s.gr_number || 'N/A',
-                    className: (s.classes?.description || 'N/A').toUpperCase(),
+                    className: challanClassLabel(s.classes),
                     sectionName: (s.sections?.description || 'N/A').toUpperCase(),
                 })),
                 campusName: voucher.campuses?.campus_name || 'Main Campus',
