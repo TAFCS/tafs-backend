@@ -62,6 +62,8 @@ async function main() {
                     // As stored on the Gulistan-e-Johar campus record in production (saved there 2026-11-21).
                     campusName: 'Gulistan-e-Johar Campus',
                     campusAddress: 'C-61, 62, 63, 64 & 65, Block 13, Gulistan-e-Jauhar, Karachi · Phone (92-21) 3476-5111-13 · Fax (92-21) 3476-5114',
+                    // A placeholder UAN to show where it prints; the real one is set per campus in Setup → Campuses.
+                    campusUan: '111-000-000',
                     papers: b.papers.map((p: any) => ({ ...p, paper_date: new Date(`${p.paper_date}T00:00:00Z`), code: p.code ?? null })),
                 },
                 classId: set.classId,

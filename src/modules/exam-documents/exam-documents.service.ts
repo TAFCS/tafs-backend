@@ -88,7 +88,7 @@ function karachiToday(): string {
 
 
 const SCHEDULE_INCLUDE = {
-    campuses: { select: { id: true, campus_name: true, campus_code: true, address: true } },
+    campuses: { select: { id: true, campus_name: true, campus_code: true, address: true, uan_number: true } },
     exam_schedule_classes: { include: { classes: { select: { id: true, description: true } } } },
     exam_schedule_papers: { orderBy: [{ paper_date: 'asc' }, { sort_order: 'asc' }, { id: 'asc' }] },
     _count: { select: { exam_documents: true, exam_schedule_fee_dates: true } },
@@ -1631,6 +1631,7 @@ export class ExamDocumentsService {
                 notes: schedule.notes,
                 campusName: schedule.campuses.campus_name,
                 campusAddress: schedule.campuses.address,
+                campusUan: schedule.campuses.uan_number,
                 papers: schedule.exam_schedule_papers,
             },
             classId: doc.class_id,

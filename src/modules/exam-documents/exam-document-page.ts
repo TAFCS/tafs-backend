@@ -59,6 +59,8 @@ export interface ExamDocPageInput {
         notes: string[];
         campusName: string;
         campusAddress: string | null;
+        /** TAFSD-549: the campus's UAN number, from its record. */
+        campusUan?: string | null;
         papers: { class_id: number; paper_date: Date; time_text: string; subject: string; code: string | null }[];
     };
     classId: number;
@@ -131,6 +133,7 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         campusLine: [schedule.campusName.toUpperCase(), segment].filter(Boolean).join(' : '),
         // TAFSD-528: the campus's own address from its record; nothing hard-coded. No address, no line.
         campusAddress: schedule.campusAddress?.trim().toUpperCase() || null,
+        campusUan: schedule.campusUan?.trim() || null,
         webLine: WEB_LINE,
         issuedLong: karachiLong(p.issuedAt),
     };
