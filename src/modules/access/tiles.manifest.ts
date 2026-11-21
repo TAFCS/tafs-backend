@@ -826,6 +826,19 @@ const ALEVEL_ROLL_CALL_ACTIONS: TileAction[] = [
 // every campus at once, so they also need an unrestricted caller. The device
 // protocol endpoints (/iclock/*) are the hardware's own and are untouched.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+// TAFSD-556: biometric check-ins by students who are no longer enrolled (LEFT,
+// EXPELLED, GRADUATED). Its own tile; like every web tile it is default-deny and
+// granted per person, with no legacy capability bridging into it. `alerts` is a
+// separate tick because it sends a live notification to the holder for every
+// such student at their campus (once per student per day).
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const NON_ENROLLED_CHECK_INS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Not Enrolled Check-ins', description: 'See students who left, were expelled or graduated but still scanned in', default: true },
+
+  { id: 'export', label: 'Export the report to Excel', implies: ['view'] },
+  { id: 'alerts', label: 'Alerts when one checks in', description: 'An in-app and push alert the first time each such student at your campuses scans in that day', implies: ['view'] },
+];
+
 const ZK_DEVICE_LOGS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open ZK Device Logs', description: 'See the raw device push log', default: true },
 
@@ -1087,6 +1100,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'attendance.leave_requests', module: 'attendance', label: 'Leave Requests', description: 'Review employee leave applications', href: '/hr/leaves', group: 'Employees', capabilities: ['hr.leave.approve'], actions: LEAVE_REQUESTS_ACTIONS, legacyFullAccessCapabilities: ['hr.leave.approve'] },
   { id: 'attendance.student_attendance', module: 'attendance', label: 'Student Attendance', description: 'Per-class attendance records', href: '/hr/student-attendance-dashboard', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: STUDENT_ATTENDANCE_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
   { id: 'attendance.student_attendance_cycle', module: 'attendance', label: 'Student Attendance by Cycle', description: 'Student lines and punch matrix over a date range', href: '/hr/student-attendance-dashboard/cycle', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: STUDENT_ATTENDANCE_CYCLE_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
+  { id: 'attendance.non_enrolled_check_ins', module: 'attendance', label: 'Not Enrolled Check-ins', description: 'Students who left, were expelled or graduated but still scan in on a biometric device', href: '/attendance/non-enrolled-check-ins', group: 'Students', capabilities: ['attendance.non_enrolled_check_ins.view'], actions: NON_ENROLLED_CHECK_INS_ACTIONS },
   { id: 'attendance.alevel_roll_call', module: 'attendance', label: 'A-Level Roll Call', description: 'A-level section marking', href: '/hr/roll-call', group: 'Students', capabilities: ['attendance.student.rollcall.mark', 'attendance.student.rollcall.view'], actions: ALEVEL_ROLL_CALL_ACTIONS, legacyFullAccessCapabilities: ['attendance.student.rollcall.mark'] },
   { id: 'attendance.timetables', module: 'attendance', label: 'Timetables', description: 'Weekly schedules and O/A-Level makeup reschedules', href: '/hr/timetables', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'], actions: TIMETABLES_ACTIONS, legacyFullAccessCapabilities: ['hr.timetable.manage'] },
   { id: 'attendance.teaching_groups', module: 'attendance', label: 'Teaching Groups', description: 'Subject classes and student subject enrollment', href: '/hr/teaching-groups', group: 'Scheduling', capabilities: ['hr.timetable.view', 'hr.timetable.manage'], actions: TEACHING_GROUPS_ACTIONS, legacyFullAccessCapabilities: ['hr.timetable.manage'] },

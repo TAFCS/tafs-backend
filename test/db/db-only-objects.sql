@@ -128,3 +128,7 @@ ALTER TABLE "student_document_types"
 ALTER TABLE "student_documents"
   ADD CONSTRAINT "student_documents_one_owner_check"
   CHECK (("student_id" IS NOT NULL) <> ("guardian_id" IS NOT NULL));
+
+-- ── 20261122120000_attendance_non_enrolled_scans ────────────────────────────
+CREATE UNIQUE INDEX IF NOT EXISTS "attendance_non_enrolled_scans_one_alert_per_day"
+  ON "attendance_non_enrolled_scans"("student_cc", "attendance_date") WHERE "alerted_at" IS NOT NULL;

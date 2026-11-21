@@ -53,6 +53,8 @@ const permissionsList = [
     { key: 'finance.postdated_cheques.view', module: 'Finance Operations', description: 'Open Post-dated Cheques' },
     // TAFSD-504: granted with the Family Credit tile, per person.
     { key: 'finance.family_credit.view', module: 'Finance Operations', description: 'Open Family Credit' },
+    // TAFSD-556: granted with the Not Enrolled Check-ins tile, per person.
+    { key: 'attendance.non_enrolled_check_ins.view', module: 'HR & Attendance', description: 'Open Not Enrolled Check-ins' },
 
     // System Administration
     { key: 'system.users.view', module: 'System Administration', description: 'View staff accounts' },

@@ -30,6 +30,7 @@ import {
   type StudentDayPunches,
 } from './student-punch-direction.util';
 import { buildAttendanceActivityNote, formatPunchTime } from './attendance-activity-note.util';
+import { NonEnrolledScansService } from './non-enrolled-scans/non-enrolled-scans.service';
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000; // accidental double-tap / device retry window
 const LIVE_THRESHOLD_MS = 10 * 60 * 1000; // scans older than this on arrival are backfill, not live
@@ -224,6 +225,7 @@ export class ZkAttendanceProcessorService {
     private readonly chatGateway: ChatGateway,
     private readonly employeeNoticeBoard: EmployeeNoticeBoardService,
     private readonly coral9Writer: Coral9AttendanceWriterService,
+    private readonly nonEnrolledScans?: NonEnrolledScansService,
   ) {}
 
   /**
@@ -577,6 +579,12 @@ export class ZkAttendanceProcessorService {
 
     if (!personType || isDuplicate) return; // unmapped PIN or accidental double-scan: stop here
 
+    // TAFSD-556: a student who is no longer enrolled still gets processed
+    // exactly as before; this only records a flag beside the scan.
+    if (personType === DevicePersonType.STUDENT && studentCc != null) {
+      await this.flagIfNotEnrolled(scanRow, studentCc);
+    }
+
     const seg = await this.recomputeDaySequence(personType, employeeId, studentCc, attendanceDate);
 
     if (personType === DevicePersonType.STAFF) {
@@ -638,6 +646,27 @@ export class ZkAttendanceProcessorService {
       `Notification skipped for student ${studentCc} (scan ${scanRow.id}): no_family_id`,
     );
     return { scanId: scanRow.id, notified: false, skipReason: 'no_family_id' };
+  }
+
+  /**
+   * TAFSD-556. Best-effort: NonEnrolledScansService.flagScan never throws, and
+   * this catch is a second guard so nothing about flagging can ever stop the
+   * scan from marking the day or telling the parent.
+   */
+  private async flagIfNotEnrolled(scan: zk_attendance_scans, studentCc: number): Promise<void> {
+    if (!this.nonEnrolledScans) return;
+    try {
+      await this.nonEnrolledScans.flagScan({
+        id: scan.id,
+        student_cc: studentCc,
+        device_sn: scan.device_sn,
+        device_pin: scan.device_pin,
+        scan_time: scan.scan_time,
+        attendance_date: scan.attendance_date,
+      });
+    } catch (err) {
+      this.logger.error(`Non-enrolled check failed for scan ${scan.id}: ${(err as Error).message}`);
+    }
   }
 
   // Reassigns sequence_no/direction for every scan of this person+day, ordered by
