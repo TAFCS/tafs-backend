@@ -41,6 +41,15 @@ describe('campus UAN number', () => {
         expect((await prisma.campuses.findUniqueOrThrow({ where: { id: CAMPUS_A } })).uan_number).toBeNull();
     });
 
+    it('refuses a UAN not written as 111-XXX-XXX', async () => {
+        for (const bad of ['111823723', '021-111-823-723', '111-82-3723', 'abc']) {
+            const res = await admin.patch('/campuses/bulk').send({ items: [{ id: CAMPUS_A, uan_number: bad }] });
+            expect(res.status).toBe(400);
+        }
+        const res = await admin.post('/campuses').send({ campus_code: 'TX', campus_name: 'Bad UAN', uan_number: '123-456-789' });
+        expect(res.status).toBe(400);
+    });
+
     it('is saved on a new campus', async () => {
         const res = await admin.post('/campuses').send({ campus_code: 'TC', campus_name: 'Test Campus C', uan_number: '111-000-111' });
         expect(res.status).toBeLessThan(300);
