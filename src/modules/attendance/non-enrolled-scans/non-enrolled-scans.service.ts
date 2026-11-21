@@ -30,7 +30,7 @@ export type ScanToCheck = {
 
 export type FlagOutcome = 'enrolled' | 'flagged' | 'already_flagged' | 'table_missing' | 'failed';
 
-export type NonEnrolledReportQuery = { from?: string; to?: string; campus_ids?: number[] };
+export type NonEnrolledReportQuery = { from?: string; to?: string; campus_ids?: number[]; q?: string };
 
 export type NonEnrolledReportRow = {
   date: string;
@@ -45,7 +45,7 @@ export type NonEnrolledReportRow = {
   left_on: string | null;
   campus_id: number | null;
   campus_name: string | null;
-  devices: string[];
+  devices: { sn: string; pin: string }[];
   first_scan: string;
   last_scan: string;
   scans: number;
@@ -74,6 +74,18 @@ function parseDate(value: string | undefined, label: string): Date | undefined {
   const d = new Date(`${value}T00:00:00.000Z`);
   if (Number.isNaN(d.getTime())) throw new BadRequestException(`${label} is not a date`);
   return d;
+}
+
+/** Name, C.C. or G.R. as people type them; empty means no narrowing. */
+export function studentSearchWhere(q: string | undefined): Prisma.studentsWhereInput {
+  const term = q?.trim();
+  if (!term) return {};
+  const or: Prisma.studentsWhereInput[] = [
+    { full_name: { contains: term, mode: 'insensitive' } },
+    { gr_number: { contains: term, mode: 'insensitive' } },
+  ];
+  if (/^\d{1,9}$/.test(term)) or.push({ cc: Number(term) });
+  return { OR: or };
 }
 
 export function alertText(input: {
@@ -276,6 +288,7 @@ export class NonEnrolledScansService {
     }
     const campusIds = query.campus_ids?.length ? query.campus_ids : undefined;
     const scopeWhere = this.scope.whereForStudents(user);
+    const studentWhere: Prisma.studentsWhereInput = { AND: [scopeWhere, studentSearchWhere(query.q)] };
 
     let flags;
     try {
@@ -283,7 +296,7 @@ export class NonEnrolledScansService {
         where: {
           attendance_date: { gte: from, lte: to },
           ...(campusIds ? { campus_id: { in: campusIds } } : {}),
-          students: { is: scopeWhere },
+          students: { is: studentWhere },
         },
         orderBy: [{ attendance_date: 'desc' }, { scan_time: 'asc' }],
         select: {
@@ -313,7 +326,7 @@ export class NonEnrolledScansService {
       const date = ymd(f.attendance_date);
       const key = `${date}:${f.student_cc}`;
       const time = hhmm(f.scan_time);
-      const device = `${f.device_sn} / ${f.device_pin}`;
+      const device = { sn: f.device_sn, pin: f.device_pin };
       const row = byDay.get(key);
       if (!row) {
         byDay.set(key, {
@@ -338,7 +351,7 @@ export class NonEnrolledScansService {
       row.last_scan = time;
       row.status = f.student_status;
       row.scans += 1;
-      if (!row.devices.includes(device)) row.devices.push(device);
+      if (!row.devices.some((d) => d.sn === device.sn && d.pin === device.pin)) row.devices.push(device);
     }
     return { from: ymd(from), to: ymd(to), rows: [...byDay.values()], pending_migration: false };
   }
@@ -368,7 +381,7 @@ export class NonEnrolledScansService {
         status: STATUS_LABEL[r.status] ?? r.status,
         current_status: r.current_status ? STATUS_LABEL[r.current_status] ?? r.current_status : '',
         left_on: r.left_on ?? '',
-        devices: r.devices.join(', '),
+        devices: r.devices.map((d) => `${d.sn} / ${d.pin}`).join(', '),
       });
     }
     ws.getRow(1).font = { bold: true };

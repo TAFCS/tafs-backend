@@ -127,14 +127,20 @@ describe('Not enrolled check-ins', () => {
             status: 'LEFT',
             left_on: '2026-10-26',
             campus_id: CAMPUS_A,
-            devices: [`${SN} / ${STUDENT.A1}`],
+            devices: [{ sn: SN, pin: String(STUDENT.A1) }],
             scans: 2,
         });
     });
 
-    it('a SUPER_ADMIN sees every campus', async () => {
-        const res = await client(app, tokenFor(jwt, USERS.admin)).get(`${PATH}?from=${now.date}`);
-        expect(res.body.data.rows.map((r: { student_cc: number }) => r.student_cc).sort()).toEqual([STUDENT.A1, STUDENT.B1]);
+    it('a SUPER_ADMIN sees every campus, and the search narrows by name, C.C. or G.R.', async () => {
+        const admin = client(app, tokenFor(jwt, USERS.admin));
+        const ccs = async (qs: string) =>
+            (await admin.get(`${PATH}?from=${now.date}${qs}`)).body.data.rows.map((r: { student_cc: number }) => r.student_cc).sort();
+        expect(await ccs('')).toEqual([STUDENT.A1, STUDENT.B1]);
+        expect(await ccs(`&q=${STUDENT.B1}`)).toEqual([STUDENT.B1]);
+        expect(await ccs('&q=campus%20b')).toEqual([STUDENT.B1]);
+        expect(await ccs(`&q=GR-${STUDENT.A1}`)).toEqual([STUDENT.A1]);
+        expect(await ccs('&q=nobody')).toEqual([]);
     });
 
     it('export needs its own tick', async () => {

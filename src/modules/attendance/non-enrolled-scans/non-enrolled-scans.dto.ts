@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsInt, IsOptional, Matches } from 'class-validator';
+import { IsInt, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 /** `campus_ids=1,2` or `campus_ids=1&campus_ids=2` both arrive as [1, 2]. */
 const toIntArray = ({ value }: { value: unknown }) => {
@@ -25,4 +25,10 @@ export class NonEnrolledReportQueryDto {
   @Transform(toIntArray)
   @IsInt({ each: true })
   campus_ids?: number[];
+
+  @ApiPropertyOptional({ description: 'Student name, C.C. or G.R.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  q?: string;
 }
