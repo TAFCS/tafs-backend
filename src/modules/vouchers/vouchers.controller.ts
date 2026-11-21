@@ -33,6 +33,7 @@ import { ClearDepositDto } from './dto/clear-deposit.dto';
 import { WaiveVoucherDto } from './dto/waive-voucher.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
 import { GenerateVoucherPdfDto } from './dto/generate-voucher-pdf.dto';
+import { RegenerateVoucherDto } from './dto/regenerate-voucher.dto';
 import { BulkDeleteVouchersDto } from './dto/bulk-delete-vouchers.dto';
 import { ReleaseVouchersDto } from './dto/release-vouchers.dto';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
@@ -137,7 +138,8 @@ export class VouchersController {
      * /fee-challan prefill the dates and offer the override (TAFSD-174).
      */
     @Get('pay-immediate-preview')
-    @RequireAnyTile('finance.single_voucher')
+    // finance.vouchers too: Regenerate on the Vouchers page prefills the same way (TAFSD-550).
+    @RequireAnyTile('finance.single_voucher', 'finance.vouchers')
     @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
     @CheckPolicies(
         (ability) =>
@@ -341,6 +343,43 @@ export class VouchersController {
         return {
             success: true,
             message: 'Voucher PDF generated successfully',
+            data: result,
+        };
+    }
+
+    /**
+     * TAFSD-550 (Rule B): reissue the student's latest voucher with new issuance
+     * settings (the /fee-challan settings, from the shared form). The old voucher
+     * is superseded (VOID, linked) and comes back if the new one is deleted.
+     * Returns the new voucher and its rendered PDF.
+     */
+    @Post(':id/regenerate')
+    @UseGuards(JwtStaffGuard, PoliciesGuard, TileActionGuard)
+    @RequireAction('finance.vouchers#regenerate')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies(
+        (ability) =>
+            ability.can(Action.Read, 'Voucher') ||
+            ability.can(Action.Manage, 'Challan') ||
+            ability.can(Action.Manage, 'all'),
+    )
+    async regenerate(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: RegenerateVoucherDto,
+        @Req() req: any,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        await this.vouchersService.assertVoucherVisible(user, id);
+        const studentId = await this.vouchersService.studentIdOfVoucher(id);
+        await this.vouchersService.assertCanIssueFor(user, studentId);
+        if (dto.waive_surcharge && !dto.waived_by) {
+            dto.waived_by = req.user?.username || req.user?.id || 'Unknown';
+        }
+        const changedBy = req.user?.username || req.user?.id || 'system';
+        const result = await this.vouchersService.regenerateVoucher(id, dto, changedBy);
+        return {
+            success: true,
+            message: `Voucher #${id} regenerated as #${result.voucher.id}`,
             data: result,
         };
     }

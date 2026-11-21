@@ -12,6 +12,7 @@ import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { RecordVoucherDepositDto } from './dto/record-voucher-deposit.dto';
 import { SplitPartiallyPaidDto } from './dto/split-partially-paid.dto';
+import { RegenerateVoucherDto } from './dto/regenerate-voucher.dto';
 import { StorageService } from '../../common/storage/storage.service';
 import { VoucherPdfService } from '../voucher-pdf/voucher-pdf.service';
 import { getMonthYearLabel, getConsolidatedMonthsLabel, deriveAcademicYear, getInstallmentLabel, resolveVoucherAcademicYear, resolveVoucherAcademicYearLabel, buildVoucherMonthsLabel, termOfHead, resolveTermStartMonth, monthAbsoluteIndex, termRelativeSlot, DEFAULT_TERM_START_MONTH, isEligibleForDisciplineGroup, type TermContext } from '../../common/utils/academic-labels';
@@ -442,6 +443,13 @@ export class VouchersService {
         })) {
             throw new NotFoundException(`Student ${studentId} not found`);
         }
+    }
+
+    /** The student a voucher belongs to; 404 when there is no such voucher. */
+    async studentIdOfVoucher(id: number): Promise<number> {
+        const v = await this.prisma.vouchers.findUnique({ where: { id }, select: { student_id: true } });
+        if (!v) throw new NotFoundException(`Voucher ${id} not found`);
+        return v.student_id;
     }
 
     /** Kept for the Single Voucher Issuance call site — see assertStudentVisible. */
@@ -4994,6 +5002,156 @@ export class VouchersService {
             select: PDF_FREEZE_SELECT,
         });
         return new Map(rows.map((r) => [r.id, r as PdfFreezeRow]));
+    }
+
+    /**
+     * TAFSD-550 (Rule B): Regenerate on a student's latest voucher reissues it.
+     *
+     * The settings come from the caller (the same ones /fee-challan takes, via the
+     * shared VoucherSettingsPanel). What is billed comes from the voucher itself:
+     * same student, class, campus, fee date, academic year, month and heads. The
+     * reissue goes through create(), so it gets everything single and bulk
+     * issuance get, with no third copy of the issuance code:
+     *  - arrears and surcharge months re-derived (computeArrears), so waiving the
+     *    surcharge or a payment since issue is reflected;
+     *  - PAY IMMEDIATELY decided again (and pay_immediately_custom_dates honoured);
+     *  - the old voucher has the same fee date, so supersession voids it and
+     *    stamps superseded_by_voucher_id. Deleting the new voucher reactivates it
+     *    (Rule A), and its own predecessors stay linked to it as before.
+     *
+     * Only UNPAID / OVERDUE / EXPIRED vouchers can be reissued. A PARTIALLY_PAID
+     * one is split instead; PAID / WAIVED vouchers keep their frozen artifacts; a
+     * VOID one has already been replaced.
+     */
+    async regenerateVoucher(
+        voucherId: number,
+        dto: RegenerateVoucherDto,
+        changedBy: string = 'system',
+    ) {
+        const old = await this.prisma.vouchers.findUnique({
+            where: { id: voucherId },
+            select: {
+                id: true,
+                student_id: true,
+                campus_id: true,
+                class_id: true,
+                section_id: true,
+                bank_account_id: true,
+                status: true,
+                fee_date: true,
+                issue_date: true,
+                academic_year: true,
+                month: true,
+                voucher_heads: {
+                    orderBy: { id: 'asc' },
+                    select: {
+                        student_fee_id: true,
+                        discount_label: true,
+                        student_fees: { select: { status: true, is_discount: true } },
+                    },
+                },
+            },
+        });
+        if (!old) throw new NotFoundException(`Voucher #${voucherId} not found`);
+
+        // Same "latest" as remove(): reissuing an older voucher would void it while
+        // a newer one stands, breaking the most-recent-first chain.
+        const latest = await this.prisma.vouchers.findFirst({
+            where: { student_id: old.student_id },
+            orderBy: [{ issue_date: 'desc' }, { id: 'desc' }],
+            select: { id: true },
+        });
+        if (latest && latest.id !== old.id) {
+            throw new BadRequestException(
+                `Only the student's most recent voucher can be regenerated. Voucher #${latest.id} is newer.`,
+            );
+        }
+
+        const status = old.status ?? 'UNPAID';
+        if (status === 'PARTIALLY_PAID') {
+            throw new BadRequestException(
+                `Voucher #${voucherId} is partially paid. Split it to issue a balance voucher instead.`,
+            );
+        }
+        if (!['UNPAID', 'OVERDUE', 'EXPIRED'].includes(status)) {
+            throw new BadRequestException(
+                `Voucher #${voucherId} is ${status}. Only unpaid, overdue or expired vouchers can be regenerated.`,
+            );
+        }
+        if (!old.fee_date) {
+            // Without a fee date supersession cannot void the old voucher, and the
+            // new one would bill the same heads a second time.
+            throw new BadRequestException(
+                `Voucher #${voucherId} has no fee date, so it cannot be reissued. Delete it and issue a new one from Fee Challan.`,
+            );
+        }
+        // The new voucher must be the latest (issue_date desc, id desc) so it can
+        // be deleted first and bring the old one back.
+        const issueDate = new Date(dto.issue_date);
+        if (old.issue_date && issueDate.getTime() < new Date(old.issue_date).getTime()) {
+            throw new BadRequestException(
+                `The issue date can't be earlier than the voucher being regenerated (${new Date(old.issue_date).toISOString().slice(0, 10)}).`,
+            );
+        }
+
+        const heads = old.voucher_heads.filter((h) => h.student_fee_id != null);
+        const charged = heads.filter((h) => !h.student_fees?.is_discount);
+        if (charged.length > 0 && charged.every((h) => h.student_fees?.status === 'WAIVED')) {
+            // create() would issue a WAIVED challan and skip supersession, leaving
+            // this voucher standing. Write-offs go through waiveVoucher().
+            throw new BadRequestException(`Every fee head on voucher #${voucherId} is waived; there is nothing to reissue.`);
+        }
+
+        const createDto: CreateVoucherDto = {
+            ...dto,
+            student_id: old.student_id,
+            campus_id: old.campus_id,
+            class_id: old.class_id,
+            section_id: old.section_id ?? undefined,
+            bank_account_id: dto.bank_account_id ?? old.bank_account_id,
+            fee_date: old.fee_date.toISOString().slice(0, 10),
+            academic_year: old.academic_year ?? undefined,
+            month: old.month ?? undefined,
+            precedence: 1,
+            orderedFeeIds: heads.map((h) => h.student_fee_id as number),
+            fee_lines: heads
+                .filter((h) => h.discount_label)
+                .map((h) => ({ student_fee_id: h.student_fee_id as number, discount_label: h.discount_label as string })),
+        };
+
+        const created = await this.create(createDto, undefined, changedBy);
+
+        // Unreachable in practice (same fee date, live status), but a reissue that
+        // left the old voucher live would bill its heads twice. Say so loudly.
+        const after = await this.prisma.vouchers.findUnique({ where: { id: voucherId }, select: { status: true } });
+        if (after?.status !== 'VOID') {
+            this.logger.error(
+                `[Voucher ${voucherId}] Regenerated as #${created.id} but is still ${after?.status}; expected VOID.`,
+            );
+        }
+
+        await this.auditLogs.log({
+            entity_type: 'VOUCHER',
+            entity_id: String(created.id),
+            action: 'UPDATED',
+            field: 'regenerated_from',
+            old_value: String(voucherId),
+            new_value: String(created.id),
+            changed_by: changedBy,
+            student_id: old.student_id,
+            note: `Voucher #${voucherId} regenerated as #${created.id} with new issuance settings.`,
+        });
+
+        // The reissue is committed; a render failure must not read as a failed
+        // regenerate. The next download renders it (pdf_url is null until then).
+        let pdf: { pdf_url: string | null; filename?: string } = { pdf_url: null };
+        try {
+            const generatedByName = await this.resolveGeneratedByName(changedBy);
+            pdf = await this.generatePdf(created.id, true, false, generatedByName);
+        } catch (err) {
+            this.logger.error(`[Voucher ${created.id}] PDF render after regenerate failed: ${(err as Error).message}`);
+        }
+        return { voucher: created, replaced_voucher_id: voucherId, pdf_url: pdf.pdf_url, filename: pdf.filename };
     }
 
     /**

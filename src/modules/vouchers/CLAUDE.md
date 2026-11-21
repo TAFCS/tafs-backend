@@ -44,6 +44,18 @@ shared ways across the frontend — `+10/+15 days` in the single-issuance form, 
 bulk job config, and "inherit from original" in the split settings panel. That drift already
 exists; this task didn't need to fix it, just don't add to the pile.
 
+## Regenerate reissues through `create()` (TAFSD-550, Rule B)
+
+Regenerate on a student's **latest** voucher is not a fourth source: `POST /vouchers/:id/regenerate`
+→ `regenerateVoucher()` builds a `CreateVoucherDto` from the voucher (student, class, campus,
+section, fee date, academic year, month, its heads as `orderedFeeIds`) plus the caller's
+issuance settings (`RegenerateVoucherDto`, picked from `CreateVoucherDto`) and calls `create()`.
+Same fee date, so supersession voids the old voucher and links it (Rule A). Guards: latest only
+(same ordering as `remove()`), status `UNPAID`/`OVERDUE`/`EXPIRED`, a fee date, an issue date not
+before the old one, not every head waived. Anything else on the Vouchers page gets the old
+PDF-only "Refresh PDF" (`generate-pdf` with `regenerate: true`). `regenerate-voucher.spec.ts`,
+`test/db/voucher-regenerate.db-spec.ts`.
+
 ## PAY IMMEDIATELY — the rules
 
 A voucher issued to a student who has not paid their last two vouchers is a **PAY IMMEDIATELY**
@@ -196,7 +208,8 @@ owes money. So it applies to the second and every later consecutive one.
 |---|---|
 | `/fee-challan` single, bulk job | `is_revised` on `CreateVoucherDto` / `StartBulkJobDto` (bulk: job-wide) |
 | Split balance voucher | `is_revised` on `SplitPartiallyPaidDto`; **always true when the balance is PAY IMMEDIATELY** |
-| Regenerate | `is_revised` on `GenerateVoucherPdfDto`, on or off; ignored without `regenerate: true`. Audited |
+| Regenerate (latest voucher, TAFSD-550) | `is_revised` on `RegenerateVoucherDto`; the reissue goes through `create()` |
+| Refresh PDF (any other voucher) | `is_revised` on `GenerateVoucherPdfDto`, on or off; ignored without `regenerate: true`. Audited |
 
 ### Check after touching any of this
 
