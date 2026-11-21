@@ -20,6 +20,12 @@ class CampusUpdateItemDto {
     @IsString()
     address?: string;
 
+    /** TAFSD-549: the campus's UAN phone number, e.g. "111-823-723". Empty clears it. */
+    @IsOptional()
+    @IsString()
+    @MaxLength(40)
+    uan_number?: string;
+
     @IsOptional()
     @IsString()
     @MaxLength(10)

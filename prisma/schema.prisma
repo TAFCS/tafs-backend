@@ -134,6 +134,8 @@ model campuses {
   campus_code                   String                          @unique @db.VarChar(10)
   campus_name                   String                          @db.VarChar(100)
   address                       String?
+  /// TAFSD-549: the campus's UAN phone number, printed on its statements of entry and admit cards.
+  uan_number                    String?                         @db.VarChar(40)
   campus_prefix                 String?                         @db.VarChar(10)
   is_active                     Boolean                         @default(true)
   academic_calendar_days        academic_calendar_days[]

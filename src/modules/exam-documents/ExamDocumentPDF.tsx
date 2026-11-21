@@ -82,6 +82,8 @@ export interface ExamDocPage {
     campusLine: string;
     /** The campus record's address, in capitals; null when the campus has none. */
     campusAddress: string | null;
+    /** TAFSD-549: the campus's UAN number; null when it has none. */
+    campusUan: string | null;
     /** Emails and website, as written. */
     webLine: string;
     issuedLong: string;
@@ -412,7 +414,9 @@ function Footer({ d, page, of, right }: { d: ExamDocPage; page: number; of: numb
             </View>
             <View style={s.footerBox}>
                 <Text style={s.footCampus}>{d.campusLine}</Text>
-                {d.campusAddress ? <Text style={s.footText}>{d.campusAddress}</Text> : null}
+                {d.campusAddress || d.campusUan ? (
+                    <Text style={s.footText}>{[d.campusAddress, d.campusUan ? `UAN : ${d.campusUan}` : null].filter(Boolean).join('  ·  ')}</Text>
+                ) : null}
                 <Text style={s.footText}>{d.webLine}</Text>
             </View>
             <Text style={s.sysNote}>

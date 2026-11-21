@@ -127,7 +127,14 @@ describe('TAFSD-528 exam document page', () => {
         );
     });
 
-    it('keeps a long name on one line of its box', () => {
+    it('prints the campus address and UAN from the campus record', () => {
+        const d = buildExamDocPage(base({ schedule: { ...base().schedule, campusAddress: ' C-61, Block 13 ', campusUan: ' 111-823-723 ' } }));
+        expect([d.campusAddress, d.campusUan]).toEqual(['C-61, BLOCK 13', '111-823-723']);
+        const none = buildExamDocPage(base({ schedule: { ...base().schedule, campusAddress: null, campusUan: '' } }));
+        expect([none.campusAddress, none.campusUan]).toEqual([null, null]);
+    });
+
+        it('keeps a long name on one line of its box', () => {
         expect(fitOneLine('HAMZA ARIF', 270)).toBe(10.5);
         const long = fitOneLine('MUHAMMAD ABDUL REHMAN SIDDIQUI QURESHI KHAN YOUSUFZAI', 270);
         expect(long).toBeLessThan(10.5);

@@ -185,6 +185,7 @@ export class CampusesService {
                 campus_code: dto.campus_code,
                 campus_name: dto.campus_name,
                 address: dto.address,
+                uan_number: dto.uan_number?.trim() || null,
                 campus_prefix: dto.campus_prefix,
             } as any,
         });
@@ -206,7 +207,7 @@ export class CampusesService {
             (
                 await this.prisma.campuses.findMany({
                     where: { id: { in: existingIds } },
-                    select: { id: true, campus_code: true, campus_name: true, address: true, campus_prefix: true },
+                    select: { id: true, campus_code: true, campus_name: true, address: true, uan_number: true, campus_prefix: true },
                 })
             ).map((c) => [c.id, c]),
         );
@@ -226,6 +227,9 @@ export class CampusesService {
                             ...(item.address !== undefined && {
                                 address: item.address,
                             }),
+                            ...(item.uan_number !== undefined && {
+                                uan_number: item.uan_number.trim() || null,
+                            }),
                             ...(item.campus_prefix !== undefined && {
                                 campus_prefix: item.campus_prefix,
                             }),
@@ -237,6 +241,7 @@ export class CampusesService {
                             campus_code: item.campus_code || '',
                             campus_name: item.campus_name || '',
                             address: item.address,
+                            uan_number: item.uan_number?.trim() || null,
                             campus_prefix: item.campus_prefix,
                         } as any,
                     });
@@ -276,6 +281,9 @@ export class CampusesService {
             }
             if ((before as any).address !== (record as any).address) {
                 changes.push(`address "${(before as any).address ?? '—'}" → "${(record as any).address ?? '—'}"`);
+            }
+            if ((before as any).uan_number !== (record as any).uan_number) {
+                changes.push(`UAN "${(before as any).uan_number ?? '—'}" → "${(record as any).uan_number ?? '—'}"`);
             }
             if ((before as any).campus_prefix !== (record as any).campus_prefix) {
                 changes.push(`prefix "${(before as any).campus_prefix ?? '—'}" → "${(record as any).campus_prefix ?? '—'}"`);
