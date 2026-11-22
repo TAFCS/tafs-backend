@@ -26,6 +26,12 @@ export class NonEnrolledReportQueryDto {
   @IsInt({ each: true })
   campus_ids?: number[];
 
+  @ApiPropertyOptional({ type: [Number], description: "Segment ids (through the student's class); omitted means every segment you can see." })
+  @IsOptional()
+  @Transform(toIntArray)
+  @IsInt({ each: true })
+  segment_ids?: number[];
+
   @ApiPropertyOptional({ description: 'Student name, C.C. or G.R.' })
   @IsOptional()
   @IsString()

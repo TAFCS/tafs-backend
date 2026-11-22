@@ -836,7 +836,7 @@ const NON_ENROLLED_CHECK_INS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Not Enrolled Check-ins', description: 'See students who left, were expelled or graduated but still scanned in', default: true },
 
   { id: 'export', label: 'Export the report to Excel', implies: ['view'] },
-  { id: 'alerts', label: 'Alerts when one checks in', description: 'An in-app and push alert the first time each such student at your campuses scans in that day', implies: ['view'] },
+  { id: 'alerts', label: 'Alerts when one checks in', description: 'An in-app and push alert the first time each such student scans in that day, for students within your scope (campus, segment, class). Super admins get these unless denied here', implies: ['view'] },
 ];
 
 const ZK_DEVICE_LOGS_ACTIONS: TileAction[] = [
