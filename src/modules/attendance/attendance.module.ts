@@ -38,6 +38,9 @@ import { RecomputeLateController } from './recompute-late.controller';
 import { Coral9AttendanceWriterService } from './coral9-attendance-writer.service';
 import { Coral9SchedulerService } from './coral9-scheduler.service';
 import { ZkDeviceResendSchedulerService } from './zk-device-resend-scheduler.service';
+import { AccessModule } from '../access/access.module';
+import { NonEnrolledScansController } from './non-enrolled-scans/non-enrolled-scans.controller';
+import { NonEnrolledScansService } from './non-enrolled-scans/non-enrolled-scans.service';
 
 @Module({
   imports: [
@@ -48,8 +51,10 @@ import { ZkDeviceResendSchedulerService } from './zk-device-resend-scheduler.ser
     TimetablesModule,
     EmployeeNoticeBoardModule,
     forwardRef(() => StaffNotificationsModule),
+    AccessModule,
   ],
   controllers: [
+    NonEnrolledScansController,
     RollSessionsController,
     ClassSessionReschedulesController,
     StaffLessonReschedulesController,
@@ -85,6 +90,7 @@ import { ZkDeviceResendSchedulerService } from './zk-device-resend-scheduler.ser
     Coral9AttendanceWriterService,
     Coral9SchedulerService,
     ZkDeviceResendSchedulerService,
+    NonEnrolledScansService,
   ],
   exports: [
     RollSessionsService,
