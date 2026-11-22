@@ -417,12 +417,40 @@ const REGISTER_EMPLOYEE_ACTIONS: TileAction[] = [
 // superadmin approves it on /notice-board/review; so is a non-superadmin's
 // edit to a post's wording. Review itself is role-gated, not an action.
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+/** TAFSD-553: the student statuses a notice can be sent to, in picker order. */
+export const NOTICE_TARGET_STATUSES = [
+  { status: 'ENROLLED', label: 'Enrolled' },
+  { status: 'QUICK_ADMISSION', label: 'Quick Admission' },
+  { status: 'SOFT_ADMISSION', label: 'Soft Admission' },
+  { status: 'LEFT', label: 'Left' },
+  { status: 'EXPELLED', label: 'Expelled' },
+  { status: 'GRADUATED', label: 'Graduated' },
+] as const;
+
+/** `target.enrolled`, `target.quick_admission`, … on communication.notice_board. */
+export function noticeTargetActionId(status: string): string {
+  return `target.${status.toLowerCase()}`;
+}
+
 const NOTICE_BOARD_ACTIONS: TileAction[] = [
   { id: 'view', label: 'View posts and read stats', default: true },
 
   { id: 'create', label: 'Post a notice (incl. media upload)', description: 'Posts by anyone but a superadmin wait for superadmin approval before families see them. The poster can edit or delete their own notice until it is approved.', implies: ['view'] },
   { id: 'edit', label: 'Edit or pin a notice', implies: ['view'] },
   { id: 'delete', label: 'Delete a notice', implies: ['view'] },
+
+  // TAFSD-553: who a new notice may be sent to, one grant per student status.
+  // Every notice now names at least one status and one academic year (no more
+  // "blank = everyone"); the poster needs the grant for each status they pick,
+  // and for the status of each student they address by name. Enrolled is
+  // ticked when the tile is granted so existing posters keep working; the rest
+  // are granted per person. A superadmin holds them all.
+  ...NOTICE_TARGET_STATUSES.map(({ status, label }) => ({
+    id: noticeTargetActionId(status),
+    label: `Send to ${label} students`,
+    ...(status === 'ENROLLED' ? { default: true } : {}),
+    implies: ['view'],
+  })),
 ];
 
 // The admin broadcast routes here had NO authorization at all — no

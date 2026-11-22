@@ -19,6 +19,11 @@ import { StaffNotificationsService } from '../staff-notifications/staff-notifica
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+import {
+  NOTICE_TARGET_STATUSES,
+  actionsCover,
+  noticeTargetActionId,
+} from '../access/tiles.manifest';
 import * as path from 'path';
 
 const POST_LIST_INCLUDE = {
@@ -122,6 +127,69 @@ export class NoticeBoardService {
     c.forEach((id) => this.scope.assertCampus(user, id));
     cl.forEach((id) => this.scope.assertClass(user, id));
     se.forEach((id) => this.scope.assertSection(user, id));
+  }
+
+  /**
+   * TAFSD-553: who a notice typed on the Notice Board (web or staff app) may
+   * reach. Called by the admin create route only; system notices (defaulter,
+   * change-request, Saturday schedule) build their own audience.
+   *
+   * - An audience notice must name at least one student status and at least
+   *   one academic year. Blank used to mean "every status / every year".
+   *   This holds for a superadmin too.
+   * - Each status picked needs its `communication.notice_board#target.<status>`
+   *   grant. A superadmin holds them all.
+   * - A notice to named students needs the grant for each student's status.
+   */
+  async assertAudienceAllowed(
+    user: IJwtStaffPayload,
+    dto: Pick<CreatePostDto, 'student_ccs' | 'student_statuses' | 'academic_years'>,
+  ): Promise<void> {
+    const allowed = this.allowedTargetStatuses(user);
+    const label = (status: string) =>
+      NOTICE_TARGET_STATUSES.find((s) => s.status === status)?.label ?? status;
+
+    const ccs = dto.student_ccs ?? [];
+    if (ccs.length > 0) {
+      const rows = await this.prisma.students.findMany({
+        where: { cc: { in: ccs } },
+        select: { cc: true, status: true },
+      });
+      const blocked = rows.filter((r) => !r.status || !allowed.has(r.status));
+      if (blocked.length > 0) {
+        const statuses = [...new Set(blocked.map((r) => label(r.status ?? 'unknown')))];
+        throw new ForbiddenException(
+          `You can't send notices to ${statuses.join(', ')} students (CC ${blocked.map((r) => r.cc).join(', ')}).`,
+        );
+      }
+      return;
+    }
+
+    const statuses = [...new Set(dto.student_statuses ?? [])];
+    const years = [...new Set((dto.academic_years ?? []).map((y) => y.trim()).filter(Boolean))];
+    if (statuses.length === 0) {
+      throw new BadRequestException('Choose at least one student status.');
+    }
+    if (years.length === 0) {
+      throw new BadRequestException('Choose at least one academic year.');
+    }
+    const notAllowed = statuses.filter((st) => !allowed.has(st));
+    if (notAllowed.length > 0) {
+      throw new ForbiddenException(
+        `You can't send notices to ${notAllowed.map(label).join(', ')} students.`,
+      );
+    }
+  }
+
+  /** Student statuses this user may send notices to (TAFSD-553). */
+  allowedTargetStatuses(user: IJwtStaffPayload): Set<string> {
+    if (this.isSuperAdmin(user)) return new Set(NOTICE_TARGET_STATUSES.map((s) => s.status));
+    const held = new Set(user.actions ?? []);
+    return new Set(
+      NOTICE_TARGET_STATUSES.map((s) => s.status).filter((st) =>
+        actionsCover(held, `communication.notice_board#${noticeTargetActionId(st)}`),
+      ),
+    );
   }
 
   // ── Family-facing ────────────────────────────────────────────────────────

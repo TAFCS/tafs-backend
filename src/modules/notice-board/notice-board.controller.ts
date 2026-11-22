@@ -99,7 +99,8 @@ export class NoticeBoardController {
   @CheckPolicies((ability) => ability.can(Action.Manage, 'Chat'))
   @RequireAction('communication.notice_board#create')
   @ApiOperation({ summary: 'Admin: create a post' })
-  create(@CurrentUser() user: any, @Body() dto: CreatePostDto) {
+  async create(@CurrentUser() user: any, @Body() dto: CreatePostDto) {
+    await this.service.assertAudienceAllowed(user, dto);
     return this.service.createPost(user.sub, dto, auditActorLabel(user), user);
   }
 
