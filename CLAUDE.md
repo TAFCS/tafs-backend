@@ -234,6 +234,14 @@ regenerate on the latest voucher reissues with the chosen inputs and the old
 voucher is superseded/replaced per Rule A (so its predecessors still reactivate
 if the regenerated one is later deleted).
 
+**Implemented (TAFSD-550).** Regenerate is the webapp's `RegenerateVoucherModal`
+(renders `VoucherSettingsPanel`) → `POST /vouchers/:id/regenerate` →
+`regenerateVoucher()` → `create()`. See `src/modules/vouchers/CLAUDE.md`. Still
+outstanding from the list above: the bulk job's own start form does not render
+the shared panel yet, and the panel has no editable bank title/number fields
+(`/fee-challan` keeps them in state but never sends them; the PDF reads the bank
+account row).
+
 ---
 
 ## Rule C — WAIVED is the write-off mirror of PAID, and must behave identically
