@@ -66,6 +66,11 @@ const TABLES = [
     'classes',
     'campuses',
     'fee_types',
+    // Not reached by the CASCADE from students, so cleared by name: a guardian
+    // CNIC or category code left over from one spec would collide in the next.
+    'guardians',
+    'houses',
+    'student_categories',
     'user_scope_entries',
     'user_tile_action_grants',
     'user_tile_grants',
@@ -79,7 +84,7 @@ export async function resetDatabase(prisma: PrismaClient) {
 }
 
 /** Explicit ids skip the sequence; move it past them so app inserts don't collide. */
-async function bumpSequence(prisma: PrismaClient, table: string, column = 'id') {
+export async function bumpSequence(prisma: PrismaClient, table: string, column = 'id') {
     await prisma.$executeRawUnsafe(
         `SELECT setval(pg_get_serial_sequence('"${table}"', '${column}'), (SELECT COALESCE(MAX("${column}"), 0) + 1 FROM "${table}"), false)`,
     );

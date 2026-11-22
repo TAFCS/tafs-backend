@@ -58,10 +58,21 @@ jobs:
         run: npx jest --ci
 
   # test/db/**/*.db-spec.ts: the real AppModule over HTTP (guards, validation,
-  # scope) against a real Postgres, starting with the studentwise-fees flows.
+  # scope) against a real Postgres. Split into one check per area so the PR
+  # page names the area that broke. Each entry's `check` is the check's name on
+  # GitHub (and in branch protection), so renaming one is a protection change.
   db:
-    name: DB tests
+    name: ${{ matrix.check }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - check: DB tests
+            # Everything that has no check of its own.
+            jest_args: --testPathIgnorePatterns=/test/db/student-directory/
+          - check: Student directory tests
+            jest_args: test/db/student-directory
     services:
       postgres:
         image: postgres:17
@@ -93,8 +104,8 @@ jobs:
         run: npx tsc -p test/db/tsconfig.json
       - name: Build the test database
         run: bash test/db/setup-test-db.sh
-      - name: Jest (DB)
-        run: npx jest -c test/jest-db.json --ci
+      - name: Jest (${{ matrix.check }})
+        run: npx jest -c test/jest-db.json --ci ${{ matrix.jest_args }}
 
   image:
     needs: [check, unit, db]
