@@ -45,6 +45,8 @@ function makeService(opts: {
   alreadyAlerted?: number;
   createError?: unknown;
   holders?: string[];
+  superAdmins?: string[];
+  denied?: string[];
   visible?: boolean;
 } = {}) {
   const prisma: any = {
@@ -68,10 +70,17 @@ function makeService(opts: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     user_tile_action_grants: {
-      findMany: jest.fn().mockResolvedValue((opts.holders ?? ['u-1']).map((user_id) => ({ user_id }))),
+      findMany: jest.fn().mockImplementation(({ where }: { where: { allow: boolean } }) =>
+        Promise.resolve((where.allow ? opts.holders ?? ['u-1'] : opts.denied ?? []).map((user_id) => ({ user_id }))),
+      ),
     },
     user_access_packs: { findMany: jest.fn().mockResolvedValue([]) },
-    users: { findUnique: jest.fn().mockResolvedValue({ role: StaffRole.PRINCIPAL }) },
+    users: {
+      findUnique: jest.fn().mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve({ role: (opts.superAdmins ?? []).includes(where.id) ? StaffRole.SUPER_ADMIN : StaffRole.PRINCIPAL }),
+      ),
+      findMany: jest.fn().mockResolvedValue((opts.superAdmins ?? []).map((id) => ({ id }))),
+    },
   };
   const scope: any = {
     resolveEffective: jest.fn().mockResolvedValue({}),
@@ -164,6 +173,27 @@ describe('NonEnrolledScansService.flagScan', () => {
     expect(notifications.notify).not.toHaveBeenCalled();
   });
 
+  it('alerts every active super admin without a tick, whatever their scope', async () => {
+    const { service, prisma, notifications, access } = makeService({ holders: [], superAdmins: ['sa-1', 'sa-2'], visible: false });
+    await service.flagScan(scan(), NOW);
+    expect(prisma.users.findMany).toHaveBeenCalledWith({ where: { role: StaffRole.SUPER_ADMIN, is_active: true }, select: { id: true } });
+    expect(notifications.notify.mock.calls.map((c: unknown[]) => c[0]).sort()).toEqual(['sa-1', 'sa-2']);
+    // A super admin is not looked up as an ordinary holder.
+    expect(access.resolveLiveSession).not.toHaveBeenCalled();
+  });
+
+  it('a super admin with an explicit deny on alerts gets none', async () => {
+    const { service, notifications } = makeService({ holders: [], superAdmins: ['sa-1', 'sa-2'], denied: ['sa-2'] });
+    await service.flagScan(scan(), NOW);
+    expect(notifications.notify.mock.calls.map((c: unknown[]) => c[0])).toEqual(['sa-1']);
+  });
+
+  it('a super admin who also has the tick is alerted once', async () => {
+    const { service, notifications } = makeService({ holders: ['sa-1', 'u-1'], superAdmins: ['sa-1'] });
+    await service.flagScan(scan(), NOW);
+    expect(notifications.notify.mock.calls.map((c: unknown[]) => c[0]).sort()).toEqual(['sa-1', 'u-1']);
+  });
+
   it('flags but does not alert for a past day replayed by a device catching up', async () => {
     const { service, prisma, notifications } = makeService();
     await expect(
@@ -195,6 +225,72 @@ describe('NonEnrolledScansService.flagScan', () => {
     expect(
       alertText({ fullName: null, cc: 9, status: student_status.EXPELLED, leftOn: null, campusName: null, time: '08:05' }).body,
     ).toBe('A student (C.C. 9) is marked expelled but scanned in at 08:05.');
+  });
+});
+
+describe('NonEnrolledScansService.report: split by segment, limited by scope', () => {
+  const flag = (cc: number, date: string, segment: { id: number; name: string } | null, time = '07:40') => ({
+    student_cc: cc,
+    student_status: student_status.LEFT,
+    left_at: null,
+    campus_id: 1,
+    device_sn: 'GEJ-01',
+    device_pin: String(cc),
+    scan_time: new Date(`${date}T${time}:00.000Z`),
+    attendance_date: new Date(`${date}T00:00:00.000Z`),
+    campuses: { campus_name: 'Gulistan-e-Johar Campus' },
+    students: {
+      full_name: `Student ${cc}`,
+      gr_number: null,
+      status: student_status.LEFT,
+      classes: { class_code: 'EY-I', segment_id: segment?.id ?? null, segments: segment ? { name: segment.name } : null },
+    },
+  });
+  const EY = { id: 1, name: 'Early Years' };
+  const JR = { id: 2, name: 'Junior' };
+
+  function reportService(flags: unknown[]) {
+    const { service, prisma } = makeService();
+    prisma.attendance_non_enrolled_scans.findMany = jest.fn().mockResolvedValue(flags);
+    const scope: any = (service as any).scope;
+    scope.whereForStudents.mockReturnValue({ classes: { segment_id: { in: [1] } } });
+    return { service, prisma, scope };
+  }
+  const user = { id: 'u-1', role: StaffRole.PRINCIPAL } as any;
+
+  it("applies the caller's scope and narrows by the segment filter", async () => {
+    const { service, prisma } = reportService([]);
+    await service.report({ from: '2026-11-20', to: '2026-11-22', segment_ids: [1, 2] }, user);
+    const where = prisma.attendance_non_enrolled_scans.findMany.mock.calls[0][0].where;
+    expect(where.students.is.AND).toEqual([
+      { classes: { segment_id: { in: [1] } } },
+      {},
+      { classes: { is: { segment_id: { in: [1, 2] } } } },
+    ]);
+  });
+
+  it('no segment filter adds nothing beyond scope', async () => {
+    const { service, prisma } = reportService([]);
+    await service.report({ from: '2026-11-22' }, user);
+    const where = prisma.attendance_non_enrolled_scans.findMany.mock.calls[0][0].where;
+    expect(where.students.is.AND).toHaveLength(2);
+  });
+
+  it('returns the segment on each row and a per-segment count', async () => {
+    const { service } = reportService([
+      flag(10, '2026-11-22', EY),
+      flag(10, '2026-11-22', EY, '08:00'),
+      flag(10, '2026-11-21', EY),
+      flag(11, '2026-11-22', JR),
+      flag(12, '2026-11-22', null),
+    ]);
+    const out = await service.report({ from: '2026-11-21', to: '2026-11-22' }, user);
+    expect(out.rows.find((r) => r.student_cc === 11)).toMatchObject({ segment_id: 2, segment_name: 'Junior' });
+    expect(out.by_segment).toEqual([
+      { segment_id: 1, segment_name: 'Early Years', students: 1, days: 2 },
+      { segment_id: 2, segment_name: 'Junior', students: 1, days: 1 },
+      { segment_id: null, segment_name: null, students: 1, days: 1 },
+    ]);
   });
 });
 

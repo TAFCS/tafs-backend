@@ -30,7 +30,14 @@ export type ScanToCheck = {
 
 export type FlagOutcome = 'enrolled' | 'flagged' | 'already_flagged' | 'table_missing' | 'failed';
 
-export type NonEnrolledReportQuery = { from?: string; to?: string; campus_ids?: number[]; q?: string };
+export type NonEnrolledReportQuery = {
+  from?: string;
+  to?: string;
+  campus_ids?: number[];
+  /** Segments of the student's class. Empty means every segment you can see. */
+  segment_ids?: number[];
+  q?: string;
+};
 
 export type NonEnrolledReportRow = {
   date: string;
@@ -45,10 +52,21 @@ export type NonEnrolledReportRow = {
   left_on: string | null;
   campus_id: number | null;
   campus_name: string | null;
+  /** The segment of the student's class (Early Years, Junior, ...). */
+  segment_id: number | null;
+  segment_name: string | null;
   devices: { sn: string; pin: string }[];
   first_scan: string;
   last_scan: string;
   scans: number;
+};
+
+/** Students and check-in days per segment, for the report's breakdown. */
+export type NonEnrolledSegmentCount = {
+  segment_id: number | null;
+  segment_name: string | null;
+  students: number;
+  days: number;
 };
 
 const MAX_RANGE_DAYS = 366;
@@ -86,6 +104,20 @@ export function studentSearchWhere(q: string | undefined): Prisma.studentsWhereI
   ];
   if (/^\d{1,9}$/.test(term)) or.push({ cc: Number(term) });
   return { OR: or };
+}
+
+/** One entry per segment present in the rows, in segment order; no segment last. */
+export function countBySegment(rows: NonEnrolledReportRow[]): NonEnrolledSegmentCount[] {
+  const map = new Map<number | null, { name: string | null; students: Set<number>; days: number }>();
+  for (const r of rows) {
+    const entry = map.get(r.segment_id) ?? { name: r.segment_name, students: new Set<number>(), days: 0 };
+    entry.students.add(r.student_cc);
+    entry.days += 1;
+    map.set(r.segment_id, entry);
+  }
+  return [...map.entries()]
+    .map(([segment_id, e]) => ({ segment_id, segment_name: e.name, students: e.students.size, days: e.days }))
+    .sort((a, b) => (a.segment_id == null ? 1 : b.segment_id == null ? -1 : (a.segment_name ?? '').localeCompare(b.segment_name ?? '')));
 }
 
 export function alertText(input: {
@@ -213,12 +245,16 @@ export class NonEnrolledScansService {
   }
 
   /**
-   * People who asked for these alerts: an explicit tick on the `alerts` action,
-   * for the person or through a pack, and still holding it after denials and
-   * deactivation. Being SUPER_ADMIN does not sign anyone up.
+   * Who gets these alerts:
+   * - every active SUPER_ADMIN, unless they have an explicit deny on the
+   *   `alerts` action (the one way a super admin opts out);
+   * - everyone else with an explicit tick on `alerts`, for the person or
+   *   through a pack, still holding it after denials and deactivation.
+   * Each alert is then limited to recipients whose scope covers the student
+   * (campus, segment, class, section), see sendAlerts.
    */
   async alertRecipients(): Promise<string[]> {
-    const [direct, viaPack] = await Promise.all([
+    const [direct, viaPack, superAdmins, denied] = await Promise.all([
       this.prisma.user_tile_action_grants.findMany({
         where: { tile_id: NON_ENROLLED_TILE_ID, action_id: NON_ENROLLED_ALERTS_ACTION_ID, allow: true },
         select: { user_id: true },
@@ -229,9 +265,16 @@ export class NonEnrolledScansService {
         },
         select: { user_id: true },
       }),
+      this.prisma.users.findMany({ where: { role: StaffRole.SUPER_ADMIN, is_active: true }, select: { id: true } }),
+      this.prisma.user_tile_action_grants.findMany({
+        where: { tile_id: NON_ENROLLED_TILE_ID, action_id: NON_ENROLLED_ALERTS_ACTION_ID, allow: false },
+        select: { user_id: true },
+      }),
     ]);
-    const candidates = [...new Set([...direct, ...viaPack].map((r) => r.user_id))];
-    const holders: string[] = [];
+    const optedOut = new Set(denied.map((r) => r.user_id));
+    const holders: string[] = superAdmins.map((u) => u.id).filter((id) => !optedOut.has(id));
+    const already = new Set(holders);
+    const candidates = [...new Set([...direct, ...viaPack].map((r) => r.user_id))].filter((id) => !already.has(id));
     for (const userId of candidates) {
       const session = await this.access.resolveLiveSession(userId);
       if (session?.isActive && session.actionIds.includes(NON_ENROLLED_ACTION.alerts)) holders.push(userId);
@@ -287,8 +330,17 @@ export class NonEnrolledScansService {
       throw new BadRequestException(`Pick a range of at most ${MAX_RANGE_DAYS} days`);
     }
     const campusIds = query.campus_ids?.length ? query.campus_ids : undefined;
+    const segmentIds = query.segment_ids?.length ? query.segment_ids : undefined;
+    // Scope (campus, segment, class, section) always applies; the segment
+    // filter can only narrow it further.
     const scopeWhere = this.scope.whereForStudents(user);
-    const studentWhere: Prisma.studentsWhereInput = { AND: [scopeWhere, studentSearchWhere(query.q)] };
+    const studentWhere: Prisma.studentsWhereInput = {
+      AND: [
+        scopeWhere,
+        studentSearchWhere(query.q),
+        ...(segmentIds ? [{ classes: { is: { segment_id: { in: segmentIds } } } }] : []),
+      ],
+    };
 
     let flags;
     try {
@@ -310,13 +362,24 @@ export class NonEnrolledScansService {
           attendance_date: true,
           campuses: { select: { campus_name: true } },
           students: {
-            select: { full_name: true, gr_number: true, status: true, classes: { select: { class_code: true } } },
+            select: {
+              full_name: true,
+              gr_number: true,
+              status: true,
+              classes: { select: { class_code: true, segment_id: true, segments: { select: { name: true } } } },
+            },
           },
         },
       });
     } catch (err) {
       if (isPendingMigrationError(err)) {
-        return { from: ymd(from), to: ymd(to), rows: [] as NonEnrolledReportRow[], pending_migration: true };
+        return {
+          from: ymd(from),
+          to: ymd(to),
+          rows: [] as NonEnrolledReportRow[],
+          by_segment: [] as NonEnrolledSegmentCount[],
+          pending_migration: true,
+        };
       }
       throw err;
     }
@@ -340,6 +403,8 @@ export class NonEnrolledScansService {
           left_on: f.left_at ? pktYmd(f.left_at) : null,
           campus_id: f.campus_id,
           campus_name: f.campuses?.campus_name ?? null,
+          segment_id: f.students?.classes?.segment_id ?? null,
+          segment_name: f.students?.classes?.segments?.name ?? null,
           devices: [device],
           first_scan: time,
           last_scan: time,
@@ -353,7 +418,8 @@ export class NonEnrolledScansService {
       row.scans += 1;
       if (!row.devices.some((d) => d.sn === device.sn && d.pin === device.pin)) row.devices.push(device);
     }
-    return { from: ymd(from), to: ymd(to), rows: [...byDay.values()], pending_migration: false };
+    const rows = [...byDay.values()];
+    return { from: ymd(from), to: ymd(to), rows, by_segment: countBySegment(rows), pending_migration: false };
   }
 
   async exportExcel(query: NonEnrolledReportQuery, user: IJwtStaffPayload): Promise<Buffer> {
@@ -366,6 +432,7 @@ export class NonEnrolledScansService {
       { header: 'G.R.', key: 'gr_number', width: 10 },
       { header: 'Student', key: 'full_name', width: 30 },
       { header: 'Class', key: 'class_name', width: 14 },
+      { header: 'Segment', key: 'segment_name', width: 16 },
       { header: 'Status', key: 'status', width: 12 },
       { header: 'Left on', key: 'left_on', width: 12 },
       { header: 'Status now', key: 'current_status', width: 12 },
@@ -381,6 +448,7 @@ export class NonEnrolledScansService {
         status: STATUS_LABEL[r.status] ?? r.status,
         current_status: r.current_status ? STATUS_LABEL[r.current_status] ?? r.current_status : '',
         left_on: r.left_on ?? '',
+        segment_name: r.segment_name ?? '',
         devices: r.devices.map((d) => `${d.sn} / ${d.pin}`).join(', '),
       });
     }

@@ -5,8 +5,8 @@
  *
  * Covered: a LEFT student's scan still marks the day and is flagged beside it;
  * an enrolled student's scan is not flagged; reprocessing the same push adds no
- * second flag; the alert goes once, only to a holder of `alerts` who can see the
- * student's campus; the report is closed without the tile, open with it, and
+ * second flag; the alert goes once, to a holder of `alerts` who can see the
+ * student's campus and to every super admin; the report is closed without the tile, open with it, and
  * cut to the caller's campus; export needs its own tick.
  */
 import type { INestApplication } from '@nestjs/common';
@@ -96,14 +96,17 @@ describe('Not enrolled check-ins', () => {
         expect(scans.every((x) => x.direction === 'IN')).toBe(true);
     });
 
-    it('alerts once, only the holder who can see the student', async () => {
+    it('alerts once: the holder who can see the student, and every super admin', async () => {
         const alerts = await prisma.staff_notifications.findMany({ where: { kind: 'NON_ENROLLED_CHECK_IN' } });
-        expect(alerts.map((a) => [a.user_id, a.entity_id])).toEqual([[USERS.clerk.id, String(STUDENT.A1)]]);
+        // The clerk only for campus A's student; the super admin (no tick) for both.
+        expect(alerts.map((a) => `${a.user_id}:${a.entity_id}`).sort()).toEqual(
+            [`${USERS.admin.id}:${STUDENT.A1}`, `${USERS.admin.id}:${STUDENT.B1}`, `${USERS.clerk.id}:${STUDENT.A1}`].sort(),
+        );
 
         // A second scan later the same day is flagged but alerts nobody again.
         await push(`${STUDENT.A1}\t${later.line}\t0\t1\t0`);
         expect(await prisma.attendance_non_enrolled_scans.count({ where: { student_cc: STUDENT.A1 } })).toBe(2);
-        expect(await prisma.staff_notifications.count({ where: { kind: 'NON_ENROLLED_CHECK_IN' } })).toBe(1);
+        expect(await prisma.staff_notifications.count({ where: { kind: 'NON_ENROLLED_CHECK_IN' } })).toBe(3);
     });
 
     it('reprocessing the same push adds no second flag', async () => {
