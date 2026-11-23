@@ -5,6 +5,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ZkAttendanceProcessorService } from './zk-attendance-processor.service';
 import { ZkScanResolutionService, ResolutionReport } from './zk-scan-resolution.service';
 import { CreateDeviceMappingDto, SimulateScanDto, UpdateDeviceMappingDto } from './dto/zk-attendance.dto';
+import { DEVICE_CAMPUS_ONLY_RULES, DEVICE_SEGMENT_RULES } from './zk-device-segment-rules';
 
 /**
  * Above this, re-attribution is too slow to run inside the HTTP request that
@@ -12,28 +13,6 @@ import { CreateDeviceMappingDto, SimulateScanDto, UpdateDeviceMappingDto } from 
  * finish the job via POST /attendance/zk-scan-resolution/resolve.
  */
 const INLINE_RESOLVE_SCAN_LIMIT = 2000;
-
-/**
- * Which campus (and, for segment-locked devices, which academic segments) a
- * STUDENT pin may be mapped to on a given device. Derived from actual scan
- * history per device, not its on-box label — devices named "Campus 3 ..." are
- * physically at the Johar (GEJ) campus, so the label alone can't be trusted.
- * Devices not listed here (test rigs, staff-only units) get no such check.
- */
-const DEVICE_SEGMENT_RULES: Record<string, { campusCode: string; segmentCodes: string[] }> = {
-  NYU7261205128: { campusCode: 'GEJ', segmentCodes: ['PRE_PRIMARY'] }, // Campus 3 Device 2 Pre-Primary
-  NYU7261205142: { campusCode: 'GEJ', segmentCodes: ['JUNIOR_CAMBRIDGE'] }, // Campus 3 Device 1 Junior Cambridge
-  NYU7261205221: { campusCode: 'GEJ', segmentCodes: ['SECONDARY'] }, // Campus 2 Device 1 Secondary
-  NYU7261205141: { campusCode: 'GEJ', segmentCodes: ['SENIOR_CAMBRIDGE'] }, // Campus 2 Device 2 Senior Cambridge
-  NYU7261205172: { campusCode: 'GEJ', segmentCodes: ['OLEVELS_CAMBRIDGE', 'ALEVELS_CAMBRIDGE'] }, // TAFSAL
-};
-
-/** Faculty devices: any segment, as long as the student belongs to this campus. */
-const DEVICE_CAMPUS_ONLY_RULES: Record<string, string> = {
-  NYU7251000240: 'GEJ', // Johar Faculty
-  NYU7261205040: 'KNF', // GKF Faculty
-  NYU7261000023: 'NNZ', // NNN Faculty
-};
 
 /** Returned instead of a ResolutionReport when a pin is too large to rebuild inline. */
 export interface SkippedResolution {
@@ -940,7 +919,7 @@ export class ZkAttendanceMappingService {
       select: {
         full_name: true,
         campuses: { select: { campus_code: true, campus_name: true } },
-        classes: { select: { description: true, segments: { select: { code: true, name: true } } } },
+        classes: { select: { description: true, segment_id: true, segments: { select: { name: true } } } },
       },
     });
     if (!student) return null;
@@ -955,7 +934,8 @@ export class ZkAttendanceMappingService {
       };
     }
 
-    if (segmentRule && !segmentRule.segmentCodes.includes(student.classes?.segments?.code ?? '')) {
+    const segmentId = student.classes?.segment_id;
+    if (segmentRule && (segmentId == null || !segmentRule.segmentIds.includes(segmentId))) {
       return {
         code: 'DEVICE_SEGMENT_MISMATCH',
         severity: 'HARD_BLOCK',
