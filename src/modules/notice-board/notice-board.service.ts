@@ -312,7 +312,7 @@ export class NoticeBoardService {
     // the whole table).
     //
     // TAFSD-457: every pinned post is on the first page, so one can always be
-    // found and unpinned; the cursor pages through unpinned posts by id. With
+    // found and unpinned; the cursor pages through unpinned posts only. With
     // pinned posts in the same id-cursored stream, a later page repeated them
     // and the board showed only the newest 30 posts with no way to see more.
     const reach = await this._scopeReach(user);
@@ -329,18 +329,27 @@ export class NoticeBoardService {
       (!reach || reach.reaches(p)) && (!placed || placed.reaches(p));
     const PAGE = 30;
     const BATCH = reach || placed ? 150 : PAGE;
+    // TAFSD-580: the board runs newest first by posted_at. Approval re-dates a
+    // post, so id order isn't time order; the cursor is still the id of the
+    // last unpinned post loaded, and the next page starts just after it.
+    const after = cursor ? await this._feedCursor(cursor) : undefined;
     const fetchedPosts: Awaited<ReturnType<typeof this._postBatch>> = [];
     if (!cursor) {
       const pinned = await this._postBatch(undefined, user, true, 0, undefined, where);
       fetchedPosts.push(...pinned.filter(visible));
     }
     const unpinned: typeof fetchedPosts = [];
+    let exhausted = false;
     for (let skip = 0; unpinned.length < PAGE && skip < BATCH * 8; skip += BATCH) {
-      const batch = await this._postBatch(cursor, user, false, skip, BATCH, where);
+      const batch = await this._postBatch(after, user, false, skip, BATCH, where);
       unpinned.push(...batch.filter(visible));
-      if (batch.length < BATCH) break;
+      if (batch.length < BATCH) {
+        exhausted = true;
+        break;
+      }
     }
-    fetchedPosts.push(...unpinned.slice(0, PAGE));
+    const page = unpinned.slice(0, PAGE);
+    fetchedPosts.push(...page);
     const posts: ((typeof fetchedPosts)[number] & { viewer_can_manage: boolean })[] = [];
     for (const p of fetchedPosts) {
       posts.push({ ...p, viewer_can_manage: !reach || (await this._canManagePost(user, p)) });
@@ -352,15 +361,13 @@ export class NoticeBoardService {
       ? withTargets.map((p) => ({ ...p, targeted_students: p.targeted_students.filter((t) => reach.seesStudent(t!.cc)) }))
       : withTargets;
 
-    // Holiday notices ride on the first page only, and only match a search by their wording.
-    const allHolidays = cursor ? [] : await this.prisma.academic_calendar_days.findMany({
-      where: {
-        applies_to: 'STUDENT',
-        day_type: { in: ['HOLIDAY', 'WORKDAY'] },
-      },
-      orderBy: { date: 'desc' },
-      take: 30,
-    });
+    // Holiday notices only match a search by their wording.
+    const allHolidays = await this._holidaysForPage(
+      !cursor,
+      after?.posted_at,
+      // The last page (or one the client can't page past) takes every older holiday.
+      page.length === 0 || (exhausted && unpinned.length <= PAGE) ? undefined : page[page.length - 1].posted_at,
+    );
     // Same rule as posts: a scoped caller sees holiday notices that reached at
     // least one of their students.
     const holidays: (typeof allHolidays[number] & { viewer_can_manage: boolean })[] = [];
@@ -438,23 +445,78 @@ export class NoticeBoardService {
     return merged;
   }
 
+  /** TAFSD-580: where the next admin-board page starts: the post the client last loaded. */
+  private async _feedCursor(id: number): Promise<{ id: number; posted_at: Date }> {
+    const row = await this.prisma.notice_board_posts.findUnique({
+      where: { id },
+      select: { id: true, posted_at: true },
+    });
+    if (!row) throw new BadRequestException(`Unknown cursor ${id}.`);
+    return row;
+  }
+
+  /**
+   * TAFSD-580: the holiday / school-open notices that belong on one page of the
+   * admin board. They sort by the holiday's own date (the calendar keeps no
+   * record of when one was announced) and are paged together with the posts: a
+   * page carries those dated from its last unpinned post (`from`) up to where
+   * the previous page ended (`before`), so a later page never brings back
+   * anything newer than what is already on screen. Pinned ones all ride on the
+   * first page, like pinned posts.
+   */
+  private async _holidaysForPage(firstPage: boolean, before: Date | undefined, from: Date | undefined) {
+    const HOLIDAY_CAP = 100;
+    const PINNED = '[PINNED] ';
+    const base = { applies_to: 'STUDENT', day_type: { in: ['HOLIDAY', 'WORKDAY'] } };
+    // The column is a date; compare by whole days there and exactly here.
+    const day = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    const pinned = firstPage
+      ? await this.prisma.academic_calendar_days.findMany({
+          where: { ...base, description: { startsWith: PINNED } },
+          orderBy: { date: 'desc' },
+          take: HOLIDAY_CAP,
+        })
+      : [];
+    const unpinned = await this.prisma.academic_calendar_days.findMany({
+      where: {
+        ...base,
+        OR: [{ description: null }, { NOT: { description: { startsWith: PINNED } } }],
+        ...(from || before
+          ? { date: { ...(from ? { gte: day(from) } : {}), ...(before ? { lte: day(before) } : {}) } }
+          : {}),
+      },
+      orderBy: { date: 'desc' },
+      take: HOLIDAY_CAP,
+    });
+    return [
+      ...pinned,
+      ...unpinned.filter((h) => (!from || h.date >= from) && (!before || h.date < before)),
+    ];
+  }
+
   private _postBatch(
-    cursor: number | undefined,
+    after: { id: number; posted_at: Date } | undefined,
     user: IJwtStaffPayload,
     pinned: boolean,
     skip: number,
     take: number | undefined,
     where: Prisma.notice_board_postsWhereInput[] = [],
   ) {
+    // Unpinned posts page newest first by posted_at, id breaking ties.
+    const and: Prisma.notice_board_postsWhereInput[] = [
+      ...where,
+      ...(after
+        ? [{ OR: [{ posted_at: { lt: after.posted_at } }, { posted_at: after.posted_at, id: { lt: after.id } }] }]
+        : []),
+    ];
     return this.prisma.notice_board_posts.findMany({
       where: {
         deleted_at: null,
         is_pinned: pinned,
         OR: [{ status: NoticePostStatus.APPROVED }, { posted_by: user.sub }],
-        ...(cursor ? { id: { lt: cursor } } : {}),
-        ...(where.length ? { AND: where } : {}),
+        ...(and.length ? { AND: and } : {}),
       },
-      orderBy: pinned ? { posted_at: 'desc' } : { id: 'desc' },
+      orderBy: pinned ? { posted_at: 'desc' } : [{ posted_at: 'desc' }, { id: 'desc' }],
       include: POST_LIST_INCLUDE,
       skip,
       take,
