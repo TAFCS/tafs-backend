@@ -1344,6 +1344,9 @@ export class StudentsService {
         student_activities: true,
         student_flags: { orderBy: { reminder_date: 'desc' } },
         graduated_from_class: true,
+        // TAFSD-583: flattenBenefits below reads these; without them every
+        // student came back with no special category (Student Fees showed all off).
+        ...BENEFIT_SELECT,
       }
     });
 
