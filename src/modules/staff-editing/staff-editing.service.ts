@@ -292,7 +292,10 @@ export class StaffEditingService {
               }
             }
           }
-        }
+        },
+        // TAFSD-566: flattenStudentFull reads these; without them the edit tabs
+        // showed every student with no special category.
+        ...BENEFIT_SELECT,
       },
     });
 
