@@ -159,6 +159,7 @@ export class StaffEditingController {
       studentId,
       dto,
       user.username,
+      user,
     );
     return createApiResponse(
       guardian,
@@ -179,6 +180,7 @@ export class StaffEditingController {
       studentId,
       dto,
       user.username,
+      user,
     );
     return createApiResponse(
       guardian,

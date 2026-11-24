@@ -128,11 +128,16 @@ export class StaffEditingService {
 
   /** A guardian is in scope when linked to any in-scope student. */
   async assertGuardianVisible(user: IJwtStaffPayload, guardianId: number): Promise<void> {
-    if (this.scope.isUnrestricted(user)) return;
+    if (!(await this.canSeeGuardian(user, guardianId))) throw new NotFoundException(`Guardian #${guardianId} not found`);
+  }
+
+  /** Whether the caller may see this guardian: linked to an in-scope, non-deleted student. */
+  async canSeeGuardian(user: IJwtStaffPayload, guardianId: number): Promise<boolean> {
+    if (this.scope.isUnrestricted(user)) return true;
     const linked = await this.prisma.student_guardians.count({
       where: { guardian_id: guardianId, students: { deleted_at: null, ...this.scope.whereForStudents(user) } },
     });
-    if (!linked) throw new NotFoundException(`Guardian #${guardianId} not found`);
+    return linked > 0;
   }
 
   async assertChildVisible(
@@ -1146,7 +1151,7 @@ export class StaffEditingService {
     }));
   }
 
-  async addGuardianToStudent(studentCc: number, dto: CreateGuardianDto, changedBy: string) {
+  async addGuardianToStudent(studentCc: number, dto: CreateGuardianDto, changedBy: string, user?: IJwtStaffPayload) {
     await this.assertStudentExists(studentCc);
 
     const { relationship, is_primary_contact = false, is_emergency_contact = false, ...guardianFields } = dto;
@@ -1191,6 +1196,18 @@ export class StaffEditingService {
         }
     }
 
+    // TAFSD-564: a CNIC already registered links that guardian (as before), but
+    // only one the caller can see. A parent of students outside their scope
+    // isn't linked, and so revealed, silently: an administrator links them.
+    if (guardianData.cnic && user) {
+      const existing = await this.prisma.guardians.findUnique({ where: { cnic: guardianData.cnic as string }, select: { id: true } });
+      if (existing && !(await this.canSeeGuardian(user, existing.id))) {
+        throw new ConflictException(
+          'A guardian with this CNIC is already registered to students outside your access. Ask an administrator to link them.',
+        );
+      }
+    }
+
     const guardian = guardianData.cnic
       ? await this.prisma.guardians.upsert({
         where: { cnic: guardianData.cnic as string },
@@ -1228,13 +1245,17 @@ export class StaffEditingService {
     };
   }
 
-  async linkExistingGuardian(studentCc: number, dto: LinkExistingGuardianDto, changedBy: string) {
+  async linkExistingGuardian(studentCc: number, dto: LinkExistingGuardianDto, changedBy: string, user?: IJwtStaffPayload) {
     await this.assertStudentExists(studentCc);
 
     const { guardian_id, relationship, is_primary_contact = false, is_emergency_contact = false } = dto;
 
+    // TAFSD-564: only a live guardian the caller can already see. Linking used
+    // to accept any id, out of scope or soft-deleted, and so reveal it.
     const guardian = await this.prisma.guardians.findUnique({ where: { id: guardian_id } });
-    if (!guardian) throw new NotFoundException(`Guardian #${guardian_id} not found`);
+    if (!guardian || guardian.deleted_at || (user && !(await this.canSeeGuardian(user, guardian_id)))) {
+      throw new NotFoundException(`Guardian #${guardian_id} not found`);
+    }
 
     const joinData = { relationship, is_primary_contact, is_emergency_contact };
 
@@ -1479,6 +1500,9 @@ export class StaffEditingService {
       where: { cnic: nic },
     });
     if (!guardian || guardian.deleted_at) return null;
+    // TAFSD-564: a parent of students outside the caller's scope is "not found":
+    // the full record (phones, address, families) used to come back for any CNIC.
+    if (user && !(await this.canSeeGuardian(user, guardian.id))) return null;
     const families = await this.familiesForGuardian(guardian.id, user);
     return {
       ...guardian,

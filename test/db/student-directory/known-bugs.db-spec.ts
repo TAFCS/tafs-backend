@@ -46,7 +46,7 @@ describe('known bugs', () => {
         expect(res.status).toBe(200);
     });
 
-    it.failing('TAFSD-564: looking a guardian up by CNIC doesn\'t reveal a guardian of a student outside scope', async () => {
+    it('TAFSD-564: looking a guardian up by CNIC doesn\'t reveal a guardian of a student outside scope', async () => {
         await ctx.prisma.guardians.create({
             data: { full_name: 'OTHER CAMPUS PARENT', cnic: '42101-9999999-9', student_guardians: { create: { student_id: STUDENT.B1, relationship: 'FATHER' } } },
         });
@@ -54,7 +54,7 @@ describe('known bugs', () => {
         expect(res.status === 404 || res.body.data == null).toBe(true);
     });
 
-    it.failing('TAFSD-564: linking an existing guardian checks that guardian is in scope', async () => {
+    it('TAFSD-564: linking an existing guardian checks that guardian is in scope', async () => {
         const other = await ctx.prisma.guardians.create({
             data: { full_name: 'OTHER CAMPUS PARENT', cnic: '42101-9999999-9', student_guardians: { create: { student_id: STUDENT.B1, relationship: 'FATHER' } } },
         });

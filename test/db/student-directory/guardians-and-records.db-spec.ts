@@ -98,6 +98,30 @@ describe('guardians', () => {
         expect((await ctx.as.dirViewer.patch(`/staff-editing/guardians/${ctx.ids.fatherId}`).send({ occupation: 'x' })).status).toBe(403);
         expect(await ctx.prisma.guardians.count()).toBe(2);
     });
+
+    it('TAFSD-564: adding a guardian with the CNIC of a parent outside scope is refused, not linked', async () => {
+        const other = await ctx.prisma.guardians.create({
+            data: { full_name: 'OTHER CAMPUS PARENT', cnic: '42101-9999999-9', student_guardians: { create: { student_id: STUDENT.B1, relationship: 'FATHER' } } },
+        });
+        const res = await ctx.as.dirClerk.post(`/staff-editing/students/${STUDENT.A_APR}/guardians`).send({
+            full_name: 'SOMEONE', relationship: 'FATHER', cnic: '42101-9999999-9',
+        });
+        expect(res.status).toBe(409);
+        expect(await ctx.prisma.student_guardians.count({ where: { guardian_id: other.id } })).toBe(1);
+
+        // An unrestricted admin can still link them.
+        expect((await ctx.as.admin.post(`/staff-editing/students/${STUDENT.A_APR}/guardians`).send({
+            full_name: 'SOMEONE', relationship: 'FATHER', cnic: '42101-9999999-9',
+        })).status).toBe(201);
+        expect((await links(STUDENT.A_APR)).map((l) => l.guardian_id)).toEqual([other.id]);
+    });
+
+    it('TAFSD-564: a deleted guardian can\'t be linked', async () => {
+        const gone = await ctx.prisma.guardians.create({ data: { full_name: 'GONE', deleted_at: new Date() } });
+        const res = await ctx.as.admin.post(`/staff-editing/students/${STUDENT.A_APR}/guardians/link-existing`).send({ guardian_id: gone.id, relationship: 'FATHER' });
+        expect(res.status).toBe(404);
+        expect(await links(STUDENT.A_APR)).toEqual([]);
+    });
 });
 
 describe('admissions and academic records', () => {
