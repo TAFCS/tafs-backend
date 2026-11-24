@@ -22,13 +22,13 @@ describe('known bugs', () => {
         expect(await ctx.prisma.student_activities.findUniqueOrThrow({ where: { id: theirs.id } })).toMatchObject({ student_id: STUDENT.B1, activity_name: 'Chess' });
     });
 
-    it.failing('TAFSD-561: changing status through the identity form needs status.change', async () => {
+    it('TAFSD-561: changing status through the identity form needs status.change', async () => {
         const res = await ctx.as.dirNoStatus.patch(`/staff-editing/students/${STUDENT.A1}`).send({ status: 'LEFT' });
         expect(res.status).toBe(403);
         expect((await student(STUDENT.A1)).status).toBe('ENROLLED');
     });
 
-    it.failing('TAFSD-561: the identity form can\'t move a student to a campus outside the editor\'s scope', async () => {
+    it('TAFSD-561: the identity form can\'t move a student to a campus outside the editor\'s scope', async () => {
         const res = await ctx.as.dirClerk.patch(`/staff-editing/students/${STUDENT.A1}`).send({ campus_id: CAMPUS_B });
         expect(res.status).toBe(403);
         expect((await student(STUDENT.A1)).campus_id).not.toBe(CAMPUS_B);

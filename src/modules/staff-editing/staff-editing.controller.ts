@@ -88,6 +88,7 @@ export class StaffEditingController {
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     await this.staffEditingService.assertStudentVisible(user, id);
+    await this.staffEditingService.assertStudentEditAllowed(user, id, dto);
     const student = await this.staffEditingService.updateStudent(id, dto, user.username);
     return createApiResponse(
       student,

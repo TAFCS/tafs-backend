@@ -88,6 +88,25 @@ describe('identity edits (PATCH /staff-editing/students/:id)', () => {
         expect((await patch('dirViewer', STUDENT.A1, { full_name: 'x' })).status).toBe(403);
         expect((await student(STUDENT.A1)).full_name).toBe('Test Student One');
     });
+
+    it('TAFSD-561: moving a student through this form needs "Move a student"; Class & Grade moves still work', async () => {
+        expect((await patch('dirNoMove', STUDENT.A1, { class_id: CLASS_VII, section_id: SECTION })).status).toBe(403);
+        expect((await student(STUDENT.A1)).class_id).toBe(CLASS_AUG);
+
+        expect((await patch('dirClerk', STUDENT.A1, { class_id: CLASS_VII, section_id: SECTION })).status).toBe(200);
+        expect((await student(STUDENT.A1)).class_id).toBe(CLASS_VII);
+    });
+
+    it('TAFSD-561: values sent back unchanged need no extra permission', async () => {
+        const s = await student(STUDENT.A1);
+        const res = await patch('dirNoMove', STUDENT.A1, {
+            full_name: 'Renamed Only',
+            campus_id: s.campus_id!, class_id: s.class_id!, section_id: s.section_id!,
+        });
+        expect(res.status).toBe(200);
+        expect((await patch('dirNoStatus', STUDENT.A1, { status: s.status, city: 'Karachi' })).status).toBe(200);
+        expect((await student(STUDENT.A1)).full_name).toBe('Renamed Only');
+    });
 });
 
 describe('family address (PATCH /staff-editing/students/:id/family-address)', () => {

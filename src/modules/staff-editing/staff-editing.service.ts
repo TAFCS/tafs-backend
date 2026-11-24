@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { BENEFIT_SELECT, flattenBenefits } from '../students/student-benefits';
 import {
   applyCategoryEdits,
@@ -8,7 +8,8 @@ import {
 import { ScopeService } from '../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { PrismaService } from '../../../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { Prisma, StaffRole } from '@prisma/client';
+import { actionsCover } from '../access/tiles.manifest';
 import { GetSheetStudentsDto } from './dto/get-sheet-students.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
 import { CreateGuardianDto } from './dto/create-guardian.dto';
@@ -54,6 +55,75 @@ export class StaffEditingService {
     if (this.scope.isExempt(user)) return;
     const visible = await this.prisma.students.count({ where: { cc, ...this.scope.whereForStudents(user) } });
     if (!visible) throw new NotFoundException(`Student #${cc} not found`);
+  }
+
+  /**
+   * TAFSD-561: PATCH /staff-editing/students/:id is gated on identity.edit, but
+   * the same body can change status, placement and parents. Each of those now
+   * needs its own Student Directory permission, as the dedicated routes do,
+   * and a new campus / class / section must lie in the caller's scope.
+   *
+   * Only a real change counts: the tabs send back values they didn't touch
+   * (the Identity tab always sends the discipline it shows), and that must not
+   * lock out someone who only edited a name.
+   */
+  async assertStudentEditAllowed(user: IJwtStaffPayload, cc: number, dto: UpdateStudentDto): Promise<void> {
+    const held = new Set(user.actions ?? []);
+    const can = (...actions: string[]) =>
+      user.role === StaffRole.SUPER_ADMIN || actions.some((a) => actionsCover(held, `student.directory#${a}`));
+    const refuse = (what: string, permission: string) => {
+      throw new ForbiddenException(`${what} needs the "${permission}" permission.`);
+    };
+
+    const s = await this.prisma.students.findUnique({
+      where: { cc },
+      select: {
+        status: true,
+        campus_id: true,
+        class_id: true,
+        section_id: true,
+        house_id: true,
+        student_admissions: { orderBy: { application_date: 'desc' }, select: { discipline: true } },
+      },
+    });
+    if (!s) throw new NotFoundException(`Student #${cc} not found`);
+    const changes = (field: 'status' | 'campus_id' | 'class_id' | 'section_id' | 'house_id') =>
+      dto[field] !== undefined && (dto[field] ?? null) !== (s[field] ?? null);
+
+    if (changes('status') && !can('status.change')) refuse("Changing a student's status", 'Change status');
+
+    const placement = (['campus_id', 'class_id', 'section_id'] as const).filter(changes);
+    if (placement.length) {
+      if (!can('assignment.edit')) refuse('Moving a student to another campus, class or section', 'Move a student');
+      for (const field of placement) {
+        const id = dto[field];
+        if (id == null) continue;
+        if (field === 'campus_id') this.scope.assertCampus(user, id);
+        if (field === 'class_id') this.scope.assertClass(user, id);
+        if (field === 'section_id') this.scope.assertSection(user, id);
+      }
+    }
+
+    // The house is set from the Academic tab, or with a move on Class & Grade.
+    if (changes('house_id') && !can('academic.edit', 'assignment.edit')) {
+      refuse("Changing a student's house", 'Edit academic profile');
+    }
+
+    if (dto.discipline !== undefined) {
+      const norm = (d: string | null | undefined) => (typeof d === 'string' && d.trim() ? d.trim() : null);
+      const wanted = norm(dto.discipline);
+      const latest = norm(s.student_admissions[0]?.discipline);
+      // What the record shows: the newest admission that has one.
+      const shown = norm(s.student_admissions.find((a) => norm(a.discipline))?.discipline);
+      if (wanted !== latest && wanted !== shown && !can('admissions.edit')) {
+        refuse("Changing a student's discipline", 'Edit admissions');
+      }
+    }
+
+    const parentFields = ['father_name', 'father_cnic', 'mother_name', 'mother_cnic'] as const;
+    if (parentFields.some((f) => dto[f] !== undefined) && !can('guardians.edit')) {
+      refuse("Changing a student's parents", 'Edit guardians');
+    }
   }
 
   /** A guardian is in scope when linked to any in-scope student. */

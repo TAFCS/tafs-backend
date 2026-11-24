@@ -19,6 +19,7 @@ import { CAMPUS_A, CAMPUS_B, CLASS_APR, CLASS_AUG, SECTION, STUDENT, USERS, bump
  *   scoped to campus A;
  * - dirViewer: the tile alone, so only its default `view` action;
  * - dirNoStatus: everything except `status.change`;
+ * - dirNoMove: everything except `assignment.edit` (TAFSD-561);
  * - payHistoryOnly: only the Payment History tile.
  * USERS.admin (SUPER_ADMIN) from seedSchool is unrestricted.
  */
@@ -33,6 +34,7 @@ export const DIR_USERS = {
     dirClerk: { id: 'db-suite-dir-clerk', username: 'dbsuite.dirclerk', role: StaffRole.RECEPTIONIST },
     dirViewer: { id: 'db-suite-dir-viewer', username: 'dbsuite.dirviewer', role: StaffRole.RECEPTIONIST },
     dirNoStatus: { id: 'db-suite-dir-nostatus', username: 'dbsuite.dirnostatus', role: StaffRole.RECEPTIONIST },
+    dirNoMove: { id: 'db-suite-dir-nomove', username: 'dbsuite.dirnomove', role: StaffRole.RECEPTIONIST },
     payHistoryOnly: { id: 'db-suite-payhist', username: 'dbsuite.payhist', role: StaffRole.FINANCE_CLERK },
 } satisfies Record<string, SeededUser>;
 
@@ -133,6 +135,12 @@ async function seedDirectoryUsers(prisma: PrismaClient) {
     await grantFullDirectory(DIR_USERS.dirNoStatus);
     await prisma.user_tile_action_grants.create({
         data: { user_id: DIR_USERS.dirNoStatus.id, tile_id: DIRECTORY, action_id: 'status.change', allow: false, granted_by: USERS.admin.id },
+    });
+
+    await grantTile(DIR_USERS.dirNoMove, DIRECTORY);
+    await grantFullDirectory(DIR_USERS.dirNoMove);
+    await prisma.user_tile_action_grants.create({
+        data: { user_id: DIR_USERS.dirNoMove.id, tile_id: DIRECTORY, action_id: 'assignment.edit', allow: false, granted_by: USERS.admin.id },
     });
 
     await grantTile(DIR_USERS.payHistoryOnly, 'finance.payment_history');
