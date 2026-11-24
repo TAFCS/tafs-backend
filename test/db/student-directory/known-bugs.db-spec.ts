@@ -34,7 +34,7 @@ describe('known bugs', () => {
         expect((await student(STUDENT.A1)).campus_id).not.toBe(CAMPUS_B);
     });
 
-    it.failing('TAFSD-562: the family address form only accepts address fields', async () => {
+    it('TAFSD-562: the family address form only accepts address fields', async () => {
         const res = await ctx.as.dirClerk.patch(`/staff-editing/students/${STUDENT.A1}/family-address`).send({ full_name: 'HIJACKED' });
         expect(res.status).toBe(400);
         const names = (await ctx.prisma.guardians.findMany()).map((g) => g.full_name).sort();

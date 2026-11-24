@@ -1019,9 +1019,21 @@ export class StaffEditingService {
 
   // ─── Guardians ────────────────────────────────────────────────────────────
 
-  async updateFamilyAddress(studentCc: number, dto: UpdateFamilyAddressDto, changedBy: string) {
-    const { bulk_sync, ...addressData } = dto;
-    
+  async updateFamilyAddress(studentCc: number, dto: UpdateFamilyAddressDto, changedBy: string, user?: IJwtStaffPayload) {
+    const { bulk_sync } = dto;
+    // TAFSD-562: the address columns only. The body used to go straight into
+    // guardians.updateMany, so `full_name`, `cnic` or `deleted_at` rewrote the
+    // parents. (The route also validates the body against the DTO now.)
+    const addressData: Prisma.guardiansUpdateManyMutationInput = {
+      house_appt_name: dto.house_appt_name,
+      area_block: dto.area_block,
+      city: dto.city,
+      postal_code: dto.postal_code,
+      province: dto.province,
+      country: dto.country,
+      work_phone: dto.work_phone,
+    };
+
     // Find the current student's links
     const currentLinks = await this.prisma.student_guardians.findMany({
       where: { student_id: studentCc },
@@ -1035,54 +1047,59 @@ export class StaffEditingService {
     });
     const familyId = student?.family_id;
 
-    // Log the family address change
-    await this.auditLogs.log({
-      entity_type: 'FAMILY',
-      entity_id: familyId ? String(familyId) : String(studentCc),
-      action: 'UPDATED',
-      field: 'family.address',
-      new_value: `Updated address to: ${dto.house_appt_name || ''}, ${dto.city || ''}`,
-      changed_by: changedBy,
-      student_id: studentCc,
-      note: bulk_sync ? 'Bulk synced to all family members' : 'Individual update',
-    });
+    // Logged once the change is made, not before anything was checked.
+    const logChange = () =>
+      this.auditLogs.log({
+        entity_type: 'FAMILY',
+        entity_id: familyId ? String(familyId) : String(studentCc),
+        action: 'UPDATED',
+        field: 'family.address',
+        new_value: `Updated address to: ${dto.house_appt_name || ''}, ${dto.city || ''}`,
+        changed_by: changedBy,
+        student_id: studentCc,
+        note: bulk_sync ? 'Bulk synced to all family members' : 'Individual update',
+      });
 
     if (bulk_sync) {
-      return this.prisma.$transaction(async (tx) => {
-        if (student?.family_id) {
-          await tx.families.update({
-            where: { id: student.family_id },
-            data: { home_phone: dto.work_phone }
+      if (!familyId) return { success: false, message: 'No family found for bulk sync' };
+      // TAFSD-562: only the guardians of siblings the caller can see; a sibling
+      // at another campus is outside their scope, and so are guardians linked
+      // only to them.
+      const inScope = user && !this.scope.isExempt(user) ? this.scope.whereForStudents(user) : {};
+      const result = await this.prisma.$transaction(async (tx) => {
+        await tx.families.update({
+          where: { id: familyId },
+          data: { home_phone: dto.work_phone }
+        });
+
+        const familyLinks = await tx.student_guardians.findMany({
+          where: {
+            students: { family_id: familyId, ...inScope }
+          },
+          select: { guardian_id: true }
+        });
+        const uniqueIds = [...new Set(familyLinks.map(l => l.guardian_id))];
+
+        if (uniqueIds.length > 0) {
+          await tx.guardians.updateMany({
+            where: { id: { in: uniqueIds } },
+            data: addressData
           });
-          
-          // Find all guardians linked to ANY student in this family
-          const familyLinks = await tx.student_guardians.findMany({
-            where: {
-              students: { family_id: student.family_id }
-            },
-            select: { guardian_id: true }
-          });
-          const uniqueIds = [...new Set(familyLinks.map(l => l.guardian_id))];
-          
-          if (uniqueIds.length > 0) {
-            await tx.guardians.updateMany({
-              where: { id: { in: uniqueIds } },
-              data: addressData as any
-            });
-          }
-          return { success: true, count: uniqueIds.length, target: 'household' };
         }
-        return { success: false, message: 'No family found for bulk sync' };
+        return { success: true, count: uniqueIds.length, target: 'household' };
       });
+      await logChange();
+      return result;
     }
 
     // Default or Fallback: Only update guardians of this specific student
     if (currentGuardianIds.length > 0) {
       await this.prisma.guardians.updateMany({
         where: { id: { in: currentGuardianIds } },
-        data: addressData as any
+        data: addressData
       });
     }
+    await logChange();
     return { success: true, count: currentGuardianIds.length, target: 'individual' };
   }
 

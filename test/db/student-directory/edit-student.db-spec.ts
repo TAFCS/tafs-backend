@@ -124,6 +124,28 @@ describe('family address (PATCH /staff-editing/students/:id/family-address)', ()
         expect((await ctx.as.dirViewer.patch(`/staff-editing/students/${STUDENT.A1}/family-address`).send({ city: 'x' })).status).toBe(403);
         expect((await ctx.as.dirClerk.patch(`/staff-editing/students/${STUDENT.B1}/family-address`).send({ city: 'x' })).status).toBe(404);
     });
+
+    it('TAFSD-562: a household sync leaves the guardians of a sibling outside the editor\'s campus alone', async () => {
+        // B1 (campus B) joins A1's family, with a parent linked only to B1.
+        await ctx.prisma.students.update({ where: { cc: STUDENT.B1 }, data: { family_id: 1 } });
+        const theirs = await ctx.prisma.guardians.create({
+            data: { full_name: 'CAMPUS B PARENT', city: 'Lahore', student_guardians: { create: { student_id: STUDENT.B1, relationship: 'FATHER' } } },
+        });
+        const res = await ctx.as.dirClerk.patch(`/staff-editing/students/${STUDENT.A1}/family-address`).send({ city: 'Karachi', bulk_sync: true });
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({ success: true, count: 2, target: 'household' });
+        expect((await ctx.prisma.guardians.findUniqueOrThrow({ where: { id: theirs.id } })).city).toBe('Lahore');
+
+        // An unrestricted admin's sync reaches the whole household.
+        expect((await ctx.as.admin.patch(`/staff-editing/students/${STUDENT.A1}/family-address`).send({ city: 'Hyderabad', bulk_sync: true })).body.data.count).toBe(3);
+        expect((await ctx.prisma.guardians.findUniqueOrThrow({ where: { id: theirs.id } })).city).toBe('Hyderabad');
+    });
+
+    it('TAFSD-562: bulk_sync must be a real true/false, not the text "false"', async () => {
+        const res = await ctx.as.dirClerk.patch(`/staff-editing/students/${STUDENT.A1}/family-address`).send({ city: 'Quetta', bulk_sync: 'false' });
+        expect(res.status).toBe(400);
+        expect((await ctx.prisma.guardians.findMany({ where: { city: 'Quetta' } })).length).toBe(0);
+    });
 });
 
 describe('flags (/student-flags)', () => {

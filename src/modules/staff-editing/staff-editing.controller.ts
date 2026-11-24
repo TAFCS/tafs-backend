@@ -20,6 +20,7 @@ import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
 import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 import { HardDeleteStudentDto } from './dto/hard-delete-student.dto';
+import { UpdateFamilyAddressDto } from './dto/update-family-address.dto';
 import {
   UpsertActivityDto,
   UpsertAdmissionDto,
@@ -117,11 +118,11 @@ export class StaffEditingController {
   @RequireAction('student.directory#identity.edit')
   async updateFamilyAddress(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: any,
+    @Body() dto: UpdateFamilyAddressDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     await this.staffEditingService.assertStudentVisible(user, id);
-    const result = await this.staffEditingService.updateFamilyAddress(id, dto, user.username);
+    const result = await this.staffEditingService.updateFamilyAddress(id, dto, user.username, user);
     return createApiResponse(
       result,
       HttpStatus.OK,

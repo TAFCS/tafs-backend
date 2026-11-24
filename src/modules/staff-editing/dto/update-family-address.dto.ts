@@ -1,4 +1,4 @@
-import { IsString, IsOptional, MaxLength } from 'class-validator';
+import { IsBoolean, IsString, IsOptional, MaxLength } from 'class-validator';
 
 export class UpdateFamilyAddressDto {
   @IsOptional()
@@ -36,6 +36,8 @@ export class UpdateFamilyAddressDto {
   @MaxLength(20)
   work_phone?: string; // Mapped to Home Phone #
 
+  /** Also update the guardians of the student's siblings (those in the caller's scope). */
   @IsOptional()
+  @IsBoolean()
   bulk_sync?: boolean;
 }
