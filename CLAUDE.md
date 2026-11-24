@@ -123,11 +123,13 @@ change makes one false, the change is wrong, not the rule.
     (local DB only), `scripts/audit-shared-live-heads.ts` (read-only) lists any
     old overlaps.
 15. `npx tsc --noEmit -p tsconfig.build.json` is clean.
-16. **CI tests (TAFSD-530)** — every push and PR runs the unit specs (`npx jest`)
-    and the DB suite (`test/db`, the studentwise-fees flows over HTTP against a
-    throwaway Postgres); `image`/`deploy` wait for both. Changing a fee flow?
-    Cover it there. Run it locally only against a throwaway DB
-    (`test/db/README.md`), never with the repo's `.env`.
+16. **CI tests (TAFSD-530, TAFSD-558)** — every push and PR runs the unit specs
+    (`npx jest`) and the DB suite (`test/db`: the real app over HTTP against a
+    throwaway Postgres), as the checks **Unit tests**, **DB tests** and
+    **Student directory tests**; `image`/`deploy` wait for all of them.
+    Changing a fee flow or a student directory action? Cover it there. Run it
+    locally only against a throwaway DB (`test/db/README.md`), never with the
+    repo's `.env`.
 
 ---
 

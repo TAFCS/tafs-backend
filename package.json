@@ -20,6 +20,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:db:setup": "bash test/db/setup-test-db.sh",
     "test:db": "jest -c test/jest-db.json",
+    "test:db:directory": "jest -c test/jest-db.json test/db/student-directory",
     "seed": "ts-node prisma/seed.ts",
     "seed:hr": "ts-node scripts/seed-hr.ts",
     "seed:staff": "ts-node scripts/seed-staff-roster.ts",

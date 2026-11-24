@@ -16,7 +16,11 @@ The repo's `.env` points at the **production** database. This suite truncates
 tables. So:
 
 - it reads `DATABASE_URL` from the environment you pass, never from `.env`
-  (nothing in the suite loads `.env`, and the CI job has no `.env`);
+  (the CI job has no `.env`). The app's `ConfigModule` would still load a
+  local `.env` for every key not already set, so `helpers/env.ts` pins
+  `DIRECT_URL` to the test database and sets every external-service key
+  (storage, Firebase, email, Redis, bank APIs) to an empty string, which
+  keeps `.env` from filling them in;
 - `setup-test-db.sh`, jest's `globalSetup` and every worker refuse to run unless
   the host is `localhost` / `127.0.0.1` / `postgres` **and** the database name
   contains `test`;
@@ -70,6 +74,29 @@ object and fails if any one still standing is missing from the test database.
 
 Never edit `prisma/migrations` to make the test database work: `prisma migrate
 deploy` runs those files against production.
+
+## One check per area
+
+CI runs this suite as separate checks so the PR page names the area that broke
+(the `db` job's matrix in `.github/workflows/backend.yml`):
+
+| Check | Runs | Locally |
+|---|---|---|
+| **DB tests** | everything under `test/db` except the folders below | `npm run test:db -- --testPathIgnorePatterns=/test/db/student-directory/` |
+| **Student directory tests** | `test/db/student-directory/` — every action on `/identity/students` | `npm run test:db:directory` |
+
+To give another area its own check: put its specs in a folder, add a matrix
+entry with its `check` name and path, add that folder to the **DB tests**
+entry's ignore pattern, and add the new check name to the required checks on
+`main` (a check that isn't required doesn't block a merge).
+
+## Known bugs (`it.failing`)
+
+A bug found while writing tests, and not fixed in the same PR, is pinned in a
+`known-bugs.db-spec.ts` with `it.failing('TAFSD-<n>: <correct behaviour>')`.
+The test states what *should* happen; `it.failing` passes while the code still
+gets it wrong and turns red the moment someone fixes it. The fix's PR flips it
+to `it` and closes the ticket.
 
 ## Writing a spec
 
