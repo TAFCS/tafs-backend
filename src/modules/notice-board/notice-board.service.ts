@@ -201,47 +201,25 @@ export class NoticeBoardService {
     });
 
     const studentCcs = students.map((s) => s.cc);
-    const campusIds = [...new Set(students.map((s) => s.campus_id).filter(Boolean))] as number[];
-    const classIds  = [...new Set(students.map((s) => s.class_id).filter(Boolean))] as number[];
-    const sectionIds = [...new Set(students.map((s) => s.section_id).filter(Boolean))] as number[];
-    const statuses = [...new Set(students.map((s) => s.status).filter(Boolean))];
-    const academicYears = [...new Set(students.map((s) => s.academic_year).filter(Boolean))] as string[];
 
-    const scopeFilter = {
+    // TAFSD-594: a post reaches the family when ONE child matches every list
+    // it sets (campus, class, section, status, year), the rule push already
+    // uses (_resolveAudienceFamilyIds). Pooling the children's values instead
+    // showed a family with a child in O-I B and a sibling in any class's
+    // section A the homework sent to O-I A. A family with no children left
+    // still sees school-wide notices.
+    type PostWhere = Prisma.notice_board_postsWhereInput;
+    const emptyOr = (empty: PostWhere, has: PostWhere | null): PostWhere => ({ OR: has ? [empty, has] : [empty] });
+    const perChild: PostWhere[] = (students.length ? students : [null]).map((s) => ({
       AND: [
-        {
-          OR: [
-            { campus_ids: { isEmpty: true } },
-            ...(campusIds.length ? [{ campus_ids: { hasSome: campusIds } }] : []),
-          ],
-        },
-        {
-          OR: [
-            { class_ids: { isEmpty: true } },
-            ...(classIds.length ? [{ class_ids: { hasSome: classIds } }] : []),
-          ],
-        },
-        {
-          OR: [
-            { section_ids: { isEmpty: true } },
-            ...(sectionIds.length ? [{ section_ids: { hasSome: sectionIds } }] : []),
-          ],
-        },
-        {
-          OR: [
-            { student_statuses: { isEmpty: true } },
-            ...(statuses.length ? [{ student_statuses: { hasSome: statuses } }] : []),
-          ],
-        },
-        {
-          OR: [
-            { academic_years: { isEmpty: true } },
-            ...(academicYears.length ? [{ academic_years: { hasSome: academicYears } }] : []),
-          ],
-        },
+        emptyOr({ campus_ids: { isEmpty: true } }, s?.campus_id ? { campus_ids: { has: s.campus_id } } : null),
+        emptyOr({ class_ids: { isEmpty: true } }, s?.class_id ? { class_ids: { has: s.class_id } } : null),
+        emptyOr({ section_ids: { isEmpty: true } }, s?.section_id ? { section_ids: { has: s.section_id } } : null),
+        emptyOr({ student_statuses: { isEmpty: true } }, s?.status ? { student_statuses: { has: s.status } } : null),
+        emptyOr({ academic_years: { isEmpty: true } }, s?.academic_year ? { academic_years: { has: s.academic_year } } : null),
       ],
-      student_ccs: { isEmpty: true },
-    };
+    }));
+    const scopeFilter: PostWhere = { student_ccs: { isEmpty: true }, OR: perChild };
 
     const where = {
       deleted_at: null,
