@@ -16,6 +16,12 @@ import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
 import { UpdateFamilyAddressDto } from './dto/update-family-address.dto';
 import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
+import {
+  UpsertActivityDto,
+  UpsertAdmissionDto,
+  UpsertLanguageDto,
+  UpsertPreviousSchoolDto,
+} from './dto/student-records.dto';
 
 import { AuditLogsService, type AuditLogParams } from '../audit-logs/audit-logs.service';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
@@ -2045,7 +2051,7 @@ export class StaffEditingService {
 
   // ─── Sub-table CRUD ────────────────────────────────────────────────────────
 
-  async upsertAdmission(studentId: number, dto: any, changedBy?: string) {
+  async upsertAdmission(studentId: number, dto: UpsertAdmissionDto, changedBy?: string) {
     const data: any = {
       student_id: studentId,
       academic_system: dto.academic_system,
@@ -2055,9 +2061,13 @@ export class StaffEditingService {
       application_date: dto.application_date ? new Date(dto.application_date) : new Date(),
     };
 
+    // TAFSD-560: an id must name one of THIS student's rows. It used to update
+    // any row and move it here, so an editor could take another student's
+    // record (even one outside their scope) by sending its id.
     const before = dto.id
-      ? await this.prisma.student_admissions.findUnique({ where: { id: dto.id } })
+      ? await this.prisma.student_admissions.findFirst({ where: { id: dto.id, student_id: studentId } })
       : null;
+    if (dto.id && !before) throw new NotFoundException(`Admission #${dto.id} not found for student #${studentId}`);
 
     const result = await this.prisma.$transaction(async (tx) => {
       if (dto.id) {
@@ -2113,7 +2123,7 @@ export class StaffEditingService {
     return { success: true };
   }
 
-  async upsertActivity(studentId: number, dto: any, changedBy?: string) {
+  async upsertActivity(studentId: number, dto: UpsertActivityDto, changedBy?: string) {
     const data: any = {
       student_id: studentId,
       activity_name: dto.activity_name,
@@ -2121,9 +2131,11 @@ export class StaffEditingService {
       honors_awards: dto.honors_awards,
       continue_at_tafs: dto.continue_at_tafs ?? true,
     };
+    // TAFSD-560: only this student's own row can be edited (see upsertAdmission).
     const before = dto.id
-      ? await this.prisma.student_activities.findUnique({ where: { id: dto.id } })
+      ? await this.prisma.student_activities.findFirst({ where: { id: dto.id, student_id: studentId } })
       : null;
+    if (dto.id && !before) throw new NotFoundException(`Activity #${dto.id} not found for student #${studentId}`);
     const result = dto.id
       ? await this.prisma.student_activities.update({ where: { id: dto.id }, data })
       : await this.prisma.student_activities.create({ data });
@@ -2162,7 +2174,7 @@ export class StaffEditingService {
     return { success: true };
   }
 
-  async upsertLanguage(studentId: number, dto: any, changedBy?: string) {
+  async upsertLanguage(studentId: number, dto: UpsertLanguageDto, changedBy?: string) {
     const data: any = {
       student_id: studentId,
       language_name: dto.language_name,
@@ -2170,9 +2182,11 @@ export class StaffEditingService {
       can_read: dto.can_read ?? false,
       can_write: dto.can_write ?? false,
     };
+    // TAFSD-560: only this student's own row can be edited (see upsertAdmission).
     const before = dto.id
-      ? await this.prisma.student_languages.findUnique({ where: { id: dto.id } })
+      ? await this.prisma.student_languages.findFirst({ where: { id: dto.id, student_id: studentId } })
       : null;
+    if (dto.id && !before) throw new NotFoundException(`Language #${dto.id} not found for student #${studentId}`);
     const result = dto.id
       ? await this.prisma.student_languages.update({ where: { id: dto.id }, data })
       : await this.prisma.student_languages.create({ data });
@@ -2215,7 +2229,7 @@ export class StaffEditingService {
     return { success: true };
   }
 
-  async upsertPreviousSchool(studentId: number, dto: any, changedBy?: string) {
+  async upsertPreviousSchool(studentId: number, dto: UpsertPreviousSchoolDto, changedBy?: string) {
     const data: any = {
       student_id: studentId,
       school_name: dto.school_name,
@@ -2224,9 +2238,11 @@ export class StaffEditingService {
       class_studied_to: dto.class_studied_to,
       reason_for_leaving: dto.reason_for_leaving,
     };
+    // TAFSD-560: only this student's own row can be edited (see upsertAdmission).
     const before = dto.id
-      ? await this.prisma.student_previous_schools.findUnique({ where: { id: dto.id } })
+      ? await this.prisma.student_previous_schools.findFirst({ where: { id: dto.id, student_id: studentId } })
       : null;
+    if (dto.id && !before) throw new NotFoundException(`Previous school #${dto.id} not found for student #${studentId}`);
     const result = dto.id
       ? await this.prisma.student_previous_schools.update({ where: { id: dto.id }, data })
       : await this.prisma.student_previous_schools.create({ data });

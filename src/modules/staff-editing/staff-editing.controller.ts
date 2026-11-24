@@ -20,6 +20,12 @@ import { UpdateGuardianDto } from './dto/update-guardian.dto';
 import { UpdateGuardianRelationshipDto } from './dto/update-guardian-relationship.dto';
 import { LinkExistingGuardianDto } from './dto/link-existing-guardian.dto';
 import { HardDeleteStudentDto } from './dto/hard-delete-student.dto';
+import {
+  UpsertActivityDto,
+  UpsertAdmissionDto,
+  UpsertLanguageDto,
+  UpsertPreviousSchoolDto,
+} from './dto/student-records.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { STAFF_EDITING_MESSAGES } from '../../constants/api-response/staff-editing.constant';
 import { JwtStaffGuard } from '../../common/guards/jwt-staff.guard';
@@ -284,7 +290,7 @@ export class StaffEditingController {
   @RequireAction('student.directory#admissions.edit')
   async upsertAdmission(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: any,
+    @Body() dto: UpsertAdmissionDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     await this.staffEditingService.assertStudentVisible(user, id);
@@ -307,7 +313,7 @@ export class StaffEditingController {
   @RequireAction('student.directory#academic.edit')
   async upsertActivity(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: any,
+    @Body() dto: UpsertActivityDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     await this.staffEditingService.assertStudentVisible(user, id);
@@ -330,7 +336,7 @@ export class StaffEditingController {
   @RequireAction('student.directory#academic.edit')
   async upsertLanguage(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: any,
+    @Body() dto: UpsertLanguageDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     await this.staffEditingService.assertStudentVisible(user, id);
@@ -353,7 +359,7 @@ export class StaffEditingController {
   @RequireAction('student.directory#academic.edit')
   async upsertPreviousSchool(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: any,
+    @Body() dto: UpsertPreviousSchoolDto,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
     await this.staffEditingService.assertStudentVisible(user, id);

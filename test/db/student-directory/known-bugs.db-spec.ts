@@ -15,7 +15,7 @@ const ctx = directorySuite();
 const student = (cc: number) => ctx.prisma.students.findUniqueOrThrow({ where: { cc } });
 
 describe('known bugs', () => {
-    it.failing('TAFSD-560: saving an activity with another student\'s row id must not move that row to this student', async () => {
+    it('TAFSD-560: saving an activity with another student\'s row id must not move that row to this student', async () => {
         const theirs = await ctx.prisma.student_activities.create({ data: { student_id: STUDENT.B1, activity_name: 'Chess' } });
         const res = await ctx.as.dirClerk.post(`/staff-editing/students/${STUDENT.A1}/activities`).send({ id: theirs.id, activity_name: 'Taken' });
         expect([400, 404]).toContain(res.status);

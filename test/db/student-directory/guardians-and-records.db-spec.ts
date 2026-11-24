@@ -153,4 +153,34 @@ describe('admissions and academic records', () => {
         expect((await ctx.as.dirClerk.delete(`/staff-editing/activities/${other.id}`)).status).toBe(404);
         expect(await ctx.prisma.student_activities.count()).toBe(1);
     });
+
+    it('TAFSD-560: an id that isn\'t this student\'s row is 404, and that row stays where it was', async () => {
+        const theirs = {
+            admissions: await ctx.prisma.student_admissions.create({ data: { student_id: STUDENT.B1, academic_system: 'Matric', requested_grade: 'VI' } }),
+            languages: await ctx.prisma.student_languages.create({ data: { student_id: STUDENT.B1, language_name: 'Sindhi' } }),
+            schools: await ctx.prisma.student_previous_schools.create({ data: { student_id: STUDENT.B1, school_name: 'Their School' } }),
+        };
+        // A sibling row of the same student in scope (A2) is just as off limits.
+        const sibling = await ctx.prisma.student_activities.create({ data: { student_id: STUDENT.A2, activity_name: 'Chess' } });
+        const sends: [string, number, object][] = [
+            ['admissions', theirs.admissions.id, { academic_system: 'O-Level' }],
+            ['languages', theirs.languages.id, { language_name: 'Taken' }],
+            ['schools', theirs.schools.id, { school_name: 'Taken' }],
+            ['activities', sibling.id, { activity_name: 'Taken' }],
+        ];
+        for (const [route, id, body] of sends) {
+            const res = await ctx.as.dirClerk.post(`/staff-editing/students/${STUDENT.A1}/${route}`).send({ id, ...body });
+            expect({ route, status: res.status }).toEqual({ route, status: 404 });
+        }
+        expect(await ctx.prisma.student_admissions.findUniqueOrThrow({ where: { id: theirs.admissions.id } })).toMatchObject({ student_id: STUDENT.B1, academic_system: 'Matric' });
+        expect(await ctx.prisma.student_languages.findUniqueOrThrow({ where: { id: theirs.languages.id } })).toMatchObject({ student_id: STUDENT.B1, language_name: 'Sindhi' });
+        expect(await ctx.prisma.student_previous_schools.findUniqueOrThrow({ where: { id: theirs.schools.id } })).toMatchObject({ student_id: STUDENT.B1, school_name: 'Their School' });
+        expect(await ctx.prisma.student_activities.findUniqueOrThrow({ where: { id: sibling.id } })).toMatchObject({ student_id: STUDENT.A2, activity_name: 'Chess' });
+    });
+
+    it('TAFSD-560: only the form\'s own fields are accepted', async () => {
+        const res = await ctx.as.dirClerk.post(`/staff-editing/students/${STUDENT.A1}/activities`).send({ activity_name: 'Debating', student_id: STUDENT.B1 });
+        expect(res.status).toBe(400);
+        expect(await ctx.prisma.student_activities.count()).toBe(0);
+    });
 });
