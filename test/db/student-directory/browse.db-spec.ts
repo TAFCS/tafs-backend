@@ -101,6 +101,13 @@ describe('opening a student', () => {
         expect(s.guardians.map((g: any) => g.relationship).sort()).toEqual(['FATHER', 'MOTHER']);
     });
 
+    it('the editable record shows the student\'s special categories (fixed in TAFSD-566)', async () => {
+        const cat = await ctx.prisma.student_categories.findUniqueOrThrow({ where: { code: 'COMPLEMENTARY' } });
+        await ctx.prisma.student_category_assignments.create({ data: { student_id: STUDENT.A1, category_id: cat.id, reason: 'x', updated_at: new Date() } });
+        const res = await ctx.as.admin.get(`/staff-editing/students/${STUDENT.A1}`);
+        expect(res.body.data.categories).toEqual([expect.objectContaining({ key: 'COMPLEMENTARY' })]);
+    });
+
     it('lists the record sheet with search (GET /staff-editing/students)', async () => {
         const res = await ctx.as.admin.get('/staff-editing/students?search=Student%20Two');
         expect(res.status).toBe(200);

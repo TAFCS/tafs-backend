@@ -70,13 +70,6 @@ describe('known bugs', () => {
         expect(res.body.data).toEqual([expect.objectContaining({ to_house: expect.objectContaining({ house_name: 'BLUE' }) })]);
     });
 
-    it.failing('TAFSD-566: the editable record shows the student\'s special categories', async () => {
-        const cat = await ctx.prisma.student_categories.findUniqueOrThrow({ where: { code: 'COMPLEMENTARY' } });
-        await ctx.prisma.student_category_assignments.create({ data: { student_id: STUDENT.A1, category_id: cat.id, reason: 'x', updated_at: new Date() } });
-        const res = await ctx.as.admin.get(`/staff-editing/students/${STUDENT.A1}`);
-        expect(res.body.data.categories).toEqual([expect.objectContaining({ key: 'COMPLEMENTARY' })]);
-    });
-
     it.failing('TAFSD-567: editing a phone number doesn\'t add a "reassigned" period to the academic history', async () => {
         await ctx.prisma.student_progression_periods.create({
             data: { student_cc: STUDENT.A1, campus_id: 1, class_id: CLASS_AUG, change_type: 'ENROLLED', valid_from: new Date('2026-08-01') },
