@@ -151,6 +151,37 @@ async function plan(): Promise<{ rows: Row[]; leftOut: LeftOut[] }> {
   return { rows, leftOut };
 }
 
+/**
+ * A write whose commit landed but whose response was lost (a transaction
+ * timeout on the first run) has its ledger row and no audit entry. Log those,
+ * once: an employee who already has this run's audit entry is skipped.
+ */
+async function backfillMissingAudit() {
+  const rows = [
+    ...(await prisma.employee_security_deposit_transactions.findMany({
+      where: { created_by: ACTOR },
+      select: { amount: true, deposit: { select: { employee_id: true } } },
+    })).map((t) => ({ kind: 'NPD' as const, employee_id: t.deposit.employee_id, amount: t.amount })),
+    ...(await prisma.employee_loan_transactions.findMany({
+      where: { created_by: ACTOR },
+      select: { amount: true, loan: { select: { employee_id: true } } },
+    })).map((t) => ({ kind: 'Loan' as const, employee_id: t.loan.employee_id, amount: t.amount })),
+  ];
+  for (const r of rows) {
+    const action = r.kind === 'NPD' ? 'SECURITY_DEPOSIT_MARKED_COLLECTED' : 'LOAN_MARKED_COLLECTED';
+    const has = await prisma.audit_logs.count({ where: { changed_by: ACTOR, entity_id: String(r.employee_id), action } });
+    if (has) continue;
+    await audit.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(r.employee_id),
+      action,
+      changed_by: ACTOR,
+      note: `${r.kind === 'NPD' ? 'Security deposit' : 'Loan'} installment for ${cycleLabel(CYCLE)} marked collected outside payroll: ${money(r.amount).toFixed(2)}. ${NOTES}`,
+    } as never);
+    console.log(`Audit entry added for ${r.kind} employee ${r.employee_id} (its write committed but the response was lost).`);
+  }
+}
+
 async function writeSheet(rows: Row[], leftOut: LeftOut[], results: Map<string, string>) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet(APPLY ? 'Marked collected' : 'Will be marked');
@@ -203,10 +234,14 @@ async function writeSheet(rows: Row[], leftOut: LeftOut[], results: Map<string, 
     );
     if (!APPLY) continue;
     try {
-      const svc = r.kind === 'NPD' ? deposits : loans;
-      const out = await prisma.$transaction((tx) =>
-        svc.collectNextInstallment(r.employee_id, { amount: r.recorded, notes: NOTES, periodStart: CYCLE_ISO }, ACTOR, tx as never),
-      );
+      // The remote database is slow enough that Prisma's 5 s default expired
+      // mid-write on the first run (2026-11-26); every write is one plan.
+      const opts = { amount: r.recorded, notes: NOTES, periodStart: CYCLE_ISO };
+      const txOpts = { maxWait: 30_000, timeout: 60_000 };
+      const out =
+        r.kind === 'NPD'
+          ? await prisma.$transaction((tx) => deposits.collectNextInstallment(r.employee_id, opts, ACTOR, tx), txOpts)
+          : await prisma.$transaction((tx) => loans.collectNextInstallment(r.employee_id, opts, ACTOR, tx), txOpts);
       await audit.log({
         entity_type: 'EMPLOYEE',
         entity_id: String(r.employee_id),
@@ -222,6 +257,8 @@ async function writeSheet(rows: Row[], leftOut: LeftOut[], results: Map<string, 
       console.error(`  refused: ${msg}`);
     }
   }
+
+  if (APPLY) await backfillMissingAudit();
 
   console.log('\nLeft out:');
   for (const r of leftOut) console.log(`${r.kind.padEnd(4)} ${r.code.padEnd(15)} ${r.name.padEnd(28)} ${String(r.amount).padStart(8)}  ${r.reason}`);
