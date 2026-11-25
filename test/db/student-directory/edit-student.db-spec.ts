@@ -107,6 +107,23 @@ describe('identity edits (PATCH /staff-editing/students/:id)', () => {
         expect((await patch('dirNoStatus', STUDENT.A1, { status: s.status, city: 'Karachi' })).status).toBe(200);
         expect((await student(STUDENT.A1)).full_name).toBe('Renamed Only');
     });
+
+    it('TAFSD-567: a real move through this form still opens a new period in the academic history', async () => {
+        await ctx.prisma.student_progression_periods.create({
+            data: { student_cc: STUDENT.A1, campus_id: 1, class_id: CLASS_AUG, section_id: SECTION, house_id: HOUSE.RED, change_type: 'ENROLLED', valid_from: new Date('2026-08-01') },
+        });
+        expect((await patch('admin', STUDENT.A1, { primary_phone: '03009998888', gr_number: '999' })).status).toBe(200);
+        let periods = await ctx.prisma.student_progression_periods.findMany({ where: { student_cc: STUDENT.A1 }, orderBy: { id: 'asc' } });
+        // A GR change is written onto the open period, not recorded as a move.
+        expect(periods.map((p) => [p.change_type, p.gr_number, p.valid_to])).toEqual([['ENROLLED', '999', null]]);
+
+        expect((await patch('dirClerk', STUDENT.A1, { class_id: CLASS_VII, section_id: SECTION })).status).toBe(200);
+        periods = await ctx.prisma.student_progression_periods.findMany({ where: { student_cc: STUDENT.A1 }, orderBy: { id: 'asc' } });
+        expect(periods.map((p) => [p.change_type, p.class_id, p.valid_to === null])).toEqual([
+            ['ENROLLED', CLASS_AUG, false],
+            ['REASSIGNED', CLASS_VII, true],
+        ]);
+    });
 });
 
 describe('family address (PATCH /staff-editing/students/:id/family-address)', () => {

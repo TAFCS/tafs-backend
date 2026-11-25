@@ -689,33 +689,44 @@ export class StaffEditingService {
               ? (studentData.gr_number as string | null)
               : existing.gr_number;
 
-          const changeType = this.progressionHistory.resolveChangeType({
-            prior: {
-              campus_id: existing.campus_id,
-              class_id: existing.class_id,
-              section_id: existing.section_id,
-              house_id: existing.house_id,
-            },
-            next: {
+          // TAFSD-567: only a change of placement opens a new period. Editing a
+          // phone number used to close an ENROLLED or PROMOTED period and open a
+          // "REASSIGNED" one. A GR change is written onto the open period below.
+          const placementChanged =
+            nextCampusId !== existing.campus_id ||
+            nextClassId !== existing.class_id ||
+            nextSectionId !== existing.section_id ||
+            nextHouseId !== existing.house_id;
+
+          if (placementChanged) {
+            const changeType = this.progressionHistory.resolveChangeType({
+              prior: {
+                campus_id: existing.campus_id,
+                class_id: existing.class_id,
+                section_id: existing.section_id,
+                house_id: existing.house_id,
+              },
+              next: {
+                campusId: nextCampusId,
+                classId: nextClassId,
+                sectionId: nextSectionId,
+                houseId: nextHouseId,
+              },
+              defaultType: 'REASSIGNED',
+            });
+
+            await this.progressionHistory.recordProgressionChange(tx, {
+              studentCc: cc,
               campusId: nextCampusId,
               classId: nextClassId,
               sectionId: nextSectionId,
               houseId: nextHouseId,
-            },
-            defaultType: 'REASSIGNED',
-          });
-
-          await this.progressionHistory.recordProgressionChange(tx, {
-            studentCc: cc,
-            campusId: nextCampusId,
-            classId: nextClassId,
-            sectionId: nextSectionId,
-            houseId: nextHouseId,
-            academicYear: nextAcademicYear,
-            grNumber: nextGrNumber as string | null,
-            changeType,
-            changedBy,
-          });
+              academicYear: nextAcademicYear,
+              grNumber: nextGrNumber as string | null,
+              changeType,
+              changedBy,
+            });
+          }
 
           if (
             studentData.gr_number !== undefined &&

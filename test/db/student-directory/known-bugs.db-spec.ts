@@ -70,7 +70,7 @@ describe('known bugs', () => {
         expect(res.body.data).toEqual([expect.objectContaining({ to_house: expect.objectContaining({ house_name: 'BLUE' }) })]);
     });
 
-    it.failing('TAFSD-567: editing a phone number doesn\'t add a "reassigned" period to the academic history', async () => {
+    it('TAFSD-567: editing a phone number doesn\'t add a "reassigned" period to the academic history', async () => {
         await ctx.prisma.student_progression_periods.create({
             data: { student_cc: STUDENT.A1, campus_id: 1, class_id: CLASS_AUG, change_type: 'ENROLLED', valid_from: new Date('2026-08-01') },
         });
