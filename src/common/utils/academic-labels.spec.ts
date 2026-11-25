@@ -9,6 +9,8 @@ import {
     termOfHead,
     termRelativeSlot,
     isEligibleForDisciplineGroup,
+    currentAcademicYear,
+    termStartMonthForSystem,
 } from './academic-labels';
 
 const CAMBRIDGE_CLASS = 11; // SR-III, Aug-Jul
@@ -218,3 +220,24 @@ describe('formatAcademicSessionLabel', () => {
     });
 });
 
+
+describe('TAFSD-597 current session', () => {
+    it('maps systems to their term start month', () => {
+        expect(termStartMonthForSystem('Secondary')).toBe(4);
+        expect(termStartMonthForSystem('secondary')).toBe(4);
+        expect(termStartMonthForSystem('Cambridge')).toBe(8);
+        expect(termStartMonthForSystem('A-Level')).toBe(8);
+        expect(termStartMonthForSystem(null)).toBe(8);
+    });
+
+    it('rolls Cambridge over in August and Secondary in April', () => {
+        const nov = new Date('2026-11-25T06:00:00Z');
+        const may = new Date('2027-05-10T06:00:00Z');
+        const aug = new Date('2027-08-01T06:00:00Z');
+        expect(currentAcademicYear(undefined, nov)).toBe('2026-2027');
+        expect(currentAcademicYear({ termStartMonth: 4 }, nov)).toBe('2026-2027');
+        expect(currentAcademicYear(undefined, may)).toBe('2026-2027');
+        expect(currentAcademicYear({ termStartMonth: 4 }, may)).toBe('2027-2028');
+        expect(currentAcademicYear(undefined, aug)).toBe('2027-2028');
+    });
+});

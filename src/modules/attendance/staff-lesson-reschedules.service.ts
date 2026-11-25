@@ -15,6 +15,7 @@ import { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { assertClassInScope } from '../../common/staff-scope';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { auditActorLabel } from '../../common/utils/audit-actor.util';
+import { currentAcademicYear } from '../../common/utils/academic-labels';
 import { ClassPeriodsService } from '../timetables/class-periods.service';
 import { ScopeService } from '../../common/scope/scope.service';
 import { StaffLessonExcuseService } from './staff-lesson-excuse.service';
@@ -183,7 +184,7 @@ export class StaffLessonReschedulesService {
         select: { academic_year: true },
         orderBy: { academic_year: 'desc' },
       }))?.academic_year ??
-      '2026-2027';
+      currentAcademicYear();
 
     const slots = await this.prisma.timetable_slots.findMany({
       where: {
@@ -306,7 +307,7 @@ export class StaffLessonReschedulesService {
         select: { academic_year: true },
         orderBy: { academic_year: 'desc' },
       }))?.academic_year ??
-      '2026-2027';
+      currentAcademicYear();
 
     const slots = await this.prisma.timetable_slots.findMany({
       where: {

@@ -14,6 +14,7 @@ import { ScopeService } from '../../common/scope/scope.service';
 import { applyStudentScope } from '../../common/staff-scope';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import { formatGrNumberWithPrefix, checkIsALevel } from '../../common/utils/gr-number.util';
+import { currentAcademicYear, termStartMonthForSystem } from '../../common/utils/academic-labels';
 
 type TxClient = Prisma.TransactionClient;
 
@@ -445,7 +446,9 @@ export class IdentityService {
       const admissionData = {
         academic_system: dto.admission.academic_system,
         requested_grade: resolvedGrade,
-        academic_year: new Date().getFullYear().toString(),
+        academic_year:
+          dto.admission.academic_year ||
+          currentAcademicYear({ termStartMonth: termStartMonthForSystem(dto.admission.academic_system) }),
         discipline: dto.admission.discipline,
       };
       const existingAdmission = existingQuickStudent
@@ -684,7 +687,9 @@ export class IdentityService {
               data: {
                 academic_system: dto.admission.academic_system,
                 requested_grade: resolvedGrade,
-                academic_year: new Date().getFullYear().toString(),
+                academic_year:
+                  dto.admission.academic_year ||
+                  currentAcademicYear({ termStartMonth: termStartMonthForSystem(dto.admission.academic_system) }),
                 discipline: dto.admission.discipline,
               },
             });
@@ -695,7 +700,9 @@ export class IdentityService {
                 student_id: student.cc,
                 academic_system: dto.admission.academic_system,
                 requested_grade: resolvedGrade,
-                academic_year: new Date().getFullYear().toString(),
+                academic_year:
+                  dto.admission.academic_year ||
+                  currentAcademicYear({ termStartMonth: termStartMonthForSystem(dto.admission.academic_system) }),
                 discipline: dto.admission.discipline,
               },
             });

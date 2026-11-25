@@ -150,6 +150,20 @@ export function termRelativeSlot(month: number, term?: TermContext): number {
     return month >= cutoff ? month - cutoff : month + (12 - cutoff);
 }
 
+/**
+ * TAFSD-597: month (1-12) an academic system's session starts in, matching
+ * classes.term_start_month: Secondary runs Apr-Mar, Cambridge and A-Level Aug-Jul.
+ * Prefer a class's own term_start_month when a class is known.
+ */
+export function termStartMonthForSystem(system?: string | null): number {
+    return /secondary|matric/i.test(system ?? '') ? 4 : DEFAULT_TERM_START_MONTH;
+}
+
+/** TAFSD-597: the session today falls in ("2026-2027"). Never default to a hardcoded year. */
+export function currentAcademicYear(term?: TermContext, now: Date = new Date()): string {
+    return deriveAcademicYear(now.toISOString(), term);
+}
+
 export function deriveAcademicYear(dateStr: string, term?: TermContext): string {
     const d = new Date(dateStr);
     const m = d.getUTCMonth() + 1;
