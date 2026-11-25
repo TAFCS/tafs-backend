@@ -183,6 +183,41 @@ describe('tile sub-permissions', () => {
     );
   });
 
+  describe('TAFSD-589: an explicitOnly action is never conferred by the legacy bridge', () => {
+    const LOAN_ACTIONS = [
+      { id: 'view', default: true, implies: [] },
+      { id: 'repay', default: false, implies: ['view'] },
+      { id: 'mark_collected', default: false, implies: ['view'], explicitOnly: true },
+    ];
+    const loanTiles: EffectiveTile[] = [
+      ...tiles,
+      { id: 'hr.employee_loans', capabilities: ['hr.employees.view'], actions: LOAN_ACTIONS, legacyFullAccessCapabilities: ['hr.employees.edit'] },
+    ];
+    const legacyHolder = { ...base, activeTiles: loanTiles, role: StaffRole.EMPLOYEE, roleKeys: ['hr.employees.view', 'hr.employees.edit'], allowTileIds: ['hr.employee_loans'] };
+
+    it('the bridge confers every other action but not it', () => {
+      const result = computeEffectiveAccess(legacyHolder);
+      expect(result.actionIds).toContain('hr.employee_loans#repay');
+      expect(result.actionIds).not.toContain('hr.employee_loans#mark_collected');
+    });
+
+    it('an explicit per-person tick gives it, bridge or not', () => {
+      const result = computeEffectiveAccess({
+        ...legacyHolder,
+        userActionGrants: [{ tileId: 'hr.employee_loans', actionId: 'mark_collected', allow: true }],
+      });
+      expect(result.actionIds).toContain('hr.employee_loans#mark_collected');
+    });
+
+    it('a pack carrying it gives it too', () => {
+      const result = computeEffectiveAccess({
+        ...legacyHolder,
+        packActions: [{ tileId: 'hr.employee_loans', actionId: 'mark_collected' }],
+      });
+      expect(result.actionIds).toContain('hr.employee_loans#mark_collected');
+    });
+  });
+
   describe('legacy bridge on a tile whose own capability is its bridge key', () => {
     const CYCLE_ACTIONS = [
       { id: 'view', default: true, implies: [] },

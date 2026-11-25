@@ -5,12 +5,13 @@ import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
-import { RequireAnyAction } from '../../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction } from '../../../decorators/require-action.decorator';
 import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { EmployeeLoansService } from './employee-loans.service';
 import { CreateLoanDto, LumpSumRepaymentDto, UpdateLoanInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
+import { MarkInstallmentCollectedDto } from '../security-deposits/dto/security-deposits.dto';
 
 // Every route here is ALSO reachable from EmployeeLoanTab.tsx inside the
 // Employee Directory (gated there on hr.employee_directory#loan.edit / .view)
@@ -99,5 +100,30 @@ export class EmployeeLoansController {
   ) {
     const data = await this.employeeLoans.markOutstanding(employeeId, user);
     return createApiResponse(data, HttpStatus.OK, 'Loan marked outstanding');
+  }
+
+  // TAFSD-589: default-deny (explicitOnly), no Employee Directory fallback.
+  @Post('mark-collected')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_loans#mark_collected')
+  async markCollected(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: MarkInstallmentCollectedDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeeLoans.markCollected(employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Loan installment marked collected');
+  }
+
+  @Post('collections/:transactionId/undo')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.employee_loans#mark_collected')
+  async undoCollection(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Param('transactionId', ParseIntPipe) transactionId: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.employeeLoans.undoCollection(employeeId, transactionId, user);
+    return createApiResponse(data, HttpStatus.OK, 'Loan installment collection undone');
   }
 }

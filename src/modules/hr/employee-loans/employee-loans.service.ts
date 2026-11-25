@@ -23,6 +23,17 @@ import {
   restoreScheduleBeforeCollection,
   shiftScheduleAfterCollection,
 } from '../installment-schedule.util';
+import {
+  type CycleTxn,
+  coveredCycles,
+  cycleCollectedOutsidePayroll,
+  cycleEnd,
+  cycleLabel,
+  dateOnly,
+  nextCollectionCycle,
+  parseCycleStart,
+} from '../installment-cycles.util';
+import { BulkMarkInstallmentsCollectedDto, MarkInstallmentCollectedDto } from '../security-deposits/dto/security-deposits.dto';
 import { CreateLoanDto, LumpSumRepaymentDto, UpdateLoanInstallmentScheduleDto, WriteOffLoanDto } from './dto/employee-loans.dto';
 import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
@@ -31,10 +42,6 @@ const OPEN_STATUSES: LoanStatus[] = [LoanStatus.ACTIVE, LoanStatus.OUTSTANDING];
 const OFFBOARDED_STATUSES: EmployeeStatus[] = [EmployeeStatus.LEFT, EmployeeStatus.TERMINATED];
 
 type Tx = Prisma.TransactionClient;
-
-function dateOnly(value: Date): string {
-  return value.toISOString().slice(0, 10);
-}
 
 function currentCycleStart(): Date {
   const { year, month } = parsePayrollPeriod(currentPayrollPeriodLabel());
@@ -50,24 +57,6 @@ function snapToCycleStart(date: Date): Date {
   const y = date.getUTCFullYear();
   const m = date.getUTCMonth();
   return date.getUTCDate() >= 26 ? new Date(Date.UTC(y, m, 26)) : new Date(Date.UTC(y, m - 1, 26));
-}
-
-/** Same rule as security deposits: the schedule is popped per finalized payroll line, so the next cycle follows the last deduction — not the wall clock. */
-function nextCollectionPeriodStart(startPeriodStart: Date, lastDeductedPeriodStart: Date | null): Date {
-  if (!lastDeductedPeriodStart) return startPeriodStart;
-  const next = new Date(Date.UTC(lastDeductedPeriodStart.getUTCFullYear(), lastDeductedPeriodStart.getUTCMonth() + 1, 26));
-  return next > startPeriodStart ? next : startPeriodStart;
-}
-
-function lastDeductedPeriodStart(
-  transactions: { payroll_run_line?: { payroll_runs: { period_start: Date } } | null }[],
-): Date | null {
-  let last: Date | null = null;
-  for (const txn of transactions) {
-    const start = txn.payroll_run_line?.payroll_runs.period_start;
-    if (start && (!last || start > last)) last = start;
-  }
-  return last;
 }
 
 @Injectable()
@@ -101,8 +90,8 @@ export class EmployeeLoansService {
     const current = loans.find((l) => OPEN_STATUSES.includes(l.status)) ?? null;
     const history = loans.filter((l) => l.id !== current?.id);
     return {
-      current: current ? this.serializeLoan(current) : null,
-      history: history.map((l) => this.serializeLoan(l)),
+      current: current ? this.serializeLoan(current, true) : null,
+      history: history.map((l) => this.serializeLoan(l, false)),
       default_start_period_start: dateOnly(await this.defaultStartFor(employeeId)),
     };
   }
@@ -153,8 +142,14 @@ export class EmployeeLoansService {
           },
         },
         transactions: {
-          where: { type: LoanTransactionType.DEDUCTION, payroll_run_line_id: { not: null } },
-          select: { payroll_run_line: { select: { payroll_runs: { select: { period_start: true } } } } },
+          where: { type: LoanTransactionType.DEDUCTION },
+          select: {
+            id: true,
+            type: true,
+            created_at: true,
+            payroll_run_line_id: true,
+            payroll_run_line: { select: { payroll_runs: { select: { period_start: true } } } },
+          },
         },
       },
       orderBy: [{ status: 'asc' }, { start_period_start: 'desc' }, { id: 'desc' }],
@@ -459,7 +454,11 @@ export class EmployeeLoansService {
 
     const loan = await this.findCollectingLoan(employeeId, tx);
     let collected = ZERO;
-    if (loan && line.payroll_runs.period_start >= loan.start_period_start) {
+    if (
+      loan &&
+      line.payroll_runs.period_start >= loan.start_period_start &&
+      !(await this.collectedOutsidePayroll(loan, line.payroll_runs.period_start, tx))
+    ) {
       const due = this.cycleDue(loan);
       collected = Prisma.Decimal.min(due, available).toDecimalPlaces(2);
     }
@@ -490,9 +489,13 @@ export class EmployeeLoansService {
     });
     if (!line || line.payroll_runs.is_test) return;
 
+    await this.lockEmployeeLoans(line.employee_id, tx);
     const loan = await this.findCollectingLoan(line.employee_id, tx);
     if (!loan) return;
     if (line.payroll_runs.period_start < loan.start_period_start) return;
+    // TAFSD-589: this cycle's installment was already collected outside
+    // payroll. Its slot is used up; taking the next one would charge twice.
+    if (await this.collectedOutsidePayroll(loan, line.payroll_runs.period_start, tx)) return;
 
     const due = this.cycleDue(loan);
     const amount = money(line.loan_deduction);
@@ -509,6 +512,21 @@ export class EmployeeLoansService {
     });
     if (existing) return;
 
+    await this.postCollection(loan, due, amount, { payroll_run_line_id: line.id, reason: null, created_by: createdBy }, tx);
+  }
+
+  /**
+   * Writes one installment's DEDUCTION and uses up its slot. Payroll and
+   * "Mark collected" both go through here, so a slot is consumed the same way
+   * whichever took it. False on a duplicate.
+   */
+  private async postCollection(
+    loan: employee_loans,
+    due: Prisma.Decimal,
+    amount: Prisma.Decimal,
+    row: { payroll_run_line_id: number | null; reason: string | null; created_by: string },
+    tx: Tx,
+  ): Promise<boolean> {
     const recovered = money(loan.recovered_amount).plus(amount);
     const payrollTarget = money(loan.total_amount)
       .minus(loan.amount_repaid_opening)
@@ -533,15 +551,16 @@ export class EmployeeLoansService {
         data: {
           loan_id: loan.id,
           type: LoanTransactionType.DEDUCTION,
-          payroll_run_line_id: line.id,
+          payroll_run_line_id: row.payroll_run_line_id,
           due_amount: due,
           amount,
           balance_after: balanceAfter,
-          created_by: createdBy,
+          reason: row.reason ? row.reason.slice(0, 500) : null,
+          created_by: row.created_by,
         },
       });
     } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return;
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return false;
       throw err;
     }
 
@@ -556,6 +575,154 @@ export class EmployeeLoansService {
         installment_amount: shifted.installment_amount,
       },
     });
+    return true;
+  }
+
+  /**
+   * TAFSD-589: record the next due installment as collected outside payroll
+   * (cash, or a payroll run done on paper). It uses up the slot exactly as a
+   * finalized payroll line would, so the next payroll takes the cycle after.
+   */
+  async markCollected(employeeId: number, dto: MarkInstallmentCollectedDto, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'loan');
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.assertEmployee(employeeId, user, tx);
+      return this.collectNextInstallment(employeeId, { amount: dto.amount, notes: dto.notes, periodStart: dto.period_start }, user.sub, tx);
+    });
+    this.logCollected(employeeId, result, dto.notes, auditActorLabel(user));
+    return this.getForEmployee(employeeId);
+  }
+
+  /** TAFSD-589: one cycle, several employees; each its own transaction, refusals reported. */
+  async markCollectedBulk(dto: BulkMarkInstallmentsCollectedDto, user: IJwtStaffPayload) {
+    const periodStart = parseCycleStart(dto.period_start);
+    if (!periodStart) throw new BadRequestException('period_start must be the start of a payroll cycle (the 26th).');
+    const results: { employee_id: number; ok: boolean; amount?: number; due_amount?: number; error?: string }[] = [];
+    for (const item of dto.items) {
+      try {
+        await assertMayChangeEmployee(this.prisma, user, item.employee_id, 'loan');
+        const result = await this.prisma.$transaction(async (tx) => {
+          await this.assertEmployee(item.employee_id, user, tx);
+          return this.collectNextInstallment(
+            item.employee_id,
+            { amount: item.amount, notes: dto.notes, periodStart: dto.period_start },
+            user.sub,
+            tx,
+          );
+        });
+        this.logCollected(item.employee_id, result, dto.notes, auditActorLabel(user));
+        results.push({ employee_id: item.employee_id, ok: true, amount: Number(result.amount), due_amount: Number(result.due) });
+      } catch (err) {
+        results.push({ employee_id: item.employee_id, ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return {
+      period_start: dateOnly(periodStart),
+      marked: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
+      total_amount: results.reduce((sum, r) => sum + (r.amount ?? 0), 0),
+      results,
+    };
+  }
+
+  /**
+   * The shared core of Mark collected (button, bulk, and one-off scripts).
+   * Caller owns the transaction and has already checked scope.
+   * `periodStart`, when given, must be the loan's next due cycle — that is
+   * what makes a repeated bulk call refuse rather than take the next slot.
+   */
+  async collectNextInstallment(
+    employeeId: number,
+    opts: { amount?: number; notes: string; periodStart?: string },
+    createdBy: string,
+    tx: Tx,
+  ): Promise<{ loan_id: number; period_start: Date; due: Prisma.Decimal; amount: Prisma.Decimal }> {
+    const notes = opts.notes.trim();
+    if (!notes) throw new BadRequestException('A note is required to mark an installment collected.');
+    await this.lockEmployeeLoans(employeeId, tx);
+    const loan = await this.findCollectingLoan(employeeId, tx);
+    if (!loan) throw new NotFoundException('This employee has no active loan collecting installments.');
+    if (this.outstandingBalance(loan).lte(0)) {
+      throw new BadRequestException('Nothing is left to collect on this loan.');
+    }
+    const cycle = nextCollectionCycle(loan.start_period_start, await this.cycleTransactions(loan.id, tx));
+    if (opts.periodStart !== undefined) {
+      const expected = parseCycleStart(opts.periodStart);
+      if (!expected) throw new BadRequestException('period_start must be the start of a payroll cycle (the 26th).');
+      if (expected.getTime() !== cycle.getTime()) {
+        throw new ConflictException(`The next installment due is for ${cycleLabel(cycle)}, not ${cycleLabel(expected)}.`);
+      }
+    }
+    if (cycle > currentCycleStart()) {
+      throw new BadRequestException(`The next installment is for ${cycleLabel(cycle)}, which hasn't started yet.`);
+    }
+
+    const due = this.cycleDue(loan);
+    const amount = opts.amount === undefined ? due : money(opts.amount);
+    if (amount.lt(0) || amount.gt(due)) {
+      throw new BadRequestException(`The amount must be between 0 and the ${due.toFixed(2)} due for ${cycleLabel(cycle)}.`);
+    }
+    if (due.gt(0) && amount.lte(0)) {
+      throw new BadRequestException('Enter the amount collected. To skip a cycle, edit the recovery schedule instead.');
+    }
+    const what = due.lte(0) ? `${cycleLabel(cycle)} skipped (nothing scheduled)` : `Collected outside payroll for ${cycleLabel(cycle)}`;
+    await this.postCollection(loan, due, amount, { payroll_run_line_id: null, reason: `${what}. ${notes}`, created_by: createdBy }, tx);
+    await this.recapOpenDraftLines(employeeId, tx);
+    return { loan_id: loan.id, period_start: cycle, due, amount };
+  }
+
+  /**
+   * TAFSD-589: undo an installment recorded outside payroll. Only the loan's
+   * latest entry, and only while no payroll for that cycle or a later one has
+   * been finalized for the employee.
+   */
+  async undoCollection(employeeId: number, transactionId: number, user: IJwtStaffPayload) {
+    await assertMayChangeEmployee(this.prisma, user, employeeId, 'loan');
+    let undone: { amount: Prisma.Decimal; period_start: Date } | null = null;
+    await this.prisma.$transaction(async (tx) => {
+      await this.assertEmployee(employeeId, user, tx);
+      await this.lockEmployeeLoans(employeeId, tx);
+      const row = await tx.employee_loan_transactions.findUnique({
+        where: { id: transactionId },
+        include: { loan: true },
+      });
+      if (!row || row.loan.employee_id !== employeeId) {
+        throw new NotFoundException('Installment not found for this employee.');
+      }
+      if (row.type !== LoanTransactionType.DEDUCTION || row.payroll_run_line_id !== null) {
+        throw new BadRequestException('Only an installment recorded outside payroll can be undone here. A payroll deduction is undone by un-finalizing its payroll line.');
+      }
+      const cycles = coveredCycles(row.loan.start_period_start, await this.cycleTransactions(row.loan_id, tx));
+      const cycle = [...cycles.entries()].find(([t]) => t.id === row.id)?.[1] ?? row.loan.start_period_start;
+      const later = await tx.payroll_run_lines.findFirst({
+        where: {
+          employee_id: employeeId,
+          finalized_at: { not: null },
+          payroll_runs: { is_test: false, period_start: { gte: cycle } },
+        },
+        select: { payroll_runs: { select: { period_start: true } } },
+      });
+      if (later) {
+        throw new BadRequestException(
+          `This can't be undone: payroll for ${cycleLabel(later.payroll_runs.period_start)} has already been finalized for this employee.`,
+        );
+      }
+      await this.reverseDeductionRow(row, tx, 'undo');
+      await this.recapOpenDraftLines(employeeId, tx);
+      undone = { amount: money(row.amount), period_start: cycle };
+    });
+
+    const done = undone as { amount: Prisma.Decimal; period_start: Date } | null;
+    if (done) {
+      void this.auditLogs.log({
+        entity_type: 'EMPLOYEE',
+        entity_id: String(employeeId),
+        action: 'LOAN_COLLECTION_UNDONE',
+        changed_by: auditActorLabel(user),
+        note: `Undid the ${done.amount.toFixed(2)} loan installment recorded outside payroll for ${cycleLabel(done.period_start)}. The slot is due again.`,
+      });
+    }
+    return this.getForEmployee(employeeId);
   }
 
   /**
@@ -569,37 +736,84 @@ export class EmployeeLoansService {
       where: { payroll_run_line_id: lineId, type: LoanTransactionType.DEDUCTION },
     });
     for (const row of rows) {
-      const later = await tx.employee_loan_transactions.count({ where: { loan_id: row.loan_id, id: { gt: row.id } } });
-      if (later > 0) {
-        throw new BadRequestException(
-          'This line cannot be un-finalized: its loan installment has later entries on the loan (a later payroll, lump sum or write-off). Undo those first.',
-        );
-      }
-      const loan = await tx.employee_loans.findUniqueOrThrow({ where: { id: row.loan_id } });
-      const newer = await tx.employee_loans.count({ where: { employee_id: loan.employee_id, id: { gt: loan.id } } });
-      if (newer > 0) {
-        throw new BadRequestException('This line cannot be un-finalized: a newer loan was opened for this employee after this installment.');
-      }
-      const recovered = Prisma.Decimal.max(ZERO, money(loan.recovered_amount).minus(row.amount));
-      const restored = { ...loan, recovered_amount: recovered };
-      const schedule = restoreScheduleBeforeCollection(
-        scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
-        money(row.due_amount),
-        this.outstandingBalance(restored),
-      );
-      await tx.employee_loan_transactions.delete({ where: { id: row.id } });
-      await tx.employee_loans.update({
-        where: { id: loan.id },
-        data: {
-          recovered_amount: recovered,
-          carried_forward_amount: ZERO,
-          status: this.nextStatus(loan.total_amount, loan.amount_repaid_opening, recovered, loan.lump_sum_repaid_amount, loan.written_off_amount),
-          installment_schedule: scheduleJson(schedule),
-          installment_count: schedule.length,
-          installment_amount: money(schedule[0] ?? 0),
-        },
-      });
+      await this.reverseDeductionRow(row, tx, 'unfinalize');
     }
+  }
+
+  private async reverseDeductionRow(
+    row: { id: number; loan_id: number; amount: Prisma.Decimal; due_amount: Prisma.Decimal },
+    tx: Tx,
+    context: 'unfinalize' | 'undo',
+  ): Promise<void> {
+    const what = context === 'unfinalize' ? 'This line cannot be un-finalized' : "This installment can't be undone";
+    const later = await tx.employee_loan_transactions.count({ where: { loan_id: row.loan_id, id: { gt: row.id } } });
+    if (later > 0) {
+      throw new BadRequestException(
+        `${what}: the loan has later entries (a later installment, lump sum or write-off). Undo those first.`,
+      );
+    }
+    const loan = await tx.employee_loans.findUniqueOrThrow({ where: { id: row.loan_id } });
+    const newer = await tx.employee_loans.count({ where: { employee_id: loan.employee_id, id: { gt: loan.id } } });
+    if (newer > 0) {
+      throw new BadRequestException(`${what}: a newer loan was opened for this employee after this installment.`);
+    }
+    const recovered = Prisma.Decimal.max(ZERO, money(loan.recovered_amount).minus(row.amount));
+    const restored = { ...loan, recovered_amount: recovered };
+    const schedule = restoreScheduleBeforeCollection(
+      scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
+      money(row.due_amount),
+      this.outstandingBalance(restored),
+    );
+    await tx.employee_loan_transactions.delete({ where: { id: row.id } });
+    await tx.employee_loans.update({
+      where: { id: loan.id },
+      data: {
+        recovered_amount: recovered,
+        carried_forward_amount: ZERO,
+        status: this.nextStatus(loan.total_amount, loan.amount_repaid_opening, recovered, loan.lump_sum_repaid_amount, loan.written_off_amount),
+        installment_schedule: scheduleJson(schedule),
+        installment_count: schedule.length,
+        installment_amount: money(schedule[0] ?? 0),
+      },
+    });
+  }
+
+  private logCollected(
+    employeeId: number,
+    result: { period_start: Date; due: Prisma.Decimal; amount: Prisma.Decimal },
+    notes: string,
+    actor: string,
+  ): void {
+    const short = result.amount.lt(result.due) ? ` of ${result.due.toFixed(2)} due; ${result.due.minus(result.amount).toFixed(2)} carries to the next cycle` : '';
+    void this.auditLogs.log({
+      entity_type: 'EMPLOYEE',
+      entity_id: String(employeeId),
+      action: 'LOAN_MARKED_COLLECTED',
+      changed_by: actor,
+      note: `Loan installment for ${cycleLabel(result.period_start)} marked collected outside payroll: ${result.amount.toFixed(2)}${short}. ${notes.trim()}`,
+    });
+  }
+
+  private async cycleTransactions(loanId: number, tx: Tx): Promise<CycleTxn[]> {
+    return tx.employee_loan_transactions.findMany({
+      where: { loan_id: loanId },
+      select: {
+        id: true,
+        type: true,
+        created_at: true,
+        payroll_run_line_id: true,
+        payroll_run_line: { select: { payroll_runs: { select: { period_start: true } } } },
+      },
+    });
+  }
+
+  private async collectedOutsidePayroll(loan: employee_loans, periodStart: Date, tx: Tx): Promise<boolean> {
+    return cycleCollectedOutsidePayroll(loan.start_period_start, await this.cycleTransactions(loan.id, tx), periodStart);
+  }
+
+  /** Row lock so a payroll finalize and a Mark collected on the same loan serialize. No-op outside a transaction. */
+  private async lockEmployeeLoans(employeeId: number, tx: Tx): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM employee_loans WHERE employee_id = ${employeeId} FOR UPDATE`;
   }
 
   /**
@@ -701,7 +915,7 @@ export class EmployeeLoansService {
       employee_code: string | null;
       campuses: { campus_name: string } | null;
     };
-    transactions: { payroll_run_line: { payroll_runs: { period_start: Date } } | null }[];
+    transactions: CycleTxn[];
   }) {
     const total = Number(loan.total_amount);
     return {
@@ -722,9 +936,8 @@ export class EmployeeLoansService {
       installment_schedule: scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
       disbursement_date: dateOnly(loan.disbursement_date),
       start_period_start: dateOnly(loan.start_period_start),
-      next_collection_period_start: dateOnly(
-        nextCollectionPeriodStart(loan.start_period_start, lastDeductedPeriodStart(loan.transactions)),
-      ),
+      next_collection_period_start: dateOnly(nextCollectionCycle(loan.start_period_start, loan.transactions)),
+      next_due_amount: loan.status === LoanStatus.ACTIVE ? Number(this.cycleDue(loan)) : 0,
       status: loan.status,
     };
   }
@@ -745,8 +958,12 @@ export class EmployeeLoansService {
         payroll_runs: { period_start: Date; period_end: Date };
       } | null;
     }[];
-  }) {
+  }, isCurrent: boolean) {
     const total = Number(loan.total_amount);
+    const cycles = coveredCycles(loan.start_period_start, loan.transactions);
+    const lastTxn = [...loan.transactions].sort(
+      (a, b) => a.created_at.getTime() - b.created_at.getTime() || a.id - b.id,
+    ).at(-1);
     return {
       id: loan.id,
       employee_id: loan.employee_id,
@@ -757,12 +974,8 @@ export class EmployeeLoansService {
       installment_schedule: scheduleAsNumbers(loan.installment_schedule, money(loan.installment_amount)),
       disbursement_date: dateOnly(loan.disbursement_date),
       start_period_start: dateOnly(loan.start_period_start),
-      next_collection_period_start: dateOnly(
-        nextCollectionPeriodStart(
-          loan.start_period_start,
-          lastDeductedPeriodStart(loan.transactions.filter((txn) => txn.type === LoanTransactionType.DEDUCTION)),
-        ),
-      ),
+      next_collection_period_start: dateOnly(nextCollectionCycle(loan.start_period_start, loan.transactions)),
+      next_due_amount: loan.status === LoanStatus.ACTIVE ? Number(this.cycleDue(loan)) : 0,
       recovered_amount: Number(loan.recovered_amount),
       lump_sum_repaid_amount: Number(loan.lump_sum_repaid_amount),
       written_off_amount: Number(loan.written_off_amount),
@@ -783,8 +996,16 @@ export class EmployeeLoansService {
         reason: txn.reason,
         created_by: txn.created_by,
         created_at: txn.created_at.toISOString(),
-        period_start: txn.payroll_run_line ? dateOnly(txn.payroll_run_line.payroll_runs.period_start) : null,
-        period_end: txn.payroll_run_line ? dateOnly(txn.payroll_run_line.payroll_runs.period_end) : null,
+        period_start: txn.payroll_run_line
+          ? dateOnly(txn.payroll_run_line.payroll_runs.period_start)
+          : cycles.has(txn) ? dateOnly(cycles.get(txn)!) : null,
+        period_end: txn.payroll_run_line
+          ? dateOnly(txn.payroll_run_line.payroll_runs.period_end)
+          : cycles.has(txn) ? dateOnly(cycleEnd(cycles.get(txn)!)) : null,
+        /** TAFSD-589: taken outside payroll and recorded by hand. */
+        recorded_manually: txn.type === LoanTransactionType.DEDUCTION && !txn.payroll_run_line_id,
+        /** The latest entry on the current loan, recorded outside payroll. The server still refuses once a payroll for that cycle or later is finalized. */
+        can_undo: isCurrent && txn === lastTxn && txn.type === LoanTransactionType.DEDUCTION && !txn.payroll_run_line_id,
       })),
     };
   }

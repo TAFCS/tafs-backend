@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SecurityDepositStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 
 export class ListSecurityDepositsQueryDto {
   @ApiPropertyOptional({ enum: SecurityDepositStatus, description: 'Filter by one status. Omit for open plans (ACTIVE + COMPLETED).' })
@@ -101,4 +101,60 @@ export class ForfeitSecurityDepositDto {
   @IsOptional()
   @IsBoolean()
   stop_collection?: boolean;
+}
+
+/** TAFSD-589: shared by the loan and security deposit "Mark collected" routes. */
+export class MarkInstallmentCollectedDto {
+  @ApiPropertyOptional({ example: 10000, description: 'Amount collected. Defaults to the installment due. Less than due is a shortfall that carries to the next cycle, as in payroll.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  amount?: number;
+
+  @ApiPropertyOptional({ example: '2026-09-26', description: 'Cycle start (the 26th) the caller expects to mark. Refused if the next installment due is for a different cycle.' })
+  @IsOptional()
+  @IsDateString()
+  period_start?: string;
+
+  @ApiProperty({ example: 'Deducted on the paper payroll for October.' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  notes: string;
+}
+
+export class BulkMarkCollectedItemDto {
+  @ApiProperty()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  employee_id: number;
+
+  @ApiPropertyOptional({ description: 'Amount collected. Defaults to the installment due.' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  amount?: number;
+}
+
+export class BulkMarkInstallmentsCollectedDto {
+  @ApiProperty({ example: '2026-09-26', description: 'The cycle (its 26th) being marked. Employees whose next installment is for another cycle are refused and reported.' })
+  @IsDateString()
+  period_start: string;
+
+  @ApiProperty({ type: [BulkMarkCollectedItemDto] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => BulkMarkCollectedItemDto)
+  items: BulkMarkCollectedItemDto[];
+
+  @ApiProperty({ example: 'October 2026 payroll was done outside the system.' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  notes: string;
 }

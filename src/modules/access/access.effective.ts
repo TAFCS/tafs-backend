@@ -4,6 +4,8 @@ export type EffectiveTileAction = {
   id: string;
   default: boolean;
   implies: string[];
+  /** Never conferred by the legacy bridge; see TileAction.explicitOnly. */
+  explicitOnly?: boolean;
 };
 
 export type EffectiveTile = {
@@ -189,8 +191,13 @@ export function computeEffectiveAccess(args: {
       (c) => legacyKeys.has(c) && keySet.has(c),
     );
 
+    const explicitOnly = new Set(tile.actions.filter((a) => a.explicitOnly).map((a) => a.id));
     const seed = holdsLegacyFullAccess
-      ? tile.actions.map((a) => a.id)
+      ? [
+          ...tile.actions.filter((a) => !a.explicitOnly).map((a) => a.id),
+          ...(packActionsByTile.get(tile.id) ?? []).filter((id) => explicitOnly.has(id)),
+          ...(userAllowByTile.get(tile.id) ?? []).filter((id) => explicitOnly.has(id)),
+        ]
       : [
           ...tile.actions.filter((a) => a.default).map((a) => a.id),
           ...(packActionsByTile.get(tile.id) ?? []),
