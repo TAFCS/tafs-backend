@@ -12,6 +12,13 @@ export type TileAction = {
   default?: boolean;
   /** Action ids in the same tile that this one also confers, transitively. */
   implies?: string[];
+  /**
+   * Never conferred by the tile's legacyFullAccessCapabilities bridge: only an
+   * explicit grant (person or pack) gives it. For actions added to a tile that
+   * already has a bridge, which would otherwise hand the new action to every
+   * holder of the old capability on the day it ships (default-deny).
+   */
+  explicitOnly?: boolean;
 };
 
 export type TileManifestEntry = {
@@ -345,6 +352,8 @@ const SECURITY_DEPOSITS_ACTIONS: TileAction[] = [
   { id: 'refund', label: 'Record a refund', implies: ['view'] },
   { id: 'forfeit', label: 'Record a forfeiture', implies: ['view'] },
   { id: 'cancel', label: 'Cancel a plan', implies: ['view'] },
+  // TAFSD-589: default-deny. Also gates the button on the Employee Directory's Security deposit tab.
+  { id: 'mark_collected', label: 'Mark an installment collected outside payroll', description: 'One employee or everyone due in a cycle, and undo it until a later payroll is finalized', implies: ['view'], explicitOnly: true },
 ];
 
 // Route-shaped. Every one of these routes is ALSO reachable from inside the
@@ -362,6 +371,8 @@ const EMPLOYEE_LOANS_ACTIONS: TileAction[] = [
   { id: 'write_off', label: 'Write off a loan', implies: ['view'] },
   { id: 'cancel', label: 'Cancel a loan', implies: ['view'] },
   { id: 'mark_outstanding', label: 'Mark a loan outstanding', implies: ['view'] },
+  // TAFSD-589: default-deny. Also gates the button on the Employee Directory's Loan tab.
+  { id: 'mark_collected', label: 'Mark an installment collected outside payroll', description: 'One employee or everyone due in a cycle, and undo it until a later payroll is finalized', implies: ['view'], explicitOnly: true },
 ];
 
 // Route-shaped, bulk tool (settings/due-queue/analytics/preview/apply), not
@@ -1291,6 +1302,7 @@ export const MANIFEST_EFFECTIVE_TILES = TILES_MANIFEST.map((t) => ({
     id: a.id,
     default: a.default ?? false,
     implies: a.implies ?? [],
+    explicitOnly: a.explicitOnly ?? false,
   })),
   legacyFullAccessCapabilities: t.legacyFullAccessCapabilities ?? [],
   requiresExplicitAllow: (t.surface ?? 'web') === 'web',

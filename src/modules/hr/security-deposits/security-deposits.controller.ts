@@ -5,12 +5,12 @@ import { PoliciesGuard } from '../../../common/guards/policies.guard';
 import { TileActionGuard } from '../../../common/guards/tile-action.guard';
 import { CheckPolicies } from '../../../decorators/check-policies.decorator';
 import { CurrentUser } from '../../../decorators/current-user.decorator';
-import { RequireAnyAction } from '../../../decorators/require-action.decorator';
+import { RequireAction, RequireAnyAction } from '../../../decorators/require-action.decorator';
 import { Action } from '../../auth/casl/actions';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { createApiResponse } from '../../../utils/serializer.util';
 import { SecurityDepositsService } from './security-deposits.service';
-import { ClosePlanDto, CreateSecurityDepositDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateDepositInstallmentScheduleDto } from './dto/security-deposits.dto';
+import { ClosePlanDto, CreateSecurityDepositDto, MarkInstallmentCollectedDto, ForfeitSecurityDepositDto, RefundSecurityDepositDto, UpdateDepositInstallmentScheduleDto } from './dto/security-deposits.dto';
 
 // Every route here is ALSO reachable from EmployeeSecurityDepositTab.tsx
 // inside the Employee Directory (gated there on
@@ -100,5 +100,30 @@ export class SecurityDepositsController {
   ) {
     const data = await this.securityDeposits.cancel(employeeId, user);
     return createApiResponse(data, HttpStatus.OK, 'Security deposit plan cancelled');
+  }
+
+  // TAFSD-589: default-deny (explicitOnly), no Employee Directory fallback.
+  @Post('mark-collected')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.security_deposits#mark_collected')
+  async markCollected(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Body() dto: MarkInstallmentCollectedDto,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.securityDeposits.markCollected(employeeId, dto, user);
+    return createApiResponse(data, HttpStatus.OK, 'Security deposit installment marked collected');
+  }
+
+  @Post('collections/:transactionId/undo')
+  @CheckPolicies((ability) => ability.can(Action.Manage, 'Employee'))
+  @RequireAction('hr.security_deposits#mark_collected')
+  async undoCollection(
+    @Param('employeeId', ParseIntPipe) employeeId: number,
+    @Param('transactionId', ParseIntPipe) transactionId: number,
+    @CurrentUser() user: IJwtStaffPayload,
+  ) {
+    const data = await this.securityDeposits.undoCollection(employeeId, transactionId, user);
+    return createApiResponse(data, HttpStatus.OK, 'Security deposit installment collection undone');
   }
 }
