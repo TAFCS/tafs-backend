@@ -36,6 +36,8 @@ export const DIR_USERS = {
     dirNoStatus: { id: 'db-suite-dir-nostatus', username: 'dbsuite.dirnostatus', role: StaffRole.RECEPTIONIST },
     dirNoMove: { id: 'db-suite-dir-nomove', username: 'dbsuite.dirnomove', role: StaffRole.RECEPTIONIST },
     payHistoryOnly: { id: 'db-suite-payhist', username: 'dbsuite.payhist', role: StaffRole.FINANCE_CLERK },
+    sectionMoveOnly: { id: 'db-suite-section-move', username: 'dbsuite.sectionmove', role: StaffRole.RECEPTIONIST },
+    promoteOnly: { id: 'db-suite-promote', username: 'dbsuite.promote', role: StaffRole.RECEPTIONIST },
 } satisfies Record<string, SeededUser>;
 
 const DIRECTORY = 'student.directory';
@@ -144,6 +146,14 @@ async function seedDirectoryUsers(prisma: PrismaClient) {
     });
 
     await grantTile(DIR_USERS.payHistoryOnly, 'finance.payment_history');
+
+    // Only their own tile and its action: no Student Directory (TAFSD-563).
+    const grantAction = (user: SeededUser, tile_id: string, action_id: string) =>
+        prisma.user_tile_action_grants.create({ data: { user_id: user.id, tile_id, action_id, allow: true, granted_by: USERS.admin.id } });
+    await grantTile(DIR_USERS.sectionMoveOnly, 'student.section_allocation');
+    await grantAction(DIR_USERS.sectionMoveOnly, 'student.section_allocation', 'move');
+    await grantTile(DIR_USERS.promoteOnly, 'student.academic_actions');
+    await grantAction(DIR_USERS.promoteOnly, 'student.academic_actions', 'promote');
 }
 
 /** Audit rows written with `void auditLogs.log(...)` land after the response. */

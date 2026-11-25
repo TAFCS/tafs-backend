@@ -7,7 +7,7 @@
  * as the fix, and close the ticket named in the test.
  */
 import { CAMPUS_B, CLASS_AUG, STUDENT } from '../helpers/fixtures';
-import { DIR_USERS, HOUSE, waitForAudit } from './directory-fixtures';
+import { CLASS_VII, DIR_USERS, HOUSE, waitForAudit } from './directory-fixtures';
 import { directorySuite } from './suite';
 
 const ctx = directorySuite();
@@ -41,9 +41,31 @@ describe('known bugs', () => {
         expect(names).toEqual(['TEST FATHER', 'TEST MOTHER']);
     });
 
-    it.failing('TAFSD-563: a Payment History tile holder can open a student\'s payment history', async () => {
+    it('TAFSD-563: a Payment History tile holder can open a student\'s payment history', async () => {
         const res = await ctx.as.payHistoryOnly.get(`/students/${STUDENT.A1}/payment-history?academic_year=2026-2027`);
         expect(res.status).toBe(200);
+    });
+
+    it('TAFSD-563: a Section Allocation holder with "move" can move a student, and without it can\'t', async () => {
+        expect((await ctx.as.sectionMoveOnly.patch(`/students/${STUDENT.A1}/assignment`).send({ house_id: HOUSE.BLUE })).status).toBe(200);
+        expect((await student(STUDENT.A1)).house_id).toBe(HOUSE.BLUE);
+        expect((await ctx.as.payHistoryOnly.patch(`/students/${STUDENT.A1}/assignment`).send({ house_id: HOUSE.RED })).status).toBe(403);
+        expect((await student(STUDENT.A1)).house_id).toBe(HOUSE.BLUE);
+    });
+
+    it('TAFSD-563: an Academic Actions holder with "promote" can suggest GR numbers and promote in bulk', async () => {
+        const suggest = await ctx.as.promoteOnly.post('/students/gr-numbers/suggest-for-promotion').send({ student_ccs: [STUDENT.A1] });
+        expect(suggest.status).toBe(201);
+
+        const res = await ctx.as.promoteOnly.post('/students/promotion/bulk').send({
+            student_ids: [STUDENT.A1], from: { class_id: CLASS_AUG }, to: { class_id: CLASS_VII }, target_academic_year: '2027-2028',
+        });
+        expect(res.status).toBe(201);
+        expect(res.body.data.summary.total_promoted).toBe(1);
+        expect((await student(STUDENT.A1)).class_id).toBe(CLASS_VII);
+
+        // Without "promote", still refused.
+        expect((await ctx.as.payHistoryOnly.post('/students/promotion/bulk').send({ student_ids: [STUDENT.A2], left: true })).status).toBe(403);
     });
 
     it('TAFSD-564: looking a guardian up by CNIC doesn\'t reveal a guardian of a student outside scope', async () => {

@@ -44,6 +44,31 @@ export class CaslAbilityFactory {
       can(Action.Read, 'StaffAttendance');
     }
 
+    // TAFSD-563: Student routes that other tiles' pages call. Each pairs
+    // @CheckPolicies(Read/Update Student) with an @RequireAnyAction naming the
+    // tile's action, but these tiles' capabilities (finance.vouchers.view,
+    // academic.campuses.view, academic.bulk_promote.execute) map to no Student
+    // ability, so a holder of the tile alone got "Forbidden resource". Every
+    // Student route names its own action, so this opens nothing else, and which
+    // students they reach is still the scope's job.
+    //   GET /students/:id/payment-history: Payment History
+    if (actionsCover(heldActions, 'finance.payment_history#view')) {
+      can(Action.Read, 'Student');
+    }
+    //   PATCH /students/:id/assignment: Section Allocation's "move"
+    if (
+      actionsCover(heldActions, 'student.section_allocation#move') ||
+      actionsCover(heldActions, 'school-setup.section_allocation#move')
+    ) {
+      can(Action.Update, 'Student');
+    }
+    //   POST /students/promotion/bulk, POST /students/gr-numbers/suggest-for-promotion:
+    //   Academic Actions' "promote"
+    if (actionsCover(heldActions, 'student.academic_actions#promote')) {
+      can(Action.Read, 'Student');
+      can(Action.Update, 'Student');
+    }
+
     // Shared routes whose coarse check names a subject the calling tile's own
     // capabilities do not map to. These used to pass only because the Staff
     // App self-service keys (held by every employee) mapped to Read

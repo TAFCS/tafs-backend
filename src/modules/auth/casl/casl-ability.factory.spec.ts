@@ -93,4 +93,25 @@ describe('CaslAbilityFactory', () => {
       expect(ability.can(Action.Manage, 'StaffAttendance')).toBe(true);
     });
   });
+  describe('TAFSD-563: Student routes opened to other tiles', () => {
+    const can = (actions: string[]) => {
+      const ability = factory.createForStaff(staff({ permissions: [], actions }));
+      return [ability.can(Action.Read, 'Student'), ability.can(Action.Update, 'Student'), ability.can(Action.Delete, 'Student')];
+    };
+
+    it('Payment History view reads students, and nothing more', () => {
+      expect(can(['finance.payment_history#view'])).toEqual([true, false, false]);
+    });
+
+    it('Section Allocation "move" (either tile) updates students; opening the tile alone does not', () => {
+      expect(can(['student.section_allocation#view', 'student.section_allocation#move'])).toEqual([false, true, false]);
+      expect(can(['school-setup.section_allocation#move'])).toEqual([false, true, false]);
+      expect(can(['student.section_allocation#view', 'school-setup.section_allocation#rules.edit'])).toEqual([false, false, false]);
+    });
+
+    it('Academic Actions "promote" reads and updates students; opening the tile alone does not', () => {
+      expect(can(['student.academic_actions#promote'])).toEqual([true, true, false]);
+      expect(can(['student.academic_actions#view'])).toEqual([false, false, false]);
+    });
+  });
 });
