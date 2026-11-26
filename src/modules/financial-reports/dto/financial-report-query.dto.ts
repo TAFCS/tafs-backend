@@ -131,18 +131,6 @@ export class ListDepositsQueryDto extends FinancialReportQueryDto {
   bank_name?: string[];
 }
 
-export class ExportDepositsQueryDto extends ListDepositsQueryDto {
-  /** pdf: the school-format sheet as a PDF (TAFSD-306). */
-  @IsOptional()
-  @IsIn(['xlsx', 'csv', 'pdf'])
-  format?: 'xlsx' | 'csv' | 'pdf';
-
-  /** TAFSD-425: the PDF's paper; a sheet too wide for A4 prints on A3 regardless. Omitted = A4. */
-  @IsOptional()
-  @IsIn(['A4', 'A3'])
-  paper?: 'A4' | 'A3';
-}
-
 const YEAR_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export class ListFeeMatrixQueryDto {
@@ -521,6 +509,58 @@ export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
   @Transform(toOptionalBoolean)
   @IsBoolean()
   split_by_fee_date?: boolean;
+
+  @IsOptional()
+  @Transform(toStringArray)
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsIn(DEFAULTER_COLUMN_KEYS, { each: true })
+  columns?: DefaulterColumnKey[];
+}
+
+/** TAFSD-604: what the Deposits export produces. */
+export const DEPOSITS_EXPORT_VIEWS = ['deposits', 'recoveries'] as const;
+export type DepositsExportView = (typeof DEPOSITS_EXPORT_VIEWS)[number];
+
+// Declared after DEFAULTER_COLUMN_KEYS / DEFAULTER_GROUP_BY: its decorators read them.
+export class ExportDepositsQueryDto extends ListDepositsQueryDto {
+  /** pdf: the school-format sheet as a PDF (TAFSD-306). */
+  @IsOptional()
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
+
+  /** TAFSD-425: the PDF's paper; a sheet too wide for A4 prints on A3 regardless. Omitted = A4. */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
+
+  /**
+   * TAFSD-604: "deposits" (default) is the list of deposits; "recoveries" is
+   * Consolidated Recoveries, the per-student sheet in the defaulters /
+   * receivables format, with what was recovered against each fee head.
+   */
+  @IsOptional()
+  @IsIn(DEPOSITS_EXPORT_VIEWS)
+  view?: DepositsExportView;
+
+  /**
+   * Consolidated Recoveries only: the month columns are the month each fee
+   * head was billed for (`fee`, the default) or the month the money came in
+   * (`deposit`).
+   */
+  @IsOptional()
+  @IsIn(['fee', 'deposit'])
+  month_by?: 'fee' | 'deposit';
+
+  /** Consolidated Recoveries only, as on the defaulters and Fee Heads by student exports. */
+  @IsOptional()
+  @IsIn(DEFAULTER_GROUP_BY)
+  group_by?: DefaulterGroupBy;
+
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  breakdown_by_head?: boolean;
 
   @IsOptional()
   @Transform(toStringArray)
