@@ -71,6 +71,12 @@ import {
   type SchoolSheetOptions,
 } from './school-report-sheet';
 import { defaulterWindowRemarks } from './defaulter-window-remark';
+import {
+  CONSOLIDATED_RECOVERIES_TITLE,
+  recoveryRemarks,
+  type RecoverySummary,
+  summarizeRecoveries,
+} from './consolidated-recoveries';
 import type { SheetPaper } from './sheet-pdf';
 import { fitSheetToText, headerText, schoolWorkbookFile, writeBanner, writeEmptySheet, writeTitleBlock } from './school-sheet-common';
 
@@ -2031,6 +2037,7 @@ export class FinancialReportsService {
     user: IJwtStaffPayload,
   ): Promise<ExportFile> {
     this.assertDateRange(query);
+    if (query.view === 'recoveries') return this.exportConsolidatedRecoveries(query, user);
     const where = this.buildDepositsWhere(query, user);
     const rows = await this.prisma.deposits.findMany({
       where,
@@ -2092,6 +2099,188 @@ export class FinancialReportsService {
       this.depositsFilterWords(query),
       user,
     );
+  }
+
+  /**
+   * TAFSD-604: Consolidated Recoveries — the deposits in the period in the
+   * defaulters / receivables sheet (buildStudentMonthReport): one row per
+   * student who paid, one column per fee month (with breakdown_by_head, a
+   * sub-column per fee head under it), each cell what was recovered against
+   * that head. The month is the head's fee_date month, as on the Fee Heads by
+   * student sheet, so the two read side by side.
+   *
+   * Same deposits as the Deposits report (buildDepositsWhere), credit payments
+   * included, since they settled heads too. Per row:
+   *   FEE HEADS = the month cells (FEE_HEAD allocations)
+   *   LPS = LATE_FEE + SURCHARGE allocations
+   *   TOTAL RECOVERED = FEE HEADS + LPS
+   *   CASH RECEIVED = total_amount of the cash deposits (Rule E)
+   *   FROM FAMILY CREDIT = total_amount of the credit payments
+   *   TO FAMILY CREDIT = excess_amount
+   * and CASH RECEIVED + FROM FAMILY CREDIT = TOTAL RECOVERED + TO FAMILY CREDIT
+   * (+ UNALLOCATED, a column only when some deposit has no allocations — a
+   * handful of May–June 2026 ones). DISCOUNT allocations are not money and
+   * are only noted in REMARKS, which also lists every deposit.
+   */
+  private async exportConsolidatedRecoveries(
+    query: ExportDepositsQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    const where = this.buildDepositsWhere(query, user);
+    const deposits = await this.prisma.deposits.findMany({
+      where,
+      select: {
+        id: true,
+        student_id: true,
+        deposit_date: true,
+        total_amount: true,
+        excess_amount: true,
+        from_credit: true,
+        payment_method: true,
+        deposit_allocations: {
+          select: {
+            type: true,
+            amount: true,
+            student_fees: { select: { fee_date: true, fee_type_id: true } },
+            vouchers: { select: { fee_date: true } },
+          },
+        },
+      },
+      orderBy: [{ deposit_date: 'asc' }, { id: 'asc' }],
+      take: EXPORT_ROW_CAP + 1,
+    });
+    this.assertExportCap(deposits.length);
+
+    const studentIds = [...new Set(deposits.map((d) => d.student_id))];
+    if (query.format === 'pdf' && studentIds.length > PDF_EXPORT_ROW_CAP) {
+      throw new BadRequestException(
+        `PDF export is limited to ${PDF_EXPORT_ROW_CAP.toLocaleString()} students (this has ${studentIds.length.toLocaleString()}). Narrow the filters or export Excel.`,
+      );
+    }
+    const [students, feeTypes] = await Promise.all([
+      this.prisma.students.findMany({
+        where: { cc: { in: studentIds } },
+        select: {
+          cc: true,
+          gr_number: true,
+          full_name: true,
+          status: true,
+          class_id: true,
+          graduated_from_class_id: true,
+          campuses: { select: { campus_name: true, campus_code: true } },
+          classes: { select: { description: true } },
+          graduated_from_class: { select: { description: true } },
+          sections: { select: { description: true } },
+        },
+      }),
+      this.prisma.fee_types.findMany({ select: { id: true, description: true, priority_order: true } }),
+    ]);
+    const feeTypeName = new Map(feeTypes.map((ft) => [ft.id, ft.description.trim() || 'OTHER']));
+    const rank = new Map(
+      [...feeTypes]
+        .sort((a, b) => (a.priority_order ?? 1e9) - (b.priority_order ?? 1e9) || a.id - b.id)
+        .map((ft, i) => [ft.description.trim() || 'OTHER', i]),
+    );
+    const headRank = (name: string) => rank.get(name) ?? 1e9;
+    const monthIdx = (d: Date | null | undefined) => (d ? d.getUTCFullYear() * 12 + d.getUTCMonth() : null);
+
+    const recovered = summarizeRecoveries(
+      deposits.map((d) => ({
+        id: d.id,
+        studentId: d.student_id,
+        depositDate: d.deposit_date,
+        totalAmount: this.toMoney(d.total_amount),
+        excessAmount: this.toMoney(d.excess_amount),
+        fromCredit: d.from_credit,
+        paymentMethod: d.payment_method,
+        allocations: d.deposit_allocations.map((a) => ({
+          type: a.type,
+          amount: this.toMoney(a.amount),
+          // The head's fee month; a head-less FEE_HEAD row (one on record) takes its voucher's.
+          month: monthIdx(a.student_fees?.fee_date) ?? monthIdx(a.vouchers?.fee_date),
+          head: a.student_fees
+            ? a.student_fees.fee_type_id == null
+              ? 'OTHER'
+              : feeTypeName.get(a.student_fees.fee_type_id) ?? 'OTHER'
+            : 'OTHER',
+        })),
+      })),
+    );
+
+    const rows: StudentMonthRow[] = students
+      .filter((st) => recovered.has(st.cc))
+      .map((st) => {
+        const r = recovered.get(st.cc)!;
+        const months = new Map<number, DefaulterOwedMonth>();
+        for (const [idx, heads] of r.months) {
+          const names = [...heads.keys()].sort((a, b) => headRank(a) - headRank(b) || a.localeCompare(b));
+          months.set(idx, {
+            owed: this.roundMoney([...heads.values()].reduce((sum, v) => sum + v, 0)),
+            partial: false,
+            heads: names.map((name) => ({ name, owed: heads.get(name)!, partial: false })),
+          });
+        }
+        return {
+          item: {
+            cc: st.cc,
+            gr_number: st.gr_number ?? '',
+            student_name: st.full_name ?? '',
+            campus: st.campuses?.campus_name ?? '',
+            campus_code: st.campuses?.campus_code ?? '',
+            class_id: st.status === student_status.GRADUATED ? st.graduated_from_class_id : st.class_id,
+            class_name: this.resolveStudentClassName(st),
+            section: st.sections?.description ?? '',
+            student_status: st.status,
+            recovery: r,
+          },
+          months,
+          total: r.feeHeads,
+        };
+      })
+      .sort(
+        (a, b) =>
+          (Number(a.item.class_id ?? Number.MAX_SAFE_INTEGER) - Number(b.item.class_id ?? Number.MAX_SAFE_INTEGER)) ||
+          String(a.item.section).localeCompare(String(b.item.section)) ||
+          String(a.item.student_name).localeCompare(String(b.item.student_name)),
+      );
+
+    // Every fee month recovered against, up to 24 ending at the latest; older
+    // ones fold into EARLIER. A sheet of LPS alone shows the period's last month.
+    const allMonths = rows.flatMap((r) => [...r.months.keys()]).filter((m) => m >= 0);
+    const toIdx = (d: string) => Number(d.slice(0, 4)) * 12 + Number(d.slice(5, 7)) - 1;
+    const hi = allMonths.length ? Math.max(...allMonths) : toIdx(query.to_date);
+    const lo = allMonths.length ? Math.max(Math.min(...allMonths), hi - 23) : hi;
+
+    const rec = (r: StudentMonthRow) => r.item.recovery as RecoverySummary;
+    const anyUnallocated = rows.some((r) => rec(r).unallocated !== 0);
+    const received = `RECEIVED ${periodLine(query.from_date, query.to_date)}`;
+    return this.buildStudentMonthReport(rows, {
+      query,
+      basename: `consolidated-recoveries-${query.from_date}-to-${query.to_date}`,
+      generatedBy: user,
+      asOfDate: this.todayPkt(),
+      sessionDate: query.to_date,
+      listTitle: CONSOLIDATED_RECOVERIES_TITLE,
+      tooWideHint: 'Shorten the date range, turn off the fee head breakdown, or untick some columns.',
+      window: { lo, hi },
+      amountColumns: [
+        { header: 'FEE HEADS', csvHeader: 'Fee heads', width: 14, value: (r) => rec(r).feeHeads },
+        { header: 'LPS', csvHeader: 'LPS (late fee + arrear surcharge)', width: 11, value: (r) => rec(r).lps },
+        { header: 'TOTAL RECOVERED', csvHeader: 'Total recovered', width: 15, value: (r) => rec(r).totalRecovered },
+        ...(anyUnallocated
+          ? [{ header: 'UNALLOCATED', csvHeader: 'Unallocated', width: 13, value: (r: StudentMonthRow) => rec(r).unallocated }]
+          : []),
+        { header: 'CASH RECEIVED', csvHeader: 'Cash received', width: 14, value: (r) => rec(r).cash },
+        { header: 'FROM FAMILY CREDIT', csvHeader: 'From family credit', width: 14, value: (r) => rec(r).fromCredit },
+        { header: 'TO FAMILY CREDIT', csvHeader: 'To family credit', width: 14, value: (r) => rec(r).toCredit },
+      ],
+      remark: (r) => recoveryRemarks(rec(r)).join('\n'),
+      leadLine: received,
+      filterLines: (names, omitClasses, groupLine) =>
+        defaulterFilterLines(query, names, received, omitClasses, [], [...this.depositsFilterWords(query), ...groupLine]),
+      emptyMessage: 'No deposits match the current filters.',
+      emptySheetName: 'Consolidated Recoveries',
+    });
   }
 
   /**
