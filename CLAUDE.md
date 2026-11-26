@@ -78,6 +78,13 @@ change makes one false, the change is wrong, not the rule.
    heads alone counts the discount as money: a 100,000 voucher with a 20,000
    discount paid with 80,000 reported 100,000 paid, −20,000 outstanding.
    `npm test -- fee-heads-discount`.
+   **A discounted voucher is collected net (TAFSD-581).** `normalizeVoucher`
+   gives an `EXPIRED` voucher the same derived `total_balance` /
+   `total_discount_unapplied` as `OVERDUE` (it takes deposits); without them the
+   deposit page summed the heads and asked for the gross. `recordDeposit`
+   refuses cash that pays every head in full while the discount stays unused
+   (`discountLeftUnusedByCash`): forfeiting a discount means removing the row.
+   `npm test -- discount-overcollection`, `test/db/voucher-discount-deposit.db-spec.ts`.
 7. **Deposit reversal recomputes, never zeroes** — `reverseDeposit` /
    `clearDeposit` re-derive `student_fees.amount_paid`,
    `voucher_arrear_surcharges.amount_paid` and each voucher's heads/status from
