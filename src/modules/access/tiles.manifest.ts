@@ -764,6 +764,13 @@ const AI_ASSISTANT_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Connect an AI assistant', description: 'Issue and revoke their own MCP tokens. The assistant sees only what the person can already see.', default: true },
 ];
 
+// TAFSD-616: the Guide tile (the TAFSync user manual as PDFs). One action:
+// reading and downloading. Sub-permissions do not extend themselves: a new
+// route on GuideController needs its own action here (see TileManifestEntry.actions).
+const USER_GUIDE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Read and download the guide', description: 'Browse the user manual and download any section, the whole manual or several sections as one PDF', default: true },
+];
+
 const DEVELOPER_SETTINGS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Developer Settings', description: 'See app versions, maintenance mode and system switches', default: true },
 
@@ -1184,6 +1191,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // will follow this tree, so nobody inside it may edit it.
   { id: 'system.reporting_hierarchy', module: 'system', label: 'Reporting Hierarchy', description: 'Set who reports to whom', href: '/system/reporting-hierarchy', capabilities: ['system.permissions.manage'], superAdminOnly: true },
   { id: 'system.ai_assistant', module: 'system', label: 'AI Assistant (MCP)', description: 'Connect an AI assistant with your own access, through personal tokens', href: '/system/ai-assistant', capabilities: ['system.ai_assistant.use'], actions: AI_ASSISTANT_ACTIONS },
+  { id: 'system.user_guide', module: 'system', label: 'Guide', description: 'The TAFSync user manual: browse it and download any section as an A4 PDF', href: '/system/guide', capabilities: ['system.guide.view'], actions: USER_GUIDE_ACTIONS },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'], actions: DEVELOPER_SETTINGS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
 ];
 

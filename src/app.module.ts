@@ -62,6 +62,7 @@ import { AccessModule } from './modules/access/access.module';
 import { ScopeModule } from './common/scope/scope.module';
 import { HierarchyModule } from './common/hierarchy/hierarchy.module';
 import { McpModule } from './modules/mcp/mcp.module';
+import { GuideModule } from './modules/guide/guide.module';
 
 @Module({
   imports: [
@@ -127,6 +128,7 @@ import { McpModule } from './modules/mcp/mcp.module';
     ScopeModule,
     HierarchyModule,
     McpModule,
+    GuideModule,
   ],
   controllers: [AppController],
   providers: [
