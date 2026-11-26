@@ -25,6 +25,7 @@ import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module
 import { StudentCategoriesModule } from './modules/student-categories/student-categories.module';
 import { StudentDocumentsModule } from './modules/student-documents/student-documents.module';
 import { FamilyCreditModule } from './modules/family-credit/family-credit.module';
+import { ApiDocsModule } from './modules/api-docs/api-docs.module';
 import { ExamDocumentsModule } from './modules/exam-documents/exam-documents.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { BulkVoucherJobsModule } from './modules/bulk-voucher-jobs/bulk-voucher-jobs.module';
@@ -90,6 +91,7 @@ import { McpModule } from './modules/mcp/mcp.module';
     StudentCategoriesModule,
     StudentDocumentsModule,
     FamilyCreditModule,
+    ApiDocsModule,
     ExamDocumentsModule,
     VouchersModule,
     BulkVoucherJobsModule,

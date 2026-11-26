@@ -1,0 +1,352 @@
+% TAFSD-614: Attendance Machines API (ZKTeco ADMS push), internal reference. Built with Tectonic:
+%   tectonic -X compile docs/api-docs/attendance-machines.tex --outdir docs/api-docs/pdf
+% (see docs/api-docs/README.md). Keep in step with src/modules/api-docs/content/attendance-machines.ts;
+% src/modules/api-docs/api-docs.spec.ts checks the device list against ZK_DEVICES.
+\documentclass[11pt]{article}
+\usepackage{tafs-api-doc}
+\tafsheader{TAFS API \,--\, Attendance Machines}
+
+\title{\textbf{TAFS API Documentation} \\[4pt]
+\large Attendance Machines \\ ZKTeco biometric devices (ADMS push / iclock)}
+\author{The American Foundation School (TAFS) \\ TAFS IT and Software Department}
+\date{Version 1.0 (internal) \\ 27 November 2026}
+
+\begin{document}
+\begin{titlepage}
+\vspace*{\fill}
+{\let\newpage\relax\maketitle}
+\thispagestyle{empty}
+\vspace*{\fill}
+\internalonly
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ---------------------------------------------------------------------------
+\section{Overview}
+Each campus has ZKTeco biometric devices (NYU series, and SenseFace models on Push v3 firmware). They speak ZKTeco's
+\textbf{ADMS push protocol}: the device opens every connection, TAFS never polls it. The device registers, fetches its
+settings, then posts each punch as it happens and polls about once a minute for commands.
+\begin{enumerate}[nosep]
+  \item The raw request is stored in \texttt{zk\_push\_logs} (body capped at 64,000 characters). It shows under
+        \textbf{ZK Device Logs $\rightarrow$ Raw logs}.
+  \item An \texttt{ATTLOG} push is parsed line by line into \texttt{zk\_attendance\_scans}, one row per punch.
+  \item The pair (device serial, PIN) is looked up in \texttt{device\_user\_mappings} to find the employee or student.
+  \item That person's day is rebuilt: IN/OUT directions, \texttt{attendance\_staff\_daily} or
+        \texttt{attendance\_student\_daily}.
+  \item A \textbf{live} punch notifies the employee (Staff App) or the student's parents. Backfill never notifies.
+\end{enumerate}
+
+\subsection{Known devices}
+From \texttt{ZK\_DEVICES} in \texttt{zk-device-health.util.ts}:
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l P{0.27\textwidth} l l L@{}}
+\toprule
+\textbf{Serial} & \textbf{Name} & \textbf{Campus} & \textbf{Sat.} & \textbf{Students it may map} \\
+\midrule
+\texttt{NYU7261205221} & Campus 2 Device 1 Secondary & GEJ & No & GEJ, Secondary \\
+\texttt{NYU7261205141} & Campus 2 Device 2 Senior Cambridge & GEJ & No & GEJ, Senior Cambridge \\
+\texttt{NYU7261205172} & TAFSAL & GEJ & Yes & GEJ, O / A Levels \\
+\texttt{NYU7261205142} & Campus 3 Device 1 Junior Cambridge & GEJ & No & GEJ, Junior Cambridge \\
+\texttt{NYU7261205128} & Campus 3 Device 2 Pre-Primary & GEJ & No & GEJ, Early Years \\
+\texttt{NYU7251000240} & Johar Faculty & GEJ & Yes & Any GEJ student \\
+\texttt{NYU7261000023} & NNN Faculty & NNZ & Yes & Any NNZ student \\
+\texttt{NYU7261205040} & GKF Faculty & KNF & Yes & Any KNF student \\
+\bottomrule
+\end{tabularx}
+\end{center}
+Names are the on-box labels. ``Campus 2'' and ``Campus 3'' devices are physically at the Johar (GEJ) campus, so the
+campus column comes from scan history, not the label.
+
+% ---------------------------------------------------------------------------
+\section{Setting Up a Device}
+Every endpoint lives under the API's global prefix, so the device must reach
+\url{https://api.tafs.cloud/api/v1/iclock/...}. The \texttt{/api/v1} prefix has applied to these routes since
+30 June 2026.
+\begin{enumerate}[nosep]
+  \item On the device, open the cloud server (ADMS) settings under the communication menu. Set the server address to
+        the TAFSync API host and turn on the domain-name option.
+  \item Set the device clock to Pakistan time (UTC+05:00). Punch times are stored exactly as the device reports them,
+        and the server sends a \texttt{Date} header on \texttt{registry}, \texttt{cdata} and \texttt{regstable} for the
+        device to sync from.
+  \item Add the serial to \texttt{ZK\_DEVICES} (\texttt{zk-device-health.util.ts}), and to
+        \texttt{DEVICE\_SEGMENT\_RULES} or \texttt{DEVICE\_CAMPUS\_ONLY\_RULES} (\texttt{zk-device-segment-rules.ts}) if
+        students will use it. Keep the webapp's \texttt{zk-devices.ts} in step. Until then the device works, but it gets
+        no health tile and no student eligibility check.
+  \item Enrol people on the device. A student's PIN must be their CC. An employee's PIN can be anything, then map it
+        (Section~\ref{sec:mapping}).
+  \item Check \textbf{ZK Device Logs $\rightarrow$ Raw logs}: a \texttt{registry} row, then \texttt{cdata} rows. Unknown
+        PINs appear under unmapped PINs, with the name the device reports.
+\end{enumerate}
+\tafsnote{Menu wording differs between firmware versions, and some models do not accept a path in the server address.
+Confirm on the model being installed that its requests arrive at \texttt{/api/v1/iclock/...} (Raw logs shows the first
+\texttt{registry} row) before handing it over.}
+
+% ---------------------------------------------------------------------------
+\section{Authentication}
+There is \textbf{none}. Device firmware cannot send credentials, so the \texttt{/iclock/*} routes are open. A device is
+identified only by the \texttt{SN} query parameter (\texttt{sn} is also accepted; a request with neither is logged as
+\texttt{unknown}).
+\begin{itemize}[nosep]
+  \item A punch from an unknown serial, or an unmapped PIN, is stored but credited to nobody.
+  \item A forged request carrying a real serial and a mapped PIN would be credited. Nothing in the protocol prevents it;
+        keep the URL out of public material.
+  \item Bodies are read as plain text whatever the \texttt{Content-Type}, up to \textbf{2 MB} (\texttt{main.ts}). Larger
+        bodies are refused by the server with HTTP 413.
+  \item Maintenance mode does not block these routes (\texttt{app-maintenance.guard.ts}).
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Endpoints}
+Base path \texttt{https://api.tafs.cloud/api/v1/iclock}. Every route answers HTTP 200 with a \texttt{text/plain} body.
+Failures inside TAFS are logged, never returned: the device always gets its \texttt{OK} so it does not retry forever.
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l P{0.35\textwidth} L P{0.17\textwidth}@{}}
+\toprule
+\textbf{Method} & \textbf{Path} & \textbf{Sent by the device when} & \textbf{Response} \\
+\midrule
+POST & \texttt{/registry?SN=...} & It starts up (ADMS v2 / Push v3) & \texttt{OK} + \texttt{Date} \\
+GET & \texttt{/cdata?SN=...\&options=all} & It asks for its settings & Settings block \\
+POST & \texttt{/regstable?SN=...} & Push v3: it declares its tables & \texttt{OK} + \texttt{Date} \\
+POST & \texttt{/cdata?SN=...\&table=ATTLOG} & It sends punches, user changes, photos & \texttt{OK} \\
+GET & \texttt{/getrequest?SN=...} & It polls for commands (about every 60 s) & \texttt{OK}, or a command \\
+POST & \texttt{/devicecmd?SN=...} & It reports a command's result & \texttt{OK} \\
+POST & \texttt{/querydata?SN=...} & Some Push v3 firmware answers a data query here & \texttt{OK} (raw only) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{POST /registry}
+Body: comma-separated \texttt{key=value} pairs describing the hardware and firmware. Stored raw. The reply must be
+exactly \texttt{OK}; anything else is not a valid ADMS v2 command and makes the device retry indefinitely.
+\begin{lstlisting}
+POST /api/v1/iclock/registry?SN=NYU7251000240
+
+DeviceType=acc,~DeviceName=NYU,FirmVer=...,PushVersion=...
+\end{lstlisting}
+\begin{lstlisting}
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Date: Fri, 27 Nov 2026 03:00:00 GMT
+
+OK
+\end{lstlisting}
+
+\subsection{GET /cdata (settings)}
+The reply is fixed. Each line matters to some firmware:
+\begin{lstlisting}
+OK
+Stamp=0
+ATTLOGStamp=0
+OPERLOGStamp=0
+ATTPHOTOStamp=0
+Delay=60
+TransFlag=TransData AttLog OpLog AttPhoto
+TimeOut=10
+Realtime=1
+Encrypt=None
+PushOptionsFlag=1
+\end{lstlisting}
+\begin{itemize}[nosep]
+  \item \texttt{Stamp=0} and the per-table stamps tell the device to send everything it holds from the beginning.
+        Without them, devices with \texttt{LogIDFunOn=1} (SenseFace 2A) never enter the push phase. The cost is a full
+        backfill after every settings fetch, which the duplicate rules (Section~\ref{sec:processing}) make harmless.
+  \item \texttt{Realtime=1} sends each punch as it happens; \texttt{Delay=60} is the batch interval otherwise.
+  \item \texttt{PushOptionsFlag=1} must be echoed for Push v3 firmware, or it loops back to \texttt{registry}.
+\end{itemize}
+
+\subsection{POST /cdata (punches and other tables)}
+The \texttt{table} query parameter says what the body holds. TAFS answers \texttt{OK} straight away and processes the
+body afterwards, because a backfill can carry thousands of lines and a slow reply makes the device resend. At most two
+pushes are processed at once.
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{table} & \textbf{What TAFS does} \\
+\midrule
+\texttt{ATTLOG} & Each line becomes a punch (format below). \\
+\texttt{OPERLOG} & Lines like \texttt{USER PIN=16\textbackslash tName=Ali Khan\textbackslash t...} save the device's name
+  for that PIN in \texttt{zk\_pin\_name\_hints}. Used only to suggest names on the unmapped-PIN screen. \\
+anything else & \texttt{USERINFO}, \texttt{ATTPHOTO}, \texttt{BIOPHOTO}, \ldots: stored raw in \texttt{zk\_push\_logs},
+  nothing more. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+An \texttt{ATTLOG} line is tab-separated, in one of two layouts. TAFS tells them apart by where the date-time sits:
+\begin{lstlisting}
+# LogIDFunOn=0 (ADMS v1):  PIN  DateTime  Status  Verify  WorkCode
+8088	2026-11-27 07:42:15	0	1	0
+
+# LogIDFunOn=1 (ADMS v2):  LogID  PIN  DateTime  Status  Verify  WorkCode
+10452	8088	2026-11-27 07:42:15	0	1	0
+\end{lstlisting}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l l L@{}}
+\toprule
+\textbf{Field} & \textbf{Stored as} & \textbf{Notes} \\
+\midrule
+PIN & \texttt{device\_pin} & Required. With the serial, decides who punched. \\
+DateTime & \texttt{scan\_time} & \texttt{YYYY-MM-DD HH:MM:SS}, device wall clock, stored as written (no time-zone conversion). \\
+Status & \texttt{device\_status} & The device's in/out key. Stored, but \textbf{not used}: direction is worked out by TAFS. \\
+Verify & \texttt{verify\_mode} & How the person was verified (finger, face, card, \ldots). Stored only. \\
+WorkCode & \texttt{work\_code} & Stored only. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+A line with no PIN or an unreadable date-time is skipped silently.
+
+\subsection{GET /getrequest and POST /devicecmd (commands)}
+TAFS can queue \textbf{one} command per device, held in memory. The next poll receives it as
+\texttt{C:<id>:<command>}; otherwise the reply is \texttt{OK}. The device reports the result to \texttt{devicecmd},
+which is stored with a \texttt{DEVICECMD} prefix in the raw logs. A newer command replaces one never picked up, and a
+restart drops whatever is queued.
+\begin{lstlisting}
+GET /api/v1/iclock/getrequest?SN=NYU7251000240
+
+C:482113:DATA QUERY ATTLOG StartTime=2026-11-27 00:00:00	EndTime=2026-11-27 23:59:59
+\end{lstlisting}
+\begin{lstlisting}
+POST /api/v1/iclock/devicecmd?SN=NYU7251000240
+
+ID=482113&Return=0&CMD=DATA
+\end{lstlisting}
+\texttt{Return=0} means success. The only command TAFS sends today is the nightly re-send request
+(Section~\ref{sec:quirks}).
+
+% ---------------------------------------------------------------------------
+\section{From Serial and PIN to a Person}\label{sec:mapping}
+A PIN means nothing on its own: the same number can be different people on different devices.
+\texttt{device\_user\_mappings} holds one row per \textbf{(device serial, PIN)}, unique, pointing at either an employee
+(\texttt{person\_type = STAFF}, \texttt{employee\_id}) or a student (\texttt{STUDENT}, \texttt{student\_cc}). Someone
+enrolled on three devices needs three rows.
+\begin{itemize}[nosep]
+  \item An inactive mapping, or none, leaves the punch stored but credited to nobody. It shows on the unmapped-PIN
+        screen.
+  \item Creating, editing, deactivating or deleting a mapping re-credits \textbf{every past punch} on that serial and
+        PIN, then rebuilds the affected days. It runs inline for up to 2,000 punches. Beyond that the mapping is saved,
+        history is not rebuilt, and the response says to finish it with:
+\begin{lstlisting}
+POST /api/v1/attendance/zk-scan-resolution/resolve
+{"kind":"device_pin", "device_sn":"...", "device_pin":"...", "dry_run":false}
+\end{lstlisting}
+  \item Posting over a deactivated mapping is refused (409) unless \texttt{is\_active: true} is sent.
+  \item Mappings are managed in \textbf{ZK Device Logs} (mappings, unmapped PINs, PIN lookup) and in the biometric tabs
+        of the Employee and Student directories.
+\end{itemize}
+Checks run when a mapping is saved. A hard block cannot be overridden; a block or warning can be acknowledged with
+\texttt{acknowledge\_collisions}.
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l l L@{}}
+\toprule
+\textbf{Code} & \textbf{Level} & \textbf{Meaning} \\
+\midrule
+\texttt{PIN\_NOT\_EQUAL\_TO\_CC} & Hard block & A student's PIN must equal their CC. \\
+\texttt{DEVICE\_SEGMENT\_MISMATCH} & Hard block & The student's campus or segment is not one this device serves. \\
+\texttt{PIN\_IS\_OTHER\_STUDENT\_CC} & Block & The PIN is another student's CC; their punches would be credited here. \\
+\texttt{PIN\_IS\_OTHER\_STUDENT\_GR} & Block & The PIN is another student's GR number. GR numbers and CCs share one number space. \\
+\texttt{PIN\_USED\_ON\_OTHER\_DEVICE} & Warning & The same PIN is mapped to a different person on another device. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ---------------------------------------------------------------------------
+\section{How a Punch Is Processed}\label{sec:processing}
+\begin{longtable}{@{}p{0.2\textwidth} p{0.74\textwidth}@{}}
+\toprule
+\textbf{Rule} & \textbf{Detail} \\
+\midrule
+\endhead
+Exact duplicate & Unique key (serial, PIN, time). A punch already stored is dropped before anything else runs, so
+  replaying a whole day is safe. \\
+Double tap & A punch within \textbf{2 minutes} of the same person's last accepted punch, on any device, is kept with
+  \texttt{is\_duplicate = true} and does not change their IN/OUT sequence. \\
+Live or backfill & A punch within \textbf{10 minutes} of the current Pakistan time is live (\texttt{is\_live}). Only live
+  punches notify anyone, and only live punches go to Coral9's attendance feed. \\
+Staff direction & Strict alternation through the day: 1st IN, 2nd OUT, 3rd IN, \ldots \\
+Student direction & Against the class's internal \textbf{intermediate time}: every punch before it is an IN (only the
+  first is the arrival), the first at or after it is an OUT, later ones alternate. Classes with no intermediate time
+  fall back to alternation. \\
+Student lateness & Paused: \texttt{STUDENT\_LATE\_MARKING\_ENABLED = false}, so every student arrival counts as
+  PRESENT. \\
+Protected days & A student day on leave, or marked by hand or by the system as anything but ABSENT, is not overwritten
+  by a punch. A default ABSENT mark is. \\
+Left students & A punch by a student who is LEFT, EXPELLED or GRADUATED is processed normally and also flagged for the
+  Not Enrolled check-ins report. \\
+Parent notice & Sent for the first arrival and for departures. Repeat taps before the intermediate time are silent. \\
+\bottomrule
+\end{longtable}
+
+% ---------------------------------------------------------------------------
+\section{Known Quirks}\label{sec:quirks}
+\begin{longtable}{@{}p{0.2\textwidth} p{0.74\textwidth}@{}}
+\toprule
+\textbf{Quirk} & \textbf{What to know} \\
+\midrule
+\endhead
+Clock skew & Times are taken as the device states them. A device whose clock drifts shifts its punches by the same
+  amount. The old standalone campus device ran \textbf{2 minutes behind} Johar Faculty (\texttt{NYU7251000240}),
+  measured over 2,649 punches seen on both. The 2-minute double-tap window uses a strict \texttt{<}, so it does not
+  catch a skew of exactly 2 minutes: de-duplicate such imports per person per day, never per timestamp. \\
+\texttt{OLDDEV-XLS} & Synthetic serial reserved for back-filling the old standalone device's Excel export
+  (27 Jul -- 30 Aug 2026), with times shifted \textbf{+2 minutes} to match. Each person needs a mapping on this serial;
+  5 exist. As of 27 Nov 2026 no punches have been imported under it. \\
+\texttt{MANUAL} & Pseudo-serial for gate-desk check-ins a staff member punches in the webapp for a student with no
+  biometric enrolment. They run through the same pipeline (directions, parent notices); the serial is what tells them
+  apart. Re-crediting never touches these rows. \\
+Full backfill on reconnect & \texttt{Stamp=0} makes a device resend all it holds after each settings fetch. Duplicates
+  are dropped by the unique key; raw bodies over 64,000 characters are truncated in \texttt{zk\_push\_logs} (the
+  punches themselves are all processed). \\
+Devices that never flush & On 12 Sep 2026 the API was down 05:3x--10:44 PKT. Four devices sent their queued punches on
+  reconnect; Johar Faculty and GKF Faculty did not. Trial fix: every day at 23:00 PKT TAFS queues
+  \texttt{DATA QUERY ATTLOG} for that day on those two devices only (\texttt{zk-device-resend-scheduler.service.ts}). \\
+Push v3 firmware & Needs \texttt{PushOptionsFlag=1} echoed in the settings and a 200 on \texttt{regstable}. Either
+  missing sends it back to \texttt{registry} in a loop. \\
+Device health & Expected to talk Monday to Saturday, 06:00--18:00 PKT. After 15 minutes of silence the tile shows a
+  warning, after 60 an alert, after 120 critical. On Saturdays only the faculty devices and TAFSAL are expected. Last
+  contact includes the minute-by-minute polls, which are kept in memory only, so straight after a restart health falls
+  back to the last stored push. \\
+Three device lists & \texttt{ZK\_DEVICES}, the \texttt{DEVICE\_*\_RULES} maps and the webapp's \texttt{zk-devices.ts}
+  must be edited together. \\
+\bottomrule
+\end{longtable}
+
+% ---------------------------------------------------------------------------
+\section{Error Codes}
+The device endpoints have no error codes: every accepted request gets HTTP 200 and \texttt{OK}. The only failures a
+device can see come from the web server itself:
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{HTTP} & \textbf{When} \\
+\midrule
+200 & Every request to a known \texttt{/iclock} route, including ones whose processing failed (see the server log and
+  Raw logs). \\
+404 & A route TAFS does not implement. Firmware that gets one typically falls back to \texttt{registry}. \\
+413 & Body larger than 2 MB. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+The staff-facing mapping routes under \path{/api/v1/attendance/zk-device-mappings} return the codes in
+Section~\ref{sec:mapping} with HTTP 409, and 400 for a STAFF mapping without \texttt{employee\_id} or a STUDENT mapping
+without \texttt{student\_cc}.
+
+% ---------------------------------------------------------------------------
+\section{Testing}
+There is no sandbox: every device and every test talks to production.
+\begin{itemize}[nosep]
+  \item \textbf{Simulate scan} (ZK Device Logs, action \texttt{attendance.zk\_device\_logs\#simulate},
+        \texttt{POST} \path{/api/v1/attendance/zk-device-mappings/simulate-scan} with \texttt{device\_sn}, \texttt{device\_pin},
+        optional \texttt{scan\_time}) runs one punch through the real pipeline and returns the stored punch and the
+        rebuilt day.
+  \item To try the raw protocol, post to \texttt{/cdata} with a made-up serial. Its punches stay unmapped and change
+        nobody's attendance.
+\end{itemize}
+\begin{lstlisting}
+curl -X POST 'https://api.tafs.cloud/api/v1/iclock/cdata?SN=TEST-DEVICE-01&table=ATTLOG' \
+  --data-binary $'99999\t2026-11-27 09:00:00\t0\t1\t0'
+\end{lstlisting}
+\tafsnote{\textbf{Simulate scan always notifies}, even for a past time. With a real serial and a mapped PIN it marks
+that person's real attendance and messages them or their parents. Use a test student or an unmapped PIN.}
+
+\end{document}

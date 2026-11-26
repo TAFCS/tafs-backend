@@ -775,6 +775,14 @@ const MCP_DOCS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Read the MCP docs', description: 'How to connect Claude or ChatGPT to TAFSync, and what each assistant tool can read', default: true },
 ];
 
+// TAFSD-614: API Docs. Read-only documentation of the external APIs TAFS runs
+// (attendance machines, UBL). Sensitive enough to be its own grant: it lays out
+// unauthenticated device routes and the bank's payment contract. No legacy bridge.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const API_DOCS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Read the API docs', description: 'Attendance machine and UBL API documentation, and their PDFs', default: true },
+];
+
 const DEVELOPER_SETTINGS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Developer Settings', description: 'See app versions, maintenance mode and system switches', default: true },
 
@@ -1196,6 +1204,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'system.reporting_hierarchy', module: 'system', label: 'Reporting Hierarchy', description: 'Set who reports to whom', href: '/system/reporting-hierarchy', capabilities: ['system.permissions.manage'], superAdminOnly: true },
   { id: 'system.ai_assistant', module: 'system', label: 'AI Assistant (MCP)', description: 'Connect an AI assistant with your own access, through personal tokens', href: '/system/ai-assistant', capabilities: ['system.ai_assistant.use'], actions: AI_ASSISTANT_ACTIONS },
   { id: 'system.mcp_docs', module: 'system', label: 'MCP Docs', description: 'How to connect Claude or ChatGPT to TAFSync and what each assistant tool reads', href: '/system/mcp-docs', capabilities: ['system.mcp_docs.view'], actions: MCP_DOCS_ACTIONS },
+  { id: 'system.api_docs', module: 'system', label: 'API Docs', description: 'How the attendance machines and UBL connect to TAFSync', href: '/system/api-docs', capabilities: ['system.api_docs.view'], actions: API_DOCS_ACTIONS },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'], actions: DEVELOPER_SETTINGS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
 ];
 
