@@ -2,6 +2,7 @@ import * as ExcelJS from 'exceljs';
 import { FinancialReportsService } from './financial-reports.service';
 import {
   recoveryDate,
+  recoveryMonthIndex,
   recoveryRemarks,
   summarizeRecoveries,
   type RecoveryDepositInput,
@@ -248,6 +249,27 @@ describe('Consolidated Recoveries export (TAFSD-604)', () => {
     expect(ali.slice(oct, oct + 3)).toEqual([10000, 1000, 11000]);
   });
 
+  it('month_by=deposit: the months are when the money came in, the money columns unchanged', async () => {
+    const { file, hdr, row, text } = await load({ month_by: 'deposit', breakdown_by_head: true });
+    expect(file.filename).toBe('consolidated-recoveries-by-month-received-2026-11-01-to-2026-11-30.xlsx');
+    expect(Array.from({ length: hdr }, (_, i) => text(i + 1))).toContain('MONTHS: MONTH RECEIVED');
+    const months = row(hdr);
+    const heads = row(hdr + 1);
+    expect(months).not.toContain('OCT');
+    const nov = months.indexOf('NOV');
+    // Ali paid October's tuition and lab in November: both sit under NOV now.
+    expect(heads.slice(nov, nov + 3)).toEqual(['TUITION', 'LAB', 'TOTAL']);
+    const ali = row(hdr + 3);
+    expect(ali.slice(nov, nov + 3)).toEqual([20000, 1000, 21000]);
+    expect(ali[months.indexOf('TOTAL RECOVERED')]).toBe(22000);
+    expect(ali[months.indexOf('CASH RECEIVED')]).toBe(27000);
+  });
+
+  it('month_by defaults to the fee month and says so', async () => {
+    const { hdr, text } = await load({});
+    expect(Array.from({ length: hdr }, (_, i) => text(i + 1))).toContain('MONTHS: FEE MONTH PAID FOR');
+  });
+
   it('a deposit with no allocations shows an UNALLOCATED column so the row still adds up', async () => {
     const legacy = [
       {
@@ -392,6 +414,15 @@ describe('summarizeRecoveries', () => {
       '14 NOV 2026 · 8,000 · CASH',
       'DISCOUNT APPLIED 2,000',
     ]);
+  });
+
+  it('month received is the Pakistan month: 30 Nov 20:00 UTC is already December', () => {
+    const s = summarizeRecoveries(
+      [dep({ depositDate: new Date('2026-11-30T20:00:00Z'), totalAmount: 5000, allocations: [{ type: 'FEE_HEAD', amount: 5000, month: OCT, head: 'Tuition' }] })],
+      'deposit',
+    ).get(1)!;
+    expect([...s.months.keys()]).toEqual([NOV + 1]);
+    expect(recoveryMonthIndex(new Date('2026-11-30T18:00:00Z'))).toBe(NOV);
   });
 
   it('dates are Pakistan days', () => {

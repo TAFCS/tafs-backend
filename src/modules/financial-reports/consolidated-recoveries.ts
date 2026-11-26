@@ -1,12 +1,25 @@
 /**
  * TAFSD-604: Consolidated Recoveries — what each student's deposits in a
- * period paid, by fee head and fee month. Pure, so the money rules are tested
+ * period paid, by fee head and by fee month or month received. Pure, so the money rules are tested
  * apart from the database (consolidated-recoveries.spec.ts); the sheet itself
  * is FinancialReportsService.exportConsolidatedRecoveries.
  */
 
 /** The banner under the school name, as the defaulters sheet has its own. */
 export const CONSOLIDATED_RECOVERIES_TITLE = 'CONSOLIDATED RECOVERIES';
+
+/**
+ * Which month a recovery goes under: `fee` — the month the fee head was billed
+ * for (its fee_date), as on the receivables sheet; `deposit` — the month the
+ * money was received, in Pakistan time.
+ */
+export type RecoveryMonthBy = 'fee' | 'deposit';
+
+/** The line under the period saying which months the columns are. */
+export const RECOVERY_MONTH_BY_LINE: Record<RecoveryMonthBy, string> = {
+  fee: 'MONTHS: FEE MONTH PAID FOR',
+  deposit: 'MONTHS: MONTH RECEIVED',
+};
 
 export interface RecoveryAllocationInput {
   /** deposit_allocations.type: FEE_HEAD, LATE_FEE, SURCHARGE or DISCOUNT. */
@@ -65,9 +78,11 @@ const round = (n: number) => Math.round(n * 100) / 100;
  */
 export function summarizeRecoveries(
   deposits: RecoveryDepositInput[],
+  monthBy: RecoveryMonthBy = 'fee',
 ): Map<number, RecoverySummary> {
   const out = new Map<number, RecoverySummary>();
   for (const d of deposits) {
+    const receivedIn = recoveryMonthIndex(d.depositDate);
     let s = out.get(d.studentId);
     if (!s) {
       s = {
@@ -87,7 +102,7 @@ export function summarizeRecoveries(
     let allocated = 0;
     for (const a of d.allocations) {
       if (a.type === 'FEE_HEAD') {
-        const idx = a.month ?? -1;
+        const idx = monthBy === 'deposit' ? receivedIn : (a.month ?? -1);
         const month = s.months.get(idx) ?? new Map<string, number>();
         month.set(a.head, round((month.get(a.head) ?? 0) + a.amount));
         s.months.set(idx, month);
@@ -117,6 +132,18 @@ export function summarizeRecoveries(
     });
   }
   return out;
+}
+
+/** The Pakistan-time month a moment falls in, as year * 12 + (month - 1). */
+export function recoveryMonthIndex(date: Date): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Karachi',
+    month: 'numeric',
+    year: 'numeric',
+  }).formatToParts(date);
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value);
+  return get('year') * 12 + get('month') - 1;
 }
 
 const MONTHS = [

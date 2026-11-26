@@ -73,6 +73,7 @@ import {
 import { defaulterWindowRemarks } from './defaulter-window-remark';
 import {
   CONSOLIDATED_RECOVERIES_TITLE,
+  RECOVERY_MONTH_BY_LINE,
   recoveryRemarks,
   type RecoverySummary,
   summarizeRecoveries,
@@ -2104,10 +2105,11 @@ export class FinancialReportsService {
   /**
    * TAFSD-604: Consolidated Recoveries — the deposits in the period in the
    * defaulters / receivables sheet (buildStudentMonthReport): one row per
-   * student who paid, one column per fee month (with breakdown_by_head, a
+   * student who paid, one column per month (with breakdown_by_head, a
    * sub-column per fee head under it), each cell what was recovered against
-   * that head. The month is the head's fee_date month, as on the Fee Heads by
-   * student sheet, so the two read side by side.
+   * that head. month_by picks the month: `fee` (default) is the head's
+   * fee_date month, as on the Fee Heads by student sheet, so the two read side
+   * by side; `deposit` is the month the money came in (Pakistan time).
    *
    * Same deposits as the Deposits report (buildDepositsWhere), credit payments
    * included, since they settled heads too. Per row:
@@ -2184,6 +2186,7 @@ export class FinancialReportsService {
     const headRank = (name: string) => rank.get(name) ?? 1e9;
     const monthIdx = (d: Date | null | undefined) => (d ? d.getUTCFullYear() * 12 + d.getUTCMonth() : null);
 
+    const monthBy = query.month_by ?? 'fee';
     const recovered = summarizeRecoveries(
       deposits.map((d) => ({
         id: d.id,
@@ -2205,6 +2208,7 @@ export class FinancialReportsService {
             : 'OTHER',
         })),
       })),
+      monthBy,
     );
 
     const rows: StudentMonthRow[] = students
@@ -2256,7 +2260,7 @@ export class FinancialReportsService {
     const received = `RECEIVED ${periodLine(query.from_date, query.to_date)}`;
     return this.buildStudentMonthReport(rows, {
       query,
-      basename: `consolidated-recoveries-${query.from_date}-to-${query.to_date}`,
+      basename: `consolidated-recoveries${monthBy === 'deposit' ? '-by-month-received' : ''}-${query.from_date}-to-${query.to_date}`,
       generatedBy: user,
       asOfDate: this.todayPkt(),
       sessionDate: query.to_date,
@@ -2277,7 +2281,11 @@ export class FinancialReportsService {
       remark: (r) => recoveryRemarks(rec(r)).join('\n'),
       leadLine: received,
       filterLines: (names, omitClasses, groupLine) =>
-        defaulterFilterLines(query, names, received, omitClasses, [], [...this.depositsFilterWords(query), ...groupLine]),
+        defaulterFilterLines(query, names, received, omitClasses, [], [
+          RECOVERY_MONTH_BY_LINE[monthBy],
+          ...this.depositsFilterWords(query),
+          ...groupLine,
+        ]),
       emptyMessage: 'No deposits match the current filters.',
       emptySheetName: 'Consolidated Recoveries',
     });

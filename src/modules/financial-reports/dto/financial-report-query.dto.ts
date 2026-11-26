@@ -543,6 +543,15 @@ export class ExportDepositsQueryDto extends ListDepositsQueryDto {
   @IsIn(DEPOSITS_EXPORT_VIEWS)
   view?: DepositsExportView;
 
+  /**
+   * Consolidated Recoveries only: the month columns are the month each fee
+   * head was billed for (`fee`, the default) or the month the money came in
+   * (`deposit`).
+   */
+  @IsOptional()
+  @IsIn(['fee', 'deposit'])
+  month_by?: 'fee' | 'deposit';
+
   /** Consolidated Recoveries only, as on the defaulters and Fee Heads by student exports. */
   @IsOptional()
   @IsIn(DEFAULTER_GROUP_BY)
