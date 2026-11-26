@@ -764,6 +764,17 @@ const AI_ASSISTANT_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Connect an AI assistant', description: 'Issue and revoke their own MCP tokens. The assistant sees only what the person can already see.', default: true },
 ];
 
+// TAFSD-615: MCP Docs. A read-only page in the webapp explaining how to
+// connect Claude or ChatGPT to the AI Assistant and what each MCP tool reads,
+// with an A4 PDF. It reaches no data and calls no route of its own. Its own
+// tile, separate from AI Assistant (MCP), so people who decide on or support
+// the assistant can read it without being able to connect one. Default-deny,
+// granted per person, no legacy bridge. Holders of the AI Assistant tile read
+// the same guide from their AI Assistant page (/system/ai-assistant/docs).
+const MCP_DOCS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Read the MCP docs', description: 'How to connect Claude or ChatGPT to TAFSync, and what each assistant tool can read', default: true },
+];
+
 const DEVELOPER_SETTINGS_ACTIONS: TileAction[] = [
   { id: 'view', label: 'Open Developer Settings', description: 'See app versions, maintenance mode and system switches', default: true },
 
@@ -1184,6 +1195,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // will follow this tree, so nobody inside it may edit it.
   { id: 'system.reporting_hierarchy', module: 'system', label: 'Reporting Hierarchy', description: 'Set who reports to whom', href: '/system/reporting-hierarchy', capabilities: ['system.permissions.manage'], superAdminOnly: true },
   { id: 'system.ai_assistant', module: 'system', label: 'AI Assistant (MCP)', description: 'Connect an AI assistant with your own access, through personal tokens', href: '/system/ai-assistant', capabilities: ['system.ai_assistant.use'], actions: AI_ASSISTANT_ACTIONS },
+  { id: 'system.mcp_docs', module: 'system', label: 'MCP Docs', description: 'How to connect Claude or ChatGPT to TAFSync and what each assistant tool reads', href: '/system/mcp-docs', capabilities: ['system.mcp_docs.view'], actions: MCP_DOCS_ACTIONS },
   { id: 'system.developer_settings', module: 'system', label: 'Developer Settings', description: 'Technical configuration', href: '/admin/developer', capabilities: ['system.permissions.manage'], actions: DEVELOPER_SETTINGS_ACTIONS, legacyFullAccessCapabilities: ['system.permissions.manage'] },
 ];
 
