@@ -66,6 +66,8 @@ const permissionsList = [
     { key: 'system.backups.view', module: 'System Administration', description: 'View database backups' },
     // TAFSD-531: granted with the AI Assistant (MCP) tile, per person.
     { key: 'system.ai_assistant.use', module: 'System Administration', description: 'Connect an AI assistant (MCP)' },
+    // TAFSD-616: granted with the Guide tile, per person.
+    { key: 'system.guide.view', module: 'System Administration', description: 'Read and download the user guide' },
 
     // HR & Attendance
     { key: 'hr.employees.view', module: 'HR & Attendance', description: 'View employee directory' },
