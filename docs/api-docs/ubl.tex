@@ -1,0 +1,467 @@
+% TAFSD-614: UBL Bill Payment API, internal reference. Built with Tectonic:
+%   tectonic -X compile docs/api-docs/ubl.tex --outdir docs/api-docs/pdf
+% (see docs/api-docs/README.md). Keep in step with src/modules/api-docs/content/ubl.ts;
+% src/modules/api-docs/api-docs.spec.ts checks the codes, methods and slabs against the code.
+\documentclass[11pt]{article}
+\usepackage{tafs-api-doc}
+\tafsheader{TAFS API \,--\, UBL Bill Payment}
+
+\title{\textbf{TAFS API Documentation} \\[4pt]
+\large Bill Inquiry \& Bill Payment \\ for United Bank Limited (UBL)}
+\author{The American Foundation School (TAFS) \\ TAFS IT and Software Department}
+\date{Version 1.4 (internal) \\ 27 November 2026}
+
+\begin{document}
+\begin{titlepage}
+\vspace*{\fill}
+{\let\newpage\relax\maketitle}
+\thispagestyle{empty}
+\vspace*{\fill}
+\internalonly
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ---------------------------------------------------------------------------
+\section{Overview}
+UBL's systems call TAFS to collect school fees. There are two calls, both JSON over HTTPS, both authenticated with a
+service user and password in headers:
+\begin{itemize}[nosep]
+  \item \textbf{Bill inquiry} (\texttt{GET}) returns the student's current voucher and the exact amount to collect today.
+  \item \textbf{Bill payment} (\texttt{POST}) posts a collected payment. TAFS records it as a deposit on the voucher,
+        exactly as if staff had received it.
+\end{itemize}
+One API serves both UBL products: \textbf{TAFSCLCC} (over the counter, net banking, UBL app; the payer gives the
+5-digit CC) and \textbf{TAFSCLBILL} (1Bill; a 15-digit consumer number, any bank or wallet). The consumer number alone
+decides which amount is quoted.
+
+\tafsnote{\textbf{Status on 27 November 2026.} 1Bill tested end to end on 18 November. Waiting on UBL for the
+production 1Bill prefix, its egress IP addresses (for the allow-list) and OTC / net banking testing. Collections and
+UBL settlement statements are reconciled under Financial Reports $\rightarrow$ UBL Collections.}
+
+% ---------------------------------------------------------------------------
+\section{Consumer Number}\label{sec:consumer}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}P{0.18\textwidth} L P{0.28\textwidth}@{}}
+\toprule
+\textbf{Sent as} & \textbf{Format} & \textbf{Amount quoted} \\
+\midrule
+Up to 5 digits & The student's CC, leading zeros optional (\texttt{8088} = \texttt{08088}) & The voucher amount \\
+15 digits & 10-digit TAFS 1Bill prefix + CC zero-padded to 5 (\texttt{100000000008088}) & The voucher amount + the 1Bill charge \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\begin{itemize}[nosep]
+  \item Until \texttt{UBL\_1BILL\_PREFIX} is set to the prefix UBL issues, the prefix is the placeholder
+        \texttt{1000000000}. Changing it changes every student's 1Bill number.
+  \item Any other length, a 15-digit number with another prefix, or CC 0 returns code \texttt{01}.
+  \item More than 20 digits, or anything that is not digits, is a malformed request (HTTP 400).
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Amounts}\label{sec:amounts}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}P{0.33\textwidth} L@{}}
+\toprule
+\textbf{Payment date (Pakistan time)} & \textbf{Amount} \\
+\midrule
+On or before the due date & \texttt{amount\_within\_due\_date}: unpaid fees (net of discounts) + unpaid arrear surcharges \\
+After the due date, up to the validity date & \texttt{amount\_after\_due\_date}: the above + the unpaid late fee \\
+After the validity date & Not payable: code \texttt{04} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+For an inquiry ``today'' is the Pakistan date when the call arrives. For a payment it is the Pakistan date of
+\texttt{transaction\_datetime}, so a payment taken on the due date and posted the next morning still pays the
+within-due amount.
+
+Amounts are whole rupees. \texttt{amount} may carry up to two decimals (\texttt{90053} = \texttt{90053.00}); a
+fractional value never matches and gets \texttt{06}; three or more decimals is HTTP 400. The payment must equal
+\texttt{amount\_payable} exactly: partial and over-payments are refused, so UBL never creates family credit.
+
+\subsection{1Bill charge}\label{sec:onebill}
+Borne by the payer and never booked as fees: the 1LINK same-day settlement fee plus the biller charge for the slab,
+rounded up to whole rupees. The slab is that of the \textbf{transaction} (bill + charge), so a charge that tips the
+total over a boundary takes the next slab's charge.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}P{0.36\textwidth} R R R@{}}
+\toprule
+\textbf{Transaction (PKR)} & \textbf{Same Day Settlement} & \textbf{Biller Charge} & \textbf{1Bill Charge} \\
+\midrule
+Up to 5,000                & 4.00   & 12.50  & \textbf{17} \\
+5,001 to 10,000            & 5.00   & 15.50  & \textbf{21} \\
+10,001 to 100,000          & 14.00  & 39.00  & \textbf{53} \\
+100,001 to 250,000         & 22.00  & 62.50  & \textbf{85} \\
+250,001 to 1,000,000       & 44.00  & 125.00 & \textbf{169} \\
+1,000,001 to 2,500,000     & 88.00  & 250.00 & \textbf{338} \\
+2,500,001 to 5,000,000     & 131.00 & 375.00 & \textbf{506} \\
+Above 5,000,000            & 175.00 & 500.00 & \textbf{675} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}>{\raggedleft\arraybackslash}p{0.15\textwidth} >{\raggedleft\arraybackslash}p{0.13\textwidth} >{\raggedleft\arraybackslash}p{0.15\textwidth} L@{}}
+\toprule
+\textbf{Voucher amount} & \textbf{1Bill charge} & \textbf{Quoted} & \textbf{Note} \\
+\midrule
+90,000 & 53 & 90,053 & Slab 10,001 to 100,000 \\
+91,000 & 53 & 91,053 & Same voucher, after the due date \\
+99,980 & 85 & 100,065 & 99,980 + 53 exceeds 100,000, so the next slab applies \\
+4,990 & 21 & 5,011 & 4,990 + 17 exceeds 5,000, so the next slab applies \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ---------------------------------------------------------------------------
+\section{Which Voucher Is Collected}\label{sec:latest}
+\begin{itemize}[nosep]
+  \item Only vouchers released to the parent, and not VOID (replaced by a newer one), are considered.
+  \item The newest one that is UNPAID, OVERDUE or PARTIALLY\_PAID is collected.
+  \item If none is payable, the newest one's state is returned instead: PAID \texttt{03}, WAIVED \texttt{05},
+        EXPIRED or past its validity date \texttt{04}. No voucher at all is \texttt{02}.
+  \item A new voucher carries every older unpaid voucher's outstanding fees onto itself and voids the older one, so
+        normally there is exactly one payable voucher holding all arrears. A fee item can be on only one payable
+        voucher at a time, so the same fees are never collected twice.
+  \item UBL vouchers print the plain voucher serial as the voucher number (e.g.\ \texttt{12461}).
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Connectivity \& Authentication}
+\subsection{Base URL}
+\begin{lstlisting}
+https://api.tafs.cloud/api/v1/ubl
+\end{lstlisting}
+Production is the only environment.
+
+\subsection{Headers}
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Header} & \textbf{Value} \\
+\midrule
+\texttt{X-UBL-User} & Service user ID issued to UBL \\
+\texttt{X-UBL-Password} & Its password \\
+\texttt{Content-Type} & \texttt{application/json} on payments \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Backend settings}
+\begin{itemize}[nosep]
+  \item Credentials are compared in constant time against \texttt{UBL\_SERVICE\_USER\_ID} and
+        \texttt{UBL\_SERVICE\_PASSWORD}. They are issued separately and never go in a URL, a document or a ticket.
+        Missing or wrong credentials: HTTP 200 with code \texttt{10}.
+  \item HTTPS only (TLS 1.2 and 1.3), behind Cloudflare.
+  \item \texttt{UBL\_ALLOWED\_IPS} (comma-separated IPs or CIDRs) restricts callers; unset means no restriction. An
+        invalid entry refuses \textbf{every} UBL request with 503 rather than opening the API.
+  \item Rate limit per caller IP: \texttt{UBL\_RATE\_LIMIT\_PER\_MINUTE}, default 600 a minute; 0 turns it off.
+  \item The caller IP is Cloudflare's \texttt{cf-connecting-ip}, believed only when the connection came from a
+        Cloudflare range (\texttt{UBL\_TRUSTED\_PROXY\_RANGES} overrides the list). \texttt{X-Forwarded-For} is ignored.
+  \item Maintenance mode does not block these routes.
+\end{itemize}
+
+\subsection{HTTP status}\label{sec:http}
+Every business outcome, including code \texttt{10}, is HTTP 200 with the outcome in \texttt{response\_code}. The
+exceptions:
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l l L P{0.3\textwidth}@{}}
+\toprule
+\textbf{HTTP} & \textbf{Code} & \textbf{When} & \textbf{Body} \\
+\midrule
+400 & -- & Malformed: missing or invalid field, non-digit consumer number, \textbf{any field the API does not define} &
+  \texttt{\{"status":400, "message":[...], "data":null\}} \\
+403 & \texttt{10} & Caller IP not on the allow-list & \texttt{response\_code}, \texttt{response\_desc}, \texttt{client\_ip} \\
+429 & \texttt{99} & Rate limit exceeded; \texttt{Retry-After: 60} & same \\
+503 & \texttt{99} & UBL network settings invalid on the backend & same \\
+\bottomrule
+\end{tabularx}
+\end{center}
+403, 429 and 503 are answered before any student or payment data is read. Nothing is booked.
+
+% ---------------------------------------------------------------------------
+\section{API 1 \,--\, Bill Inquiry}
+\begin{lstlisting}
+GET /api/v1/ubl/bill-inquiry?consumer_number={consumer_number}
+\end{lstlisting}
+One query parameter, \texttt{consumer\_number}. An optional \texttt{channel} is still accepted from older callers and
+ignored. Any other parameter is HTTP 400.
+
+\subsection{Response fields}
+\begin{longtable}{@{}p{0.36\textwidth} p{0.1\textwidth} p{0.46\textwidth}@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Meaning} \\
+\midrule
+\endhead
+\texttt{response\_code} / \texttt{response\_desc} & string & \texttt{"00"} / \texttt{"Success"} \\
+\texttt{consumer\_number} & string & As sent \\
+\texttt{onebill\_consumer\_number} & string & The student's 15-digit 1Bill number \\
+\texttt{cc} & string & CC, 5 digits zero-padded \\
+\texttt{student\_name}, \texttt{gr\_number}, \texttt{campus}, \texttt{class} & string & The student (\texttt{gr\_number}, \texttt{campus}, \texttt{class} may be null) \\
+\texttt{voucher\_number} & string & Voucher being collected \\
+\texttt{billing\_month} & string & Months billed, e.g.\ \texttt{"OCT 26"} \\
+\texttt{voucher\_status} & string & \texttt{UNPAID}, \texttt{OVERDUE} or \texttt{PARTIALLY\_PAID} \\
+\texttt{issue\_date}, \texttt{due\_date}, \texttt{validity\_date} & string & \texttt{YYYYMMDD} \\
+\texttt{currency} & string & \texttt{"PKR"} \\
+\texttt{amount\_within\_due\_date} & number & Includes the 1Bill charge for a 1Bill number \\
+\texttt{amount\_after\_due\_date} & number & Includes the late fee, and the 1Bill charge for a 1Bill number \\
+\texttt{late\_fee} & number & Unpaid late fee that applies after the due date \\
+\texttt{channel\_fee} & number & 1Bill charge inside \texttt{amount\_payable}; 0 for a CC \\
+\texttt{amount\_payable} & number & \textbf{The exact amount to collect today} \\
+\bottomrule
+\end{longtable}
+
+\subsection{Sample \,--\, CC, after the due date}
+\begin{lstlisting}
+GET /api/v1/ubl/bill-inquiry?consumer_number=08088
+X-UBL-User: <issued by TAFS>
+X-UBL-Password: <issued by TAFS>
+\end{lstlisting}
+\begin{lstlisting}
+{
+  "response_code": "00",
+  "response_desc": "Success",
+  "consumer_number": "08088",
+  "onebill_consumer_number": "100000000008088",
+  "cc": "08088",
+  "student_name": "<student name>",
+  "gr_number": "7001",
+  "campus": "Gulistan-e-Jauhar Campus",
+  "class": "AS",
+  "voucher_number": "12461",
+  "billing_month": "OCT 26",
+  "voucher_status": "OVERDUE",
+  "issue_date": "20261001",
+  "due_date": "20261010",
+  "validity_date": "20261020",
+  "currency": "PKR",
+  "amount_within_due_date": 90000,
+  "amount_after_due_date": 91000,
+  "late_fee": 1000,
+  "channel_fee": 0,
+  "amount_payable": 91000
+}
+\end{lstlisting}
+
+\subsection{Sample \,--\, 1Bill number, before the due date}
+\begin{lstlisting}
+{
+  "response_code": "00",
+  "consumer_number": "100000000008088",
+  "voucher_status": "UNPAID",
+  "amount_within_due_date": 90053,
+  "amount_after_due_date": 91053,
+  "late_fee": 1000,
+  "channel_fee": 53,
+  "amount_payable": 90053,
+  ...
+}
+\end{lstlisting}
+
+\subsection{Sample \,--\, failure}
+\begin{lstlisting}
+{ "response_code": "03", "response_desc": "Voucher is already paid", "voucher_number": "12461" }
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------
+\section{API 2 \,--\, Bill Payment}\label{sec:payment}
+\begin{lstlisting}
+POST /api/v1/ubl/bill-payment
+Content-Type: application/json
+\end{lstlisting}
+
+\subsection{Request body}
+\begin{longtable}{@{}p{0.3\textwidth} >{\raggedright\arraybackslash}p{0.13\textwidth} >{\raggedright\arraybackslash}p{0.49\textwidth}@{}}
+\toprule
+\textbf{Field} & \textbf{Required} & \textbf{Meaning} \\
+\midrule
+\endhead
+\texttt{consumer\_number} & Yes & Same value as the inquiry \\
+\texttt{amount} & Yes & Amount collected; must equal \texttt{amount\_payable} \\
+\texttt{channel} & CC: yes & CC: \texttt{OTC}, \texttt{APP} or \texttt{INTERNET\_BANKING}. 1Bill: omit or \texttt{ONEBILL} \\
+\texttt{payment\_method} & CC: yes & How the payer paid (Section~\ref{sec:method}). 1Bill: \texttt{ONEBILL} or empty \\
+\texttt{transaction\_id} & Yes & UBL's unique reference, up to 100 characters \\
+\texttt{transaction\_datetime} & Yes & ISO 8601 with offset (\texttt{2026-10-05T11:00:00+05:00}), or \texttt{YYYYMMDD} / \texttt{YYYYMMDDHHmm} / \texttt{YYYYMMDDHHmmss} in Pakistan time \\
+\texttt{voucher\_number} & Advised & From the inquiry. If sent and a newer voucher exists, code \texttt{07} \\
+\texttt{branch\_code} & OTC & UBL branch \\
+\texttt{payer\_bank\_code}, \texttt{payer\_bank\_name} & 1Bill & Bank or wallet the payer paid from \\
+\texttt{instrument\_number} & Cheque / PO & Required for \texttt{CHEQUE} and \texttt{PAY\_ORDER} \\
+\bottomrule
+\end{longtable}
+Optional fields sent as \texttt{"\{\}"}, \texttt{""} or \texttt{null} are treated as not sent.
+
+\subsection{Payment method}\label{sec:method}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\texttt{payment\_method} & \textbf{Meaning} \\
+\midrule
+\texttt{CASH} & Cash at a branch counter \\
+\texttt{CHEQUE} & Cheque (send \texttt{instrument\_number}) \\
+\texttt{PAY\_ORDER} & Pay order or demand draft (send \texttt{instrument\_number}) \\
+\texttt{ACCOUNT\_TRANSFER} & Debit from the payer's account (net banking, the UBL app, or a teller debit at the counter) \\
+\texttt{DEBIT\_CARD} & Debit card (UBL does not process these today) \\
+\texttt{CREDIT\_CARD} & Credit card (UBL does not process these today) \\
+\texttt{WALLET} & Mobile wallet (UBL does not process these today) \\
+\texttt{OTHER} & Any other method; tell TAFS which, so it can be added \\
+\texttt{ONEBILL} & 1Bill payments (15-digit consumer number). Empty or \texttt{null} on a 1Bill payment means the same. Refused for a CC \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Response fields}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{Field} & \textbf{Meaning} \\
+\midrule
+\texttt{transaction\_id} & As sent \\
+\texttt{tafs\_receipt\_id} & TAFS deposit number \\
+\texttt{voucher\_number} & Voucher the payment went to \\
+\texttt{amount\_booked} & Credited to the student (excludes the 1Bill charge) \\
+\texttt{channel\_fee} & 1Bill charge inside the amount collected; 0 for a CC \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Sample \,--\, 1Bill payment}
+\begin{lstlisting}
+POST /api/v1/ubl/bill-payment
+{
+  "consumer_number": "100000000008088",
+  "amount": 90053,
+  "payment_method": "ONEBILL",
+  "transaction_id": "UBL20261005110000123",
+  "transaction_datetime": "2026-10-05T11:00:00+05:00",
+  "voucher_number": "12461",
+  "payer_bank_code": "HBL",
+  "payer_bank_name": "Habib Bank Limited"
+}
+\end{lstlisting}
+\begin{lstlisting}
+{
+  "response_code": "00",
+  "response_desc": "Success",
+  "transaction_id": "UBL20261005110000123",
+  "tafs_receipt_id": "48215",
+  "voucher_number": "12461",
+  "amount_booked": 90000,
+  "channel_fee": 53
+}
+\end{lstlisting}
+
+\subsection{Sample \,--\, net banking, account transfer}
+\begin{lstlisting}
+{
+  "consumer_number": "08088",
+  "channel": "INTERNET_BANKING",
+  "payment_method": "ACCOUNT_TRANSFER",
+  "amount": 90000,
+  "transaction_id": "UBLIB20261125101500001",
+  "transaction_datetime": "2026-11-25T10:15:00+05:00",
+  "voucher_number": "12461"
+}
+\end{lstlisting}
+
+\subsection{Sample \,--\, failures}
+\begin{lstlisting}
+{ "response_code": "06", "response_desc": "Amount does not match the payable amount", "amount_payable": 90053 }
+{ "response_code": "08", "response_desc": "Duplicate transaction; already posted",
+  "transaction_id": "UBL20261005110000123", "tafs_receipt_id": "48215" }
+{ "response_code": "09", "response_desc": "instrument_number is required for CHEQUE and PAY_ORDER" }
+\end{lstlisting}
+
+\subsection{Duplicates, retries and timeouts}\label{sec:retries}
+\begin{itemize}[nosep]
+  \item Posting is idempotent on \texttt{transaction\_id}, checked before anything else. On a timeout or \texttt{99},
+        resend the same request with the same id: a payment that did go through comes back \texttt{08} with its receipt
+        and is never booked twice.
+  \item An id stays used even after the school reverses that deposit (it is kept in \texttt{ubl\_transactions}). The
+        resend still gets \texttt{08}, with the number of the deposit that was reversed.
+  \item Code \texttt{09} carries the specific reason in \texttt{response\_desc}.
+\end{itemize}
+
+\subsection{What TAFS records}
+\begin{itemize}[nosep]
+  \item A deposit on the voucher with \texttt{payment\_method = ubl}, \texttt{reference\_number} = the transaction id,
+        \texttt{deposit\_date} = \texttt{transaction\_datetime}, and remarks such as
+        \texttt{UBL OTC \textperiodcentered{} CHEQUE \textperiodcentered{} instrument 00412387 \textperiodcentered{} branch 0457}.
+  \item The payment clears the late fee (if overdue) and the arrear surcharges in full, and the rest goes to the fee
+        heads in the voucher's order. The voucher becomes PAID and its paid receipt is generated as for any deposit.
+  \item A row in \texttt{ubl\_transactions} (amount received, amount booked, 1Bill charge, channel, method), which the
+        UBL Collections reconciliation matches to UBL's settlement statement.
+  \item An audit log entry by actor \texttt{ubl-bank}.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Response Codes}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l L P{0.3\textwidth}@{}}
+\toprule
+\textbf{Code} & \textbf{Meaning} & \textbf{Used by} \\
+\midrule
+\texttt{00} & Success & Both \\
+\texttt{01} & Consumer number not found & Both \\
+\texttt{02} & No voucher has been issued for this student & Both \\
+\texttt{03} & Voucher is already paid & Both \\
+\texttt{04} & Voucher validity has expired; a new voucher must be issued by the school & Both \\
+\texttt{05} & Voucher is not payable (cancelled or written off) & Both \\
+\texttt{06} & Amount does not match the payable amount & Payment \\
+\texttt{07} & A newer voucher has been issued; inquire again & Payment \\
+\texttt{08} & Duplicate transaction; already posted & Payment (treat as success) \\
+\texttt{09} & Invalid request & Payment \\
+\texttt{10} & Invalid credentials & Both \\
+\texttt{99} & General error; retry later & Both (resend with the same \texttt{transaction\_id}) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ---------------------------------------------------------------------------
+\section{Testing}
+There is \textbf{no UAT}. UBL tests against production, on test students in the Kaneez Fatima class IX test class.
+Their payments post real deposits, so they must land only on these students.
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{CC} & \textbf{Set up for} \\
+\midrule
+44 & Unpaid voucher (1Bill tested on it 18 November 2026, receipt 7074) \\
+1 & Unpaid voucher, for 1Bill \\
+2 & Overdue voucher (late fee applies) \\
+3 & Part-paid voucher \\
+4 & Latest voucher expired: code \texttt{04} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\begin{itemize}[nosep]
+  \item 1Bill test numbers are \texttt{1000000000} + the CC padded to 5 (\texttt{100000000000044}).
+  \item CC 5 is TAFS's own reconciliation test payment, not one of UBL's cases.
+  \item States change as UBL pays. TAFS reverses \texttt{payment\_method = ubl} deposits on these students on request
+        and at the end of testing, latest first. That removes them from TAFS only; it does not return the money at the
+        bank.
+  \item The test credentials and full scenarios are in the separate test data document sent to UBL. They are not
+        reproduced here.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Changes Since Version 1.3}
+The API has not changed since version 1.3 (23 November 2026). Checking that document against the code found these
+gaps, now covered above:
+\begin{itemize}[nosep]
+  \item Any request field or query parameter the API does not define is refused with HTTP 400 (also told to UBL on
+        25 November).
+  \item The HTTP 400 body is \texttt{\{"status":400,"message":[...],"data":null\}}, not UBL's \texttt{response\_code}
+        format; a 403 body also carries \texttt{client\_ip}.
+  \item A payment's due-date and validity checks use \texttt{transaction\_datetime}, not the time it reaches TAFS.
+  \item The default rate limit is 600 requests a minute per caller IP, and a bad allow-list fails closed with 503.
+  \item A transaction id stays a duplicate after its deposit is reversed; the \texttt{08} reply then names a deposit
+        that no longer exists.
+  \item \texttt{transaction\_datetime} also accepts \texttt{YYYYMMDDHHmm} (no seconds).
+  \item The inquiry still accepts, and ignores, an optional \texttt{channel} parameter.
+  \item Until \texttt{UBL\_1BILL\_PREFIX} is set, 1Bill numbers use the placeholder prefix \texttt{1000000000}. UBL had
+        not issued the production prefix as of 23 November 2026.
+\end{itemize}
+
+\end{document}

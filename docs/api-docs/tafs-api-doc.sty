@@ -1,0 +1,58 @@
+% TAFSD-614: shared look of the TAFS API documents, matching the UBL
+% specification sent to UBL (docs/ubl-api). A4, 11pt, 1in margins.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{tafs-api-doc}
+
+\RequirePackage[a4paper, margin=1in]{geometry}
+\RequirePackage{xcolor}
+\RequirePackage{booktabs}
+\RequirePackage{longtable}
+\RequirePackage{tabularx}
+\RequirePackage{array}
+\RequirePackage{enumitem}
+\RequirePackage{listings}
+\RequirePackage{hyperref}
+\RequirePackage{fancyhdr}
+
+\definecolor{codebg}{HTML}{F5F7FA}
+\definecolor{tafsblue}{HTML}{1F3A68}
+\definecolor{warnbg}{HTML}{FFF7E6}
+\hypersetup{colorlinks=true, linkcolor=tafsblue, urlcolor=tafsblue}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!20},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  tabsize=4,
+  xleftmargin=4pt,
+  xrightmargin=4pt
+}
+
+% Long identifiers in \texttt may break after an underscore, and a little extra
+% stretch keeps paragraphs with long paths inside the margins.
+\setlength{\emergencystretch}{4em}
+\DeclareRobustCommand{\_}{\textunderscore\allowbreak}
+\urlstyle{tt}
+
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\newcolumntype{R}{>{\raggedleft\arraybackslash}X}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+% \tafsheader{Left header text}
+\newcommand{\tafsheader}[1]{%
+  \pagestyle{fancy}\fancyhf{}%
+  \lhead{\small #1}\rhead{\small The American Foundation School}\cfoot{\small \thepage}%
+  \renewcommand{\headrulewidth}{0.4pt}}
+
+% A shaded note box.
+\newcommand{\tafsnote}[1]{%
+  \par\noindent\colorbox{warnbg}{\parbox{\dimexpr\textwidth-2\fboxsep}{\small #1}}\par\medskip}
+
+\newcommand{\internalonly}{%
+  \tafsnote{\textbf{Internal document.} For TAFS staff holding the API Docs permission. Credentials are never
+  written here; they are issued separately.}}
