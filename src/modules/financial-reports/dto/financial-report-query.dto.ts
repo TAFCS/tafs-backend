@@ -19,6 +19,7 @@ import {
   toStringArray,
 } from '../../../common/transforms/query-array.transform';
 import { SEVERITY_BAND_IDS, SeverityBand } from '../defaulter-severity';
+import { FEE_POSITION_LAYOUTS, type FeePositionLayout } from '../fee-position';
 
 function toOptionalBoolean({ value }: { value: unknown }): boolean | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -516,6 +517,41 @@ export class ExportFeeHeadsQueryDto extends ListFeeHeadsQueryDto {
   @ArrayMinSize(1)
   @IsIn(DEFAULTER_COLUMN_KEYS, { each: true })
   columns?: DefaulterColumnKey[];
+}
+
+/**
+ * TAFSD-620: Consolidated Fee Position Statement — receivables, recoveries and
+ * balance for the fee heads the Fee Heads filters select (fee date range,
+ * campus, class, section, segment, student and fee status).
+ */
+export class ExportFeePositionQueryDto extends ListFeeHeadsQueryDto {
+  @IsOptional()
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  format?: 'xlsx' | 'csv' | 'pdf';
+
+  /** The PDF's paper; a sheet too wide for A4 prints on A3 regardless. Omitted = A4. */
+  @IsOptional()
+  @IsIn(['A4', 'A3'])
+  paper?: 'A4' | 'A3';
+
+  /** detail (default): a row per student; monthly: spread over the fee months; summary: by campus and class. */
+  @IsOptional()
+  @IsIn(FEE_POSITION_LAYOUTS)
+  layout?: FeePositionLayout;
+
+  /** The student layouts' groups, each with a SUBTOTAL. Omitted = no groups. */
+  @IsOptional()
+  @IsIn(DEFAULTER_GROUP_BY)
+  group_by?: DefaulterGroupBy;
+
+  /**
+   * Count heads never put on a voucher for students who have left, graduated
+   * or were expelled. Off by default: they will never be billed.
+   */
+  @IsOptional()
+  @Transform(toOptionalBoolean)
+  @IsBoolean()
+  include_unbilled_after_leaving?: boolean;
 }
 
 /** TAFSD-604: what the Deposits export produces. */

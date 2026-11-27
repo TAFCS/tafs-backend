@@ -29,6 +29,7 @@ import {
   ExportDepositsQueryDto,
   ExportFeeHeadsQueryDto,
   ExportFeeMatrixQueryDto,
+  ExportFeePositionQueryDto,
   ListDefaultersQueryDto,
   ListDepositsQueryDto,
   ListFeeHeadsQueryDto,
@@ -137,6 +138,19 @@ export class FinancialReportsController {
     @Res() res: Response,
   ) {
     const file = await this.financialReportsService.exportFeeHeads(query, user);
+    this.sendFile(res, file);
+  }
+
+  /** TAFSD-620: Consolidated Fee Position Statement, from the Fee Heads page. */
+  @Get('fee-position/export')
+  @CheckPolicies(canReadAnalytics)
+  @RequireAction('finance.financial_reports#fee_heads.view', 'finance.financial_reports#export')
+  async exportFeePosition(
+    @Query() query: ExportFeePositionQueryDto,
+    @CurrentUser() user: IJwtStaffPayload,
+    @Res() res: Response,
+  ) {
+    const file = await this.financialReportsService.exportFeePosition(query, user);
     this.sendFile(res, file);
   }
 

@@ -43,6 +43,7 @@ import type {
   ExportDepositsQueryDto,
   ExportFeeHeadsQueryDto,
   ExportFeeMatrixQueryDto,
+  ExportFeePositionQueryDto,
   FinancialReportQueryDto,
   DefaulterColumnKey,
   ListDefaultersQueryDto,
@@ -78,6 +79,18 @@ import {
   type RecoverySummary,
   summarizeRecoveries,
 } from './consolidated-recoveries';
+import {
+  buildFeePositionSheets,
+  FEE_POSITION_LAYOUT_LINE,
+  FEE_POSITION_IDENTITY_LINE,
+  FEE_POSITION_TITLE,
+  type FeePositionGroupBy,
+  type FeePositionLayout,
+  type FeePositionStudent,
+  feePositionCsv,
+  NO_LONGER_BILLED_STATUSES,
+  summarizePositions,
+} from './fee-position';
 import type { SheetPaper } from './sheet-pdf';
 import { fitSheetToText, headerText, schoolWorkbookFile, writeBanner, writeEmptySheet, writeTitleBlock } from './school-sheet-common';
 
@@ -2289,6 +2302,204 @@ export class FinancialReportsService {
       emptyMessage: 'No deposits match the current filters.',
       emptySheetName: 'Consolidated Recoveries',
     });
+  }
+
+  /**
+   * TAFSD-620: Consolidated Fee Position Statement — for the fee heads the Fee
+   * Heads filters select (fee date in range, no arrear surcharges), what was
+   * receivable, what has been recovered against it and what is still owed,
+   * side by side. The money rules and layouts are in fee-position.ts; this
+   * loads the same groupBy the Fee Heads by student sheet sums, so BILLED,
+   * DISCOUNT, WAIVED, TOTAL RECOVERED and NET BALANCE equal that sheet's
+   * AMOUNT / PAID / WAIVED / OUTSTANDING for the same filters, except for:
+   *
+   * - heads never put on a voucher for a student who has left, graduated or
+   *   was expelled, left out unless include_unbilled_after_leaving (they will
+   *   never be billed; the sheet says how much was left out), and
+   * - LPS: late fee and arrear surcharge collected on vouchers with a fee date
+   *   in the range, shown beside the recoveries but never in the identity.
+   */
+  async exportFeePosition(
+    query: ExportFeePositionQueryDto,
+    user: IJwtStaffPayload,
+  ): Promise<ExportFile> {
+    this.assertDateRange(query);
+    const layout: FeePositionLayout = query.layout ?? 'detail';
+    const leaf = this.feeHeadsLeafWhere(query);
+    const studentWhere = this.buildStudentWhere(query, user);
+    const noLongerBilled = [...NO_LONGER_BILLED_STATUSES] as student_status[];
+    const unbilledAfterLeaving: Prisma.student_feesWhereInput = {
+      status: fee_status_enum.NOT_ISSUED,
+      students: { status: { in: noLongerBilled } },
+    };
+    const where: Prisma.student_feesWhereInput = {
+      ...leaf,
+      students: studentWhere,
+      ...(query.include_unbilled_after_leaving ? {} : { NOT: unbilledAfterLeaving }),
+    };
+
+    const [groups, credit, leftOut] = await Promise.all([
+      this.prisma.student_fees.groupBy({
+        by: ['student_id', 'fee_date', 'is_discount', 'status'],
+        where,
+        _sum: { amount: true, amount_paid: true },
+      }),
+      // Rule E: what a credit payment put on these heads; the rest of recovered is cash.
+      this.prisma.deposit_allocations.findMany({
+        where: { type: 'FEE_HEAD', deposits: { from_credit: true }, student_fees: where },
+        select: {
+          amount: true,
+          student_fees: { select: { student_id: true, fee_date: true, is_discount: true, status: true } },
+        },
+      }),
+      query.include_unbilled_after_leaving
+        ? Promise.resolve([] as Array<{ is_discount: boolean; _sum: { amount: Prisma.Decimal | null } }>)
+        : this.prisma.student_fees.groupBy({
+            by: ['is_discount'],
+            where: { AND: [{ ...leaf, students: studentWhere }, unbilledAfterLeaving] },
+            _sum: { amount: true },
+          }),
+    ]);
+
+    const monthOf = (d: Date | null) => (d ? d.getUTCFullYear() * 12 + d.getUTCMonth() : -1);
+    const keyOf = (r: { student_id: number; fee_date: Date | null; is_discount: boolean; status: string | null }) =>
+      `${r.student_id}|${r.fee_date?.toISOString() ?? ''}|${r.is_discount}|${r.status ?? ''}`;
+    const creditByKey = new Map<string, number>();
+    for (const a of credit) {
+      if (!a.student_fees) continue;
+      const key = keyOf(a.student_fees);
+      creditByKey.set(key, this.roundMoney((creditByKey.get(key) ?? 0) + this.toMoney(a.amount)));
+    }
+    const positions = summarizePositions(
+      groups.map((g) => ({
+        studentId: g.student_id,
+        month: monthOf(g.fee_date),
+        isDiscount: g.is_discount,
+        status: String(g.status ?? ''),
+        amount: this.toMoney(g._sum.amount),
+        amountPaid: this.toMoney(g._sum.amount_paid),
+        fromCredit: g.is_discount ? 0 : creditByKey.get(keyOf(g)) ?? 0,
+      })),
+    );
+
+    const ids = [...positions.keys()];
+    this.assertExportCap(ids.length);
+    if (query.format === 'pdf' && layout !== 'summary' && ids.length > PDF_EXPORT_ROW_CAP) {
+      throw new BadRequestException(
+        `PDF export is limited to ${PDF_EXPORT_ROW_CAP.toLocaleString()} students (this has ${ids.length.toLocaleString()}). Narrow the filters, use the summary, or export Excel.`,
+      );
+    }
+    const [students, lpsRows] = await Promise.all([
+      this.prisma.students.findMany({
+        where: { cc: { in: ids } },
+        select: {
+          cc: true,
+          gr_number: true,
+          full_name: true,
+          status: true,
+          class_id: true,
+          graduated_from_class_id: true,
+          campuses: { select: { campus_name: true, campus_code: true } },
+          classes: { select: { description: true } },
+          graduated_from_class: { select: { description: true } },
+          sections: { select: { description: true } },
+          families: { select: { id: true, household_name: true } },
+        },
+      }),
+      this.prisma.deposit_allocations.findMany({
+        where: {
+          type: { in: ['LATE_FEE', 'SURCHARGE'] },
+          vouchers: { fee_date: leaf.fee_date as Prisma.DateTimeNullableFilter },
+          deposits: { student_id: { in: ids } },
+        },
+        select: { amount: true, deposits: { select: { student_id: true } } },
+      }),
+    ]);
+    const lps = new Map<number, number>();
+    for (const r of lpsRows) {
+      const cc = r.deposits.student_id;
+      lps.set(cc, this.roundMoney((lps.get(cc) ?? 0) + this.toMoney(r.amount)));
+    }
+    const rows: FeePositionStudent[] = students.map((st) => ({
+      cc: st.cc,
+      gr: st.gr_number ?? '',
+      name: st.full_name ?? '',
+      status: st.status,
+      classId: st.status === student_status.GRADUATED ? st.graduated_from_class_id : st.class_id,
+      className: this.resolveStudentClassName(st),
+      section: st.sections?.description ?? '',
+      campusCode: st.campuses?.campus_code ?? '',
+      campusName: st.campuses?.campus_name ?? '',
+      family: st.families ? { id: st.families.id, name: st.families.household_name.trim() } : null,
+    }));
+
+    const toIdx = (d: string) => Number(d.slice(0, 4)) * 12 + Number(d.slice(5, 7)) - 1;
+    const months: number[] = [];
+    for (let i = toIdx(query.from_date); i <= toIdx(query.to_date); i++) months.push(i);
+    const groupBy: FeePositionGroupBy = layout === 'summary' ? '' : query.group_by ?? '';
+    const basename = `consolidated-fee-position-${layout}-${query.from_date}-to-${query.to_date}`;
+    const sheetInput = { layout, groupBy, students: rows, positions, lps, months };
+
+    if (query.format === 'csv') {
+      return {
+        buffer: Buffer.from(feePositionCsv(sheetInput), 'utf8'),
+        filename: `${basename}.csv`,
+        contentType: 'text/csv; charset=utf-8',
+      };
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'The American Foundation School';
+    if (rows.length === 0) {
+      writeEmptySheet(workbook, 'Fee Position', 'Nothing matches the current filters.');
+      return schoolWorkbookFile(workbook, query, basename, FEE_POSITION_TITLE);
+    }
+
+    const today = this.todayPkt();
+    const names = await this.loadDefaulterFilterNames(query);
+    const classFiltered = Boolean(query.class_id?.length || query.segment_id?.length);
+    const heading = defaulterSheetHeading(
+      rows.map((r) => ({ class_id: r.classId, class_name: r.className })),
+      classFiltered,
+      query.to_date,
+    );
+    const leftOutAmount = this.roundMoney(
+      leftOut.reduce((sum, g) => sum + (g.is_discount ? -1 : 1) * this.toMoney(g._sum.amount), 0),
+    );
+    const { columns, sheets } = buildFeePositionSheets({ ...sheetInput, blankZeros: true });
+    writeSchoolSheets(workbook, sheets, {
+      reportTitle: FEE_POSITION_TITLE,
+      heading,
+      periodLine: `FEE DATES ${periodLine(query.from_date, query.to_date)}`,
+      filterLines: defaulterFilterLines(
+        query,
+        names,
+        `RECOVERIES AND BALANCE AS OF ${periodLine(today, today).replace(/^ON /, '')}`,
+        heading.classesLine != null,
+        [],
+        [
+        FEE_POSITION_LAYOUT_LINE[layout],
+        ...this.feeHeadsFilterWords(query),
+        ...(groupBy ? [`GROUPED BY ${groupBy.toUpperCase()}`] : []),
+        ...(leftOutAmount > 0
+          ? [`NOT COUNTED: ${leftOutAmount.toLocaleString('en-US')} NEVER BILLED TO STUDENTS WHO HAVE LEFT, GRADUATED OR BEEN EXPELLED`]
+          : []),
+        ...(layout === 'monthly'
+          ? ['RECEIVABLES ARE NET OF DISCOUNT AND WAIVER   ·   EACH MONTH: RECEIVABLE - RECOVERED = BALANCE']
+          : [FEE_POSITION_IDENTITY_LINE]),
+        ],
+      ),
+      exportDate: today,
+      generatedLine: `GENERATED ON ${this.formatPktDateTime(new Date())} BY ${await this.staffLabel(user)}`,
+      columns,
+    });
+    return schoolWorkbookFile(
+      workbook,
+      query,
+      basename,
+      FEE_POSITION_TITLE,
+      layout === 'monthly' ? 'Shorten the date range, or export Excel.' : 'Narrow the filters, or export Excel.',
+    );
   }
 
   /**

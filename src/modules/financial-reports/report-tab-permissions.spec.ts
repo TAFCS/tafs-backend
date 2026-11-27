@@ -76,6 +76,7 @@ describe('Financial Reports tab permissions', () => {
     expectRoute('fee-heads', ['fee_heads.view']);
     expectRoute('fee-heads/export', ['fee_heads.view', 'export']);
     expectRoute('fee-heads/snapshots', ['fee_heads.view']);
+    expectRoute('fee-position/export', ['fee_heads.view', 'export']);
     expectRoute('deposits', ['deposits.view']);
     expectRoute('deposits/export', ['deposits.view', 'export']);
     expectRoute('fee-matrix', ['fee_matrix.view']);
