@@ -9,6 +9,13 @@ Voucher-issuance code duplication is documented in
 `src/modules/vouchers/CLAUDE.md` — read it too before touching `create()` /
 `splitPartiallyPaid()`.
 
+**Extracurricular fees are a separate system (TAFSD-605).** The `ec_*` tables
+and `src/modules/extracurricular/` have their own rules in
+`src/modules/extracurricular/CLAUDE.md`: no arrears, no voiding, no late fee, an
+issue date and an expiry date only. The rules in this file cover academic fees
+and do not apply there. The two never cross: academic code never reads `ec_*`
+tables, and EC code never reads or writes the academic money tables above.
+
 ---
 
 ## Coral9 tickets

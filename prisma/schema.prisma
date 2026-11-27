@@ -165,6 +165,8 @@ model campuses {
   vouchers                      vouchers[]
   exam_schedules                exam_schedules[]
   attendance_non_enrolled_scans attendance_non_enrolled_scans[]
+  ec_class_fee_schedule         ec_class_fee_schedule[]
+  ec_vouchers                   ec_vouchers[]
 }
 
 model class_fee_schedule {
@@ -210,6 +212,8 @@ model classes {
   exam_schedule_classes              exam_schedule_classes[]
   exam_schedule_papers               exam_schedule_papers[]
   exam_documents                     exam_documents[]
+  ec_class_fee_schedule              ec_class_fee_schedule[]
+  ec_vouchers                        ec_vouchers[]
 }
 
 model segments {
@@ -452,6 +456,7 @@ model sections {
   students                           students[]
   timetables                         timetables[]
   vouchers                           vouchers[]
+  ec_vouchers                        ec_vouchers[]
 }
 
 model subjects {
@@ -909,6 +914,10 @@ model students {
 
   exam_documents          exam_documents[]
   exam_schedule_fee_dates exam_schedule_fee_dates[]
+
+  ec_student_charges ec_student_charges[]
+  ec_vouchers        ec_vouchers[]
+  ec_deposits        ec_deposits[]
 
   @@index([campus_id], map: "idx_students_campus_id")
   @@index([class_id], map: "idx_students_class_id")
@@ -3768,4 +3777,218 @@ model ubl_settlement_lines {
   @@index([import_id])
   @@index([transaction_date])
   @@index([settlement_date])
+}
+
+// ─── Extracurricular (EC) fees: TAFSD-605 ───────────────────────────────────
+// A billing flow of its own, separate from academic fees: its own heads, class
+// amounts, per-student charges, vouchers and deposits. No academic table points
+// at these, and no EC table points at an academic money table. No due date, no
+// late fee, no arrears, no voiding. Rules: src/modules/extracurricular/CLAUDE.md.
+
+enum ec_fee_frequency {
+  MONTHLY
+  ONE_TIME
+}
+
+enum ec_charge_status {
+  NOT_ISSUED
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  WAIVED
+}
+
+/// EXPIRED and REISSUED are derived when read (ec-voucher-state.ts), never stored.
+enum ec_voucher_status {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  WAIVED
+}
+
+/// TAFSD-605: an extracurricular fee head (Scouts Registration, Sports Club, ...).
+model ec_fee_heads {
+  id                    Int                     @id @default(autoincrement())
+  /// Upper-cased; unique.
+  name                  String                  @unique @db.VarChar(100)
+  frequency             ec_fee_frequency
+  /// Calendar months (1-12) it is charged in. A ONE_TIME head holds exactly one.
+  months                Int[]                   @default([])
+  sort_order            Int                     @default(0)
+  is_active             Boolean                 @default(true)
+  created_by            String?                 @db.VarChar(100)
+  created_at            DateTime                @default(now()) @db.Timestamp(6)
+  updated_at            DateTime                @default(now()) @updatedAt @db.Timestamp(6)
+  ec_class_fee_schedule ec_class_fee_schedule[]
+  ec_student_charges    ec_student_charges[]
+}
+
+/// TAFSD-605: an EC head's amount for a class in an academic year. campus_id
+/// null means every campus; a row for the student's own campus beats it.
+model ec_class_fee_schedule {
+  id            Int          @id @default(autoincrement())
+  class_id      Int
+  fee_head_id   Int
+  campus_id     Int?
+  academic_year String       @db.VarChar(10)
+  amount        Decimal      @db.Decimal(12, 2)
+  updated_by    String?      @db.VarChar(100)
+  updated_at    DateTime     @default(now()) @updatedAt @db.Timestamp(6)
+  classes       classes      @relation(fields: [class_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ec_fee_heads  ec_fee_heads @relation(fields: [fee_head_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  campuses      campuses?    @relation(fields: [campus_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([class_id, fee_head_id, campus_id, academic_year])
+  @@index([academic_year])
+}
+
+/// TAFSD-605: what one student is charged for one EC head in one month (the
+/// student-override twin of student_fees). current_voucher_id is the one voucher
+/// billing it now, live or lapsed; null means NOT_ISSUED.
+model ec_student_charges {
+  id                     Int                      @id @default(autoincrement())
+  student_id             Int
+  fee_head_id            Int
+  academic_year          String                   @db.VarChar(10)
+  /// Calendar month 1-12.
+  target_month           Int
+  /// The 1st of the month the charge falls in, fixed when the charge is made.
+  period                 DateTime                 @db.Date
+  amount                 Decimal                  @db.Decimal(12, 2)
+  amount_paid            Decimal                  @default(0) @db.Decimal(12, 2)
+  waived_amount          Decimal                  @default(0) @db.Decimal(12, 2)
+  status                 ec_charge_status         @default(NOT_ISSUED)
+  current_voucher_id     Int?
+  /// SCHEDULE (taken from the class amount) or CUSTOM (typed in).
+  source                 String                   @default("CUSTOM") @db.VarChar(20)
+  remarks                String?                  @db.VarChar(255)
+  created_by             String?                  @db.VarChar(100)
+  created_at             DateTime                 @default(now()) @db.Timestamp(6)
+  updated_at             DateTime                 @default(now()) @updatedAt @db.Timestamp(6)
+  students               students                 @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  ec_fee_heads           ec_fee_heads             @relation(fields: [fee_head_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  current_voucher        ec_vouchers?             @relation("ec_charge_current_voucher", fields: [current_voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ec_voucher_lines       ec_voucher_lines[]
+  ec_deposit_allocations ec_deposit_allocations[]
+
+  @@unique([student_id, fee_head_id, academic_year, target_month])
+  @@index([current_voucher_id])
+  @@index([student_id, status])
+  @@index([fee_head_id, period])
+}
+
+/// TAFSD-605: an extracurricular voucher (challan). Never voided and never
+/// absorbs another voucher; no due date, late fee or arrears. Numbered
+/// "EC" + MMYY + the id, so it can never be mistaken for an academic voucher.
+model ec_vouchers {
+  id                       Int                  @id @default(autoincrement())
+  voucher_number           String?              @unique @db.VarChar(16)
+  student_id               Int
+  /// Placement copied at issue, never rewritten.
+  campus_id                Int
+  class_id                 Int
+  section_id               Int?
+  academic_year            String               @db.VarChar(10)
+  issue_date               DateTime             @db.Date
+  expiry_date              DateTime             @db.Date
+  status                   ec_voucher_status    @default(UNPAID)
+  total_amount             Decimal              @db.Decimal(12, 2)
+  amount_paid              Decimal              @default(0) @db.Decimal(12, 2)
+  amount_waived            Decimal              @default(0) @db.Decimal(12, 2)
+  /// A plain id, deliberately without a foreign key: deleting a bank account
+  /// only knows about academic vouchers.
+  bank_account_id          Int?
+  /// The bank details printed on the challan, copied at issue.
+  bank_snapshot            Json
+  /// The expired voucher this one reissued. Unique: a voucher is reissued once.
+  reissued_from_voucher_id Int?                 @unique
+  waived_at                DateTime?            @db.Timestamptz(6)
+  waived_by                String?              @db.VarChar(100)
+  waive_reason             String?              @db.VarChar(500)
+  /// Cache of the latest unpaid render, keyed by a hash of what it shows.
+  pdf_url                  String?
+  pdf_hash                 String?              @db.VarChar(64)
+  /// The stamped receipt: written once, cleared only when the voucher leaves PAID.
+  paid_pdf_url             String?
+  paid_pdf_filename        String?              @db.VarChar(255)
+  paid_pdf_generated_at    DateTime?            @db.Timestamp(6)
+  generated_by_name        String?              @db.VarChar(100)
+  created_by               String?              @db.VarChar(100)
+  bulk_run_id              String?              @db.VarChar(36)
+  created_at               DateTime             @default(now()) @db.Timestamp(6)
+  updated_at               DateTime             @default(now()) @updatedAt @db.Timestamp(6)
+  students                 students             @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  campuses                 campuses             @relation(fields: [campus_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  classes                  classes              @relation(fields: [class_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections                 sections?            @relation(fields: [section_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reissued_from            ec_vouchers?         @relation("ec_voucher_reissue", fields: [reissued_from_voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reissued_to              ec_vouchers?         @relation("ec_voucher_reissue")
+  ec_voucher_lines         ec_voucher_lines[]
+  ec_deposits              ec_deposits[]
+  current_charges          ec_student_charges[] @relation("ec_charge_current_voucher")
+
+  @@index([student_id, status])
+  @@index([expiry_date])
+  @@index([issue_date])
+  @@index([campus_id, class_id])
+  @@index([bulk_run_id])
+}
+
+/// TAFSD-605: one charge on one EC voucher. amount is what the charge still owed
+/// when this voucher was issued.
+model ec_voucher_lines {
+  id                     Int                      @id @default(autoincrement())
+  voucher_id             Int
+  charge_id              Int
+  description            String                   @db.VarChar(150)
+  amount                 Decimal                  @db.Decimal(12, 2)
+  amount_paid            Decimal                  @default(0) @db.Decimal(12, 2)
+  waived_amount          Decimal                  @default(0) @db.Decimal(12, 2)
+  sort_order             Int                      @default(0)
+  ec_vouchers            ec_vouchers              @relation(fields: [voucher_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ec_student_charges     ec_student_charges       @relation(fields: [charge_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ec_deposit_allocations ec_deposit_allocations[]
+
+  @@unique([voucher_id, charge_id])
+  @@index([charge_id])
+}
+
+/// TAFSD-605: money received against exactly one EC voucher.
+model ec_deposits {
+  id                     Int                      @id @default(autoincrement())
+  voucher_id             Int
+  student_id             Int
+  amount                 Decimal                  @db.Decimal(12, 2)
+  /// The day it was paid (from the bank stamp), not the day it was recorded.
+  deposit_date           DateTime                 @db.Date
+  payment_method         String                   @db.VarChar(30)
+  reference_number       String?                  @db.VarChar(100)
+  bank_name              String?                  @db.VarChar(100)
+  remarks                String?                  @db.VarChar(500)
+  recorded_by            String?                  @db.VarChar(100)
+  recorded_by_name       String?                  @db.VarChar(100)
+  created_at             DateTime                 @default(now()) @db.Timestamp(6)
+  ec_vouchers            ec_vouchers              @relation(fields: [voucher_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students               students                 @relation(fields: [student_id], references: [cc], onDelete: Cascade, onUpdate: NoAction)
+  ec_deposit_allocations ec_deposit_allocations[]
+
+  @@index([voucher_id])
+  @@index([student_id])
+  @@index([deposit_date])
+}
+
+/// TAFSD-605: how one EC deposit splits across its voucher's lines.
+model ec_deposit_allocations {
+  id                 Int                @id @default(autoincrement())
+  deposit_id         Int
+  line_id            Int
+  charge_id          Int
+  amount             Decimal            @db.Decimal(12, 2)
+  ec_deposits        ec_deposits        @relation(fields: [deposit_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ec_voucher_lines   ec_voucher_lines   @relation(fields: [line_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ec_student_charges ec_student_charges @relation(fields: [charge_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([deposit_id, line_id])
+  @@index([line_id])
+  @@index([charge_id])
 }

@@ -25,6 +25,12 @@ const SECTION_ENTITY_TYPES: Record<string, string[]> = {
     'STUDENT_FEE_INSTALLMENT',
     'BUNDLE_NAME',
     'FAMILY_CREDIT',
+    // TAFSD-605: extracurricular fees.
+    'EC_FEE_HEAD',
+    'EC_CLASS_FEE_SCHEDULE',
+    'EC_STUDENT_CHARGE',
+    'EC_VOUCHER',
+    'EC_DEPOSIT',
   ],
   communication: ['NOTICE', 'EMPLOYEE_NOTICE', 'SUPPORT_TICKET', 'SUPPORT_TICKET_ROUTING', 'CHAT_CONVERSATION', 'CHAT_MESSAGE'],
   hr: [

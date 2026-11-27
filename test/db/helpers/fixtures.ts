@@ -46,6 +46,15 @@ const EDIT_CAP = 'fee_admin.studentwise_schedule.edit';
 // (permissions, tiles) are deliberately left alone.
 const TABLES = [
     'audit_logs',
+    // TAFSD-605: extracurricular fees. ec_fee_heads is not reached by the CASCADE
+    // from students, so every EC table is cleared by name.
+    'ec_deposit_allocations',
+    'ec_deposits',
+    'ec_voucher_lines',
+    'ec_student_charges',
+    'ec_vouchers',
+    'ec_class_fee_schedule',
+    'ec_fee_heads',
     'family_credit_ledger',
     'deposit_allocations',
     'deposits',

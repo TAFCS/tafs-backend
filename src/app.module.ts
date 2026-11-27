@@ -27,6 +27,7 @@ import { StudentDocumentsModule } from './modules/student-documents/student-docu
 import { FamilyCreditModule } from './modules/family-credit/family-credit.module';
 import { ApiDocsModule } from './modules/api-docs/api-docs.module';
 import { ExamDocumentsModule } from './modules/exam-documents/exam-documents.module';
+import { ExtracurricularModule } from './modules/extracurricular/extracurricular.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { BulkVoucherJobsModule } from './modules/bulk-voucher-jobs/bulk-voucher-jobs.module';
 import { EnrollmentModule } from './modules/enrollments/enrollment.module';
@@ -93,6 +94,7 @@ import { McpModule } from './modules/mcp/mcp.module';
     FamilyCreditModule,
     ApiDocsModule,
     ExamDocumentsModule,
+    ExtracurricularModule,
     VouchersModule,
     BulkVoucherJobsModule,
     EnrollmentModule,

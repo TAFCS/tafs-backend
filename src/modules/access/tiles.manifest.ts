@@ -678,6 +678,30 @@ const FAMILY_CREDIT_ACTIONS: TileAction[] = [
   { id: 'export', label: 'Export the list to Excel', implies: ['view'] },
 ];
 
+// TAFSD-605: Extracurricular Fees, a module of its own (module `extracurricular`)
+// so extracurricular billing stays visibly apart from academic Finance. Its
+// tiles work on the ec_* tables only. No legacy capability bridges into them:
+// like every web tile they are default-deny and granted per person. Shared
+// feeders (the fee-head picker) let in any tile listed in EC_LIVE_TILES
+// (extracurricular/ec.constants.ts), which must match the tiles below.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_FEE_HEADS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Fee Heads', description: 'See every extracurricular head and how much it is used', default: true },
+
+  { id: 'create', label: 'Add a head', implies: ['view'] },
+  { id: 'edit', label: 'Rename, re-schedule, reorder or deactivate a head', description: 'Charges already made from the head keep their own months and amounts', implies: ['view'] },
+  { id: 'delete', label: 'Delete a head nobody is charged for', implies: ['view'] },
+];
+
+// TAFSD-605: Extracurricular Fees → Class Amounts.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_CLASS_SCHEDULE_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Class Amounts', description: "See each head's amount per class and year", default: true },
+
+  { id: 'edit', label: 'Set and clear class amounts', description: 'A campus-scoped user changes only their own campuses, never the all-campus amounts', implies: ['view'] },
+  { id: 'copy_year', label: "Copy a year's amounts into another year", implies: ['view'] },
+];
+
 // TAFSD-510: Exam Documents. Schedules, and the admit cards (VI–X) / statements
 // of entry (every other class) issued from them to students whose dues are
 // cleared through the schedule's fee month. Overriding the dues check is its own
@@ -1135,6 +1159,10 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'finance.receive_deposit', module: 'finance', label: 'Receive Deposit', description: 'Record cash and cheque deposits', href: '/vouchers/deposit', capabilities: ['finance.deposits.record'], actions: RECEIVE_DEPOSIT_ACTIONS, legacyFullAccessCapabilities: ['finance.deposits.record'] },
   { id: 'finance.family_credit', module: 'finance', label: 'Family Credit', description: 'Credit families hold from overpayments: balances, history, add, deduct, refund and move', href: '/family-credit', capabilities: ['finance.family_credit.view'], actions: FAMILY_CREDIT_ACTIONS },
   { id: 'finance.postdated_cheques', module: 'finance', label: 'Post-dated Cheques', description: 'Cheque tracking and alerts', href: '/postdated-cheques', capabilities: ['finance.postdated_cheques.view'], actions: POSTDATED_CHEQUES_ACTIONS },
+
+  // ── Extracurricular Fees (TAFSD-605) ─────────────────────────────────────
+  { id: 'extracurricular.fee_heads', module: 'extracurricular', label: 'Fee Heads', description: 'Extracurricular heads: name, monthly or one-time, and the months they fall in', href: '/extracurricular/fee-heads', capabilities: ['extracurricular.fee_heads.view'], actions: EC_FEE_HEADS_ACTIONS },
+  { id: 'extracurricular.class_schedule', module: 'extracurricular', label: 'Class Amounts', description: "Each extracurricular head's amount per class and academic year", href: '/extracurricular/class-schedule', capabilities: ['extracurricular.class_schedule.view'], actions: EC_CLASS_SCHEDULE_ACTIONS },
 
   // ── Communications ───────────────────────────────────────────────────────
   { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },

@@ -55,6 +55,9 @@ const permissionsList = [
     { key: 'finance.family_credit.view', module: 'Finance Operations', description: 'Open Family Credit' },
     // TAFSD-556: granted with the Not Enrolled Check-ins tile, per person.
     { key: 'attendance.non_enrolled_check_ins.view', module: 'HR & Attendance', description: 'Open Not Enrolled Check-ins' },
+    // TAFSD-605: granted with the Extracurricular Fees tiles, per person.
+    { key: 'extracurricular.fee_heads.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Fee Heads' },
+    { key: 'extracurricular.class_schedule.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Class Amounts' },
 
     // System Administration
     { key: 'system.users.view', module: 'System Administration', description: 'View staff accounts' },
