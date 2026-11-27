@@ -702,6 +702,17 @@ const EC_CLASS_SCHEDULE_ACTIONS: TileAction[] = [
   { id: 'copy_year', label: "Copy a year's amounts into another year", implies: ['view'] },
 ];
 
+// TAFSD-605: Extracurricular Fees → Student Charges, the EC twin of Student
+// Overrides. A charge can be changed here only until it is on a voucher.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_STUDENT_CHARGES_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Student Charges', description: "See a student's extracurricular charges", default: true },
+
+  { id: 'edit', label: "Change one student's charges", description: 'Add, change or remove charges not yet on a voucher', implies: ['view'] },
+  { id: 'bulk_assign', label: 'Charge a head to many students at once', description: 'By campus, class, section or a list of C.C.s, with a preview first', implies: ['view'] },
+  { id: 'bulk_remove', label: 'Remove a head from many students at once', description: 'Only charges not yet on a voucher, with a preview first', implies: ['view'] },
+];
+
 // TAFSD-510: Exam Documents. Schedules, and the admit cards (VI–X) / statements
 // of entry (every other class) issued from them to students whose dues are
 // cleared through the schedule's fee month. Overriding the dues check is its own
@@ -1163,6 +1174,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   // ── Extracurricular Fees (TAFSD-605) ─────────────────────────────────────
   { id: 'extracurricular.fee_heads', module: 'extracurricular', label: 'Fee Heads', description: 'Extracurricular heads: name, monthly or one-time, and the months they fall in', href: '/extracurricular/fee-heads', capabilities: ['extracurricular.fee_heads.view'], actions: EC_FEE_HEADS_ACTIONS },
   { id: 'extracurricular.class_schedule', module: 'extracurricular', label: 'Class Amounts', description: "Each extracurricular head's amount per class and academic year", href: '/extracurricular/class-schedule', capabilities: ['extracurricular.class_schedule.view'], actions: EC_CLASS_SCHEDULE_ACTIONS },
+  { id: 'extracurricular.student_charges', module: 'extracurricular', label: 'Student Charges', description: 'What each student is charged for extracurricular heads, one by one or in bulk', href: '/extracurricular/student-charges', capabilities: ['extracurricular.student_charges.view'], actions: EC_STUDENT_CHARGES_ACTIONS },
 
   // ── Communications ───────────────────────────────────────────────────────
   { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },

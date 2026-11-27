@@ -7,6 +7,7 @@
 export const EC_TILE = {
     feeHeads: 'extracurricular.fee_heads',
     classSchedule: 'extracurricular.class_schedule',
+    studentCharges: 'extracurricular.student_charges',
 } as const;
 
 /**
@@ -14,7 +15,7 @@ export const EC_TILE = {
  * picker) let in a caller holding any of them. Add a tile here in the same
  * change that adds it to the manifest; the access spec checks the two agree.
  */
-export const EC_LIVE_TILES: string[] = [EC_TILE.feeHeads, EC_TILE.classSchedule];
+export const EC_LIVE_TILES: string[] = [EC_TILE.feeHeads, EC_TILE.classSchedule, EC_TILE.studentCharges];
 
 /** Search feeders return at most this many rows (webapp Rule 2). */
 export const EC_SEARCH_LIMIT = 20;

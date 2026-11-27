@@ -1,8 +1,10 @@
 import 'reflect-metadata';
 
 import { StaffRole } from '@prisma/client';
+import { EcChargesController } from '../extracurricular/charges/ec-charges.controller';
 import { EcClassScheduleController } from '../extracurricular/class-schedule/ec-class-schedule.controller';
 import { EcFeeHeadsController } from '../extracurricular/fee-heads/ec-fee-heads.controller';
+import { StudentsController } from '../students/students.controller';
 import { EC_LIVE_TILES } from '../extracurricular/ec.constants';
 import { MANIFEST_EFFECTIVE_TILES, TILES_MANIFEST, actionKey } from './tiles.manifest';
 import { computeEffectiveAccess } from './access.effective';
@@ -14,7 +16,10 @@ import { REQUIRE_ACTION_KEY, type RequireActionMetadata } from '../../decorators
  * allowlist (EC_LIVE_TILES) matches the manifest.
  */
 
-const EC_CONTROLLERS = [EcFeeHeadsController, EcClassScheduleController];
+const EC_CONTROLLERS = [EcFeeHeadsController, EcClassScheduleController, EcChargesController];
+
+/** EC tiles whose pages pick a student, and so must be on the student search allowlist. */
+const EC_TILES_WITH_STUDENT_SEARCH = ['extracurricular.student_charges'];
 
 const ecTiles = TILES_MANIFEST.filter((t) => t.module === 'extracurricular');
 const tile = (id: string) => TILES_MANIFEST.find((t) => t.id === id);
@@ -41,7 +46,11 @@ const base = {
 
 describe('Extracurricular Fees tiles', () => {
     it('is a module of its own with the expected tiles', () => {
-        expect(ecTiles.map((t) => t.id).sort()).toEqual(['extracurricular.class_schedule', 'extracurricular.fee_heads']);
+        expect(ecTiles.map((t) => t.id).sort()).toEqual([
+            'extracurricular.class_schedule',
+            'extracurricular.fee_heads',
+            'extracurricular.student_charges',
+        ]);
         for (const t of ecTiles) {
             expect(t.href.startsWith('/extracurricular/')).toBe(true);
             expect(t.capabilities).toEqual([`${t.id}.view`]);
@@ -76,6 +85,12 @@ describe('Extracurricular Fees tiles', () => {
                 }
             }
         }
+    });
+
+    it('lets the EC pages that pick a student use the shared student search', () => {
+        const m = meta(StudentsController, 'searchSimple');
+        expect(m?.mode).toBe('tile');
+        for (const id of EC_TILES_WITH_STUDENT_SEARCH) expect(m?.tileIds).toContain(id);
     });
 
     it('gives no role an EC tile by default, even one holding every capability', () => {

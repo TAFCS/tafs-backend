@@ -58,6 +58,7 @@ const permissionsList = [
     // TAFSD-605: granted with the Extracurricular Fees tiles, per person.
     { key: 'extracurricular.fee_heads.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Fee Heads' },
     { key: 'extracurricular.class_schedule.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Class Amounts' },
+    { key: 'extracurricular.student_charges.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Student Charges' },
 
     // System Administration
     { key: 'system.users.view', module: 'System Administration', description: 'View staff accounts' },

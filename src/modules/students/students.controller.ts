@@ -57,6 +57,8 @@ export class StudentsController {
     'communication.notice_board',
     'student.enrollments',
     'student.families',
+    // TAFSD-605: Extracurricular Fees pages that pick a student.
+    'extracurricular.student_charges',
   )
   async searchSimple(@Query() query: SearchSimpleQueryDto, @CurrentUser() user: IJwtStaffPayload) {
     const results = await this.studentsService.searchSimple(query, user);

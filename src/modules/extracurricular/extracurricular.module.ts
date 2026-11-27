@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../../../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
+import { EcChargesController } from './charges/ec-charges.controller';
+import { EcChargesService } from './charges/ec-charges.service';
 import { EcClassScheduleController } from './class-schedule/ec-class-schedule.controller';
 import { EcClassScheduleService } from './class-schedule/ec-class-schedule.service';
 import { EcFeeHeadsController } from './fee-heads/ec-fee-heads.controller';
@@ -13,7 +15,8 @@ import { EcFeeHeadsService } from './fee-heads/ec-fee-heads.service';
  */
 @Module({
     imports: [PrismaModule, AuthModule],
-    controllers: [EcFeeHeadsController, EcClassScheduleController],
-    providers: [EcFeeHeadsService, EcClassScheduleService],
+    controllers: [EcFeeHeadsController, EcClassScheduleController, EcChargesController],
+    providers: [EcFeeHeadsService, EcClassScheduleService, EcChargesService],
+    exports: [EcChargesService],
 })
 export class ExtracurricularModule {}
