@@ -24,7 +24,7 @@ import {
     WaiveEcVoucherDto,
 } from './dto/ec-vouchers.dto';
 
-const LIST_SELECT = {
+export const EC_VOUCHER_LIST_SELECT = {
     id: true,
     voucher_number: true,
     student_id: true,
@@ -52,10 +52,10 @@ const LIST_SELECT = {
     reissued_from: { select: { id: true, voucher_number: true } },
     _count: { select: { ec_deposits: true, ec_voucher_lines: true } },
 } as const;
-type ListRow = Prisma.ec_vouchersGetPayload<{ select: typeof LIST_SELECT }>;
+type ListRow = Prisma.ec_vouchersGetPayload<{ select: typeof EC_VOUCHER_LIST_SELECT }>;
 
 const DETAIL_SELECT = {
-    ...LIST_SELECT,
+    ...EC_VOUCHER_LIST_SELECT,
     bank_snapshot: true,
     pdf_url: true,
     paid_pdf_url: true,
@@ -102,7 +102,7 @@ const ISSUABLE_CHARGE_SELECT = {
     ec_fee_heads: { select: { name: true, sort_order: true } },
 } as const;
 
-function listView(v: ListRow, today: string) {
+export function ecVoucherListView(v: ListRow, today: string) {
     const total = Number(v.total_amount);
     const paid = Number(v.amount_paid);
     const waived = Number(v.amount_waived);
@@ -142,7 +142,7 @@ function listView(v: ListRow, today: string) {
 function detailView(v: DetailRow, today: string) {
     const latestDepositId = v.ec_deposits[0]?.id ?? null;
     return {
-        ...listView(v, today),
+        ...ecVoucherListView(v, today),
         bank: v.bank_snapshot,
         has_pdf: !!(v.pdf_url || v.paid_pdf_url),
         lines: v.ec_voucher_lines.map((l) => {
@@ -209,7 +209,8 @@ export class EcVouchersService {
         return or.length ? { OR: or } : { id: -1 };
     }
 
-    private async filterWhere(user: IJwtStaffPayload, f: EcVoucherFilterDto): Promise<Prisma.ec_vouchersWhereInput> {
+    /** The list filters as a Prisma where, scope included. Shared with the reports. */
+    async filterWhere(user: IJwtStaffPayload, f: EcVoucherFilterDto): Promise<Prisma.ec_vouchersWhereInput> {
         for (const c of f.campus_ids ?? []) this.scope.assertCampus(user, c);
         const and: Prisma.ec_vouchersWhereInput[] = [this.scoped(user)];
         if (f.campus_ids?.length) and.push({ campus_id: { in: f.campus_ids } });
@@ -240,7 +241,7 @@ export class EcVouchersService {
         const where = await this.filterWhere(user, query);
         const [total, rows, sums] = await Promise.all([
             this.prisma.ec_vouchers.count({ where }),
-            this.prisma.ec_vouchers.findMany({ where, select: LIST_SELECT, orderBy: [{ issue_date: 'desc' }, { id: 'desc' }], skip: (page - 1) * limit, take: limit }),
+            this.prisma.ec_vouchers.findMany({ where, select: EC_VOUCHER_LIST_SELECT, orderBy: [{ issue_date: 'desc' }, { id: 'desc' }], skip: (page - 1) * limit, take: limit }),
             this.prisma.ec_vouchers.aggregate({ where, _sum: { total_amount: true, amount_paid: true, amount_waived: true } }),
         ]);
         const today = todayPktKey();
@@ -248,7 +249,7 @@ export class EcVouchersService {
         const paid = Number(sums._sum.amount_paid ?? 0);
         const waived = Number(sums._sum.amount_waived ?? 0);
         return {
-            items: rows.map((r) => listView(r, today)),
+            items: rows.map((r) => ecVoucherListView(r, today)),
             meta: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
             summary: { count: total, total_amount: billed, amount_paid: paid, amount_waived: waived, balance: Math.max(billed - paid - waived, 0) },
         };
@@ -364,7 +365,7 @@ export class EcVouchersService {
             }),
             this.prisma.ec_vouchers.findMany({
                 where: { student_id: cc, status: { in: ['UNPAID', 'PARTIALLY_PAID'] }, reissued_to: { is: null } },
-                select: LIST_SELECT,
+                select: EC_VOUCHER_LIST_SELECT,
                 orderBy: [{ expiry_date: 'asc' }, { id: 'asc' }],
             }),
         ]);
@@ -391,7 +392,7 @@ export class EcVouchersService {
                 period_label: ecPeriodLabel(c.period),
                 amount: Number(c.amount),
             })),
-            open_vouchers: open.map((v) => listView(v, today)),
+            open_vouchers: open.map((v) => ecVoucherListView(v, today)),
             default_validity_days: EC_DEFAULT_VALIDITY_DAYS,
         };
     }
@@ -693,7 +694,7 @@ export class EcVouchersService {
 
     async exportExcel(user: IJwtStaffPayload, query: EcVoucherFilterDto): Promise<Buffer> {
         const where = await this.filterWhere(user, query);
-        const rows = await this.prisma.ec_vouchers.findMany({ where, select: LIST_SELECT, orderBy: [{ issue_date: 'desc' }, { id: 'desc' }], take: 20_000 });
+        const rows = await this.prisma.ec_vouchers.findMany({ where, select: EC_VOUCHER_LIST_SELECT, orderBy: [{ issue_date: 'desc' }, { id: 'desc' }], take: 20_000 });
         const today = todayPktKey();
         const wb = new ExcelJS.Workbook();
         const ws = wb.addWorksheet('Extracurricular vouchers');
@@ -716,7 +717,7 @@ export class EcVouchersService {
         ];
         ws.getRow(1).font = { bold: true };
         for (const r of rows) {
-            const v = listView(r, today);
+            const v = ecVoucherListView(r, today);
             ws.addRow({
                 no: v.voucher_number,
                 state: v.state,

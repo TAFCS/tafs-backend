@@ -761,6 +761,15 @@ const EC_PAYMENT_HISTORY_ACTIONS: TileAction[] = [
   { id: 'reverse', label: 'Reverse a payment', description: 'Only the latest payment on a voucher, with a reason', implies: ['view'] },
 ];
 
+// TAFSD-605: Extracurricular Fees → Reports. Built from the ec_* tables only;
+// academic financial reports never include extracurricular money.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_REPORTS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Reports', description: 'Summary by head, outstanding and lapsed balances, and payments', default: true },
+
+  { id: 'export', label: 'Export reports to Excel', implies: ['view'] },
+];
+
 // TAFSD-510: Exam Documents. Schedules, and the admit cards (VI–X) / statements
 // of entry (every other class) issued from them to students whose dues are
 // cleared through the schedule's fee month. Overriding the dues check is its own
@@ -1228,6 +1237,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'extracurricular.vouchers', module: 'extracurricular', label: 'Vouchers', description: 'Every extracurricular voucher: state, challans, reissue, waive, delete and export', href: '/extracurricular/vouchers', capabilities: ['extracurricular.vouchers.view'], actions: EC_VOUCHERS_ACTIONS },
   { id: 'extracurricular.receive_deposit', module: 'extracurricular', label: 'Receive Deposit', description: 'Record full or partial payments against extracurricular vouchers', href: '/extracurricular/receive-deposit', capabilities: ['extracurricular.receive_deposit.view'], actions: EC_RECEIVE_DEPOSIT_ACTIONS },
   { id: 'extracurricular.payment_history', module: 'extracurricular', label: 'Payment History', description: "A student's extracurricular vouchers and payments; reverse the latest payment", href: '/extracurricular/payment-history', capabilities: ['extracurricular.payment_history.view'], actions: EC_PAYMENT_HISTORY_ACTIONS },
+  { id: 'extracurricular.reports', module: 'extracurricular', label: 'Reports', description: 'Extracurricular summary by head, outstanding and lapsed balances, and payments, with exports', href: '/extracurricular/reports', capabilities: ['extracurricular.reports.view'], actions: EC_REPORTS_ACTIONS },
 
   // ── Communications ───────────────────────────────────────────────────────
   { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },

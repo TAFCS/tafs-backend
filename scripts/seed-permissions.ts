@@ -64,6 +64,7 @@ const permissionsList = [
     { key: 'extracurricular.vouchers.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Vouchers' },
     { key: 'extracurricular.receive_deposit.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Receive Deposit' },
     { key: 'extracurricular.payment_history.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Payment History' },
+    { key: 'extracurricular.reports.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Reports' },
 
     // System Administration
     { key: 'system.users.view', module: 'System Administration', description: 'View staff accounts' },

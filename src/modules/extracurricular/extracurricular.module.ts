@@ -11,6 +11,8 @@ import { EcDepositsController } from './deposits/ec-deposits.controller';
 import { EcDepositsService } from './deposits/ec-deposits.service';
 import { EcFeeHeadsController } from './fee-heads/ec-fee-heads.controller';
 import { EcFeeHeadsService } from './fee-heads/ec-fee-heads.service';
+import { EcReportsController } from './reports/ec-reports.controller';
+import { EcReportsService } from './reports/ec-reports.service';
 import { EcVoucherBulkService } from './vouchers/ec-voucher-bulk.service';
 import { EcVoucherPdfService } from './vouchers/ec-voucher-pdf.service';
 import { EcVouchersController } from './vouchers/ec-vouchers.controller';
@@ -26,8 +28,8 @@ import { EcVouchersService } from './vouchers/ec-vouchers.service';
  */
 @Module({
     imports: [PrismaModule, AuthModule, StorageModule, VoucherPdfModule],
-    controllers: [EcFeeHeadsController, EcClassScheduleController, EcChargesController, EcVouchersController, EcDepositsController],
-    providers: [EcFeeHeadsService, EcClassScheduleService, EcChargesService, EcVouchersService, EcVoucherPdfService, EcDepositsService, EcVoucherBulkService],
+    controllers: [EcFeeHeadsController, EcClassScheduleController, EcChargesController, EcVouchersController, EcDepositsController, EcReportsController],
+    providers: [EcFeeHeadsService, EcClassScheduleService, EcChargesService, EcVouchersService, EcVoucherPdfService, EcDepositsService, EcVoucherBulkService, EcReportsService],
     exports: [EcChargesService, EcVouchersService, EcVoucherPdfService],
 })
 export class ExtracurricularModule {}

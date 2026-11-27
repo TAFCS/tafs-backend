@@ -5,6 +5,7 @@ import { EcChargesController } from '../extracurricular/charges/ec-charges.contr
 import { EcClassScheduleController } from '../extracurricular/class-schedule/ec-class-schedule.controller';
 import { EcDepositsController } from '../extracurricular/deposits/ec-deposits.controller';
 import { EcFeeHeadsController } from '../extracurricular/fee-heads/ec-fee-heads.controller';
+import { EcReportsController } from '../extracurricular/reports/ec-reports.controller';
 import { EcVouchersController } from '../extracurricular/vouchers/ec-vouchers.controller';
 import { StudentsController } from '../students/students.controller';
 import { EC_LIVE_TILES } from '../extracurricular/ec.constants';
@@ -18,7 +19,7 @@ import { REQUIRE_ACTION_KEY, type RequireActionMetadata } from '../../decorators
  * allowlist (EC_LIVE_TILES) matches the manifest.
  */
 
-const EC_CONTROLLERS = [EcFeeHeadsController, EcClassScheduleController, EcChargesController, EcVouchersController, EcDepositsController];
+const EC_CONTROLLERS = [EcFeeHeadsController, EcClassScheduleController, EcChargesController, EcVouchersController, EcDepositsController, EcReportsController];
 
 /** EC tiles whose pages pick a student, and so must be on the student search allowlist. */
 const EC_TILES_WITH_STUDENT_SEARCH = [
@@ -60,6 +61,7 @@ describe('Extracurricular Fees tiles', () => {
             'extracurricular.fee_heads',
             'extracurricular.payment_history',
             'extracurricular.receive_deposit',
+            'extracurricular.reports',
             'extracurricular.single_voucher',
             'extracurricular.student_charges',
             'extracurricular.vouchers',

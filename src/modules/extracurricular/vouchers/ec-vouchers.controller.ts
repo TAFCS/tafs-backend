@@ -131,6 +131,7 @@ export class EcVouchersController {
         'extracurricular.single_voucher#view',
         'extracurricular.receive_deposit#view',
         'extracurricular.payment_history#view',
+        'extracurricular.reports#view',
     )
     async detail(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
         return createApiResponse(await this.service.detail(user, id), HttpStatus.OK, 'Extracurricular voucher fetched');
