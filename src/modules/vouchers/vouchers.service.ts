@@ -4395,6 +4395,7 @@ export class VouchersService {
                 // runs) and for marker splits whose full-undo bailed for a non-independent-deposit
                 // reason (multi-level / re-split / unexpected shape).
                 await this._destroyVoucherInTx(voucherId, voucher as any, tx, true, auditEvents);
+                await this._settleFeesAfterReversalInTx(tx, affectedFeeIds);
                 voucherDestroyed = true;
             } else {
                 // ── PAID (non-split) / PARTIALLY_PAID / UNPAID path: recalculate from the
@@ -4610,7 +4611,20 @@ export class VouchersService {
             where: { split_parent_id: parentId },
             include: { voucher_heads: { include: { student_fees: true } } },
         });
-        if (children.length !== 2) return false;
+        // A split that discarded its balance voucher (balance_disposition DO_NOT_ISSUE)
+        // leaves ONE child, the paid receipt. TAFSD-613: it used to bail here, so clearing
+        // its deposit took the fallback destroy path, which leaves the receipt's older
+        // (arrear) heads marked PAID with no money behind them (CC 7542, 25 Nov 2026).
+        // The balance side is rebuilt instead, and only when it reconciles exactly to
+        // the original voucher's stored total; anything else still bails.
+        let rebuiltBalanceSide: Array<{ sf: any; net: Prisma.Decimal }> = [];
+        if (children.length === 1) {
+            const rebuilt = await this._rebuildDiscardedBalanceSideInTx(tx, parent, children[0]);
+            if (!rebuilt) return false;
+            rebuiltBalanceSide = rebuilt;
+        } else if (children.length !== 2) {
+            return false;
+        }
         for (const c of children) {
             if (c.status === 'VOID') return false;
             const grandchildren = await tx.vouchers.count({ where: { split_parent_id: c.id } });
@@ -4646,7 +4660,18 @@ export class VouchersService {
         // ─────────────────────────────────────────────────────────────────────
         // Guard passed — perform the clean full-undo.
         // ─────────────────────────────────────────────────────────────────────
-        const allChildHeads = children.flatMap((c: any) => c.voucher_heads);
+        // In the one-child case the discarded balance voucher's heads are stood in for by
+        // the rebuilt balance side, so every step below treats both shapes alike.
+        const allChildHeads = [
+            ...children.flatMap((c: any) => c.voucher_heads),
+            ...rebuiltBalanceSide.map(({ sf, net }) => ({
+                student_fee_id: sf.id,
+                net_amount: net,
+                discount_amount: new Prisma.Decimal(0),
+                discount_label: null,
+                student_fees: sf,
+            })),
+        ];
 
         // 1. Merge each partial-split PAID fee row back into its BALANCE row, restoring
         //    the original amount and ISSUED status. Single-level only (guarded above).
@@ -4745,6 +4770,19 @@ export class VouchersService {
             }
         }
 
+        // 2b. The rebuilt balance rows were put back to NOT_ISSUED by the split; the
+        //     reactivated parent holds them again. (A merged balance row was already set
+        //     ISSUED in step 1.)
+        const rebuiltIssueIds = rebuiltBalanceSide
+            .map(({ sf }) => sf.id)
+            .filter((id: number) => ![...mergedPaidToBalance.values()].includes(id));
+        if (rebuiltIssueIds.length > 0) {
+            await tx.student_fees.updateMany({
+                where: { id: { in: rebuiltIssueIds }, status: 'NOT_ISSUED' },
+                data: { status: 'ISSUED' } as any,
+            });
+        }
+
         // 3. Aggregate the parent's heads: group child heads by their restored fee row,
         //    summing the net (paid-side net + balance-side net = original net).
         const headAgg = new Map<number, { net: Prisma.Decimal; discount: Prisma.Decimal; label: string | null }>();
@@ -4820,9 +4858,119 @@ export class VouchersService {
             old_value: 'VOID',
             new_value: reactivatedStatus,
             student_id: parent.student_id,
-            note: `Split fully reversed after clearing deposit #${depositId}: original Voucher #${parent.id} (no. ${parent.voucher_number || 'N/A'}) reactivated (status → ${reactivatedStatus}) with its fees restored to Issued/unpaid, and its two split children [#${childIds.join(', #')}] deleted.`,
+            note: `Split fully reversed after clearing deposit #${depositId}: original Voucher #${parent.id} (no. ${parent.voucher_number || 'N/A'}) reactivated (status → ${reactivatedStatus}) with its fees restored to Issued/unpaid, and ${childIds.length === 2 ? `its two split children [#${childIds.join(', #')}]` : `its split receipt #${childIds[0]} (the balance had not been issued)`} deleted.`,
         });
         return true;
+    }
+
+    /**
+     * TAFSD-613. A split with balance_disposition DO_NOT_ISSUE deletes the balance
+     * voucher it would have created and puts its rows back to NOT_ISSUED, so nothing
+     * records which heads the original voucher held on the unpaid side. To undo such a
+     * split the unpaid side is rebuilt from what the split leaves behind:
+     *   - the BALANCE row of every PARTIAL row on the paid receipt (split_pair_id), and
+     *   - the student's unbilled rows on or before the original's fee date that no
+     *     live voucher holds (the fully unpaid heads the split routed to the balance).
+     * It is accepted only when the receipt's heads plus these rows add up exactly to
+     * the original voucher's stored fee total (total_payable_before_due less its own
+     * arrear surcharges and reprint fee). Anything that has moved since the split (a
+     * row billed on a newer voucher, a discount on the unpaid side, a head added
+     * later) breaks the sum and returns null, and the caller falls back.
+     */
+    private async _rebuildDiscardedBalanceSideInTx(
+        tx: any,
+        parent: any,
+        child: any,
+    ): Promise<Array<{ sf: any; net: Prisma.Decimal }> | null> {
+        if (!parent.fee_date) return null;
+        const childSfs = (child.voucher_heads as any[]).map((h) => h.student_fees).filter(Boolean);
+        const childFeeIds = (child.voucher_heads as any[])
+            .map((h) => h.student_fee_id)
+            .filter((id: any): id is number => id != null);
+
+        const partialRows = childSfs.filter((sf: any) =>
+            ((sf.description_prefix ?? '') as string).startsWith('PARTIAL PAYMENT OF'));
+        // A legacy PARTIAL row with no pointer to its balance row can't be paired safely.
+        if (partialRows.some((sf: any) => sf.split_pair_id == null)) return null;
+        const pairIds: number[] = partialRows.map((sf: any) => sf.split_pair_id);
+
+        const liveHeld = (ids: number[]) =>
+            tx.voucher_heads.count({
+                where: { student_fee_id: { in: ids }, vouchers: { status: { not: 'VOID' } } },
+            });
+
+        const pairRows = pairIds.length
+            ? await tx.student_fees.findMany({ where: { id: { in: pairIds } } })
+            : [];
+        if (pairRows.length !== pairIds.length) return null;
+        if (pairRows.some((r: any) => r.status !== 'NOT_ISSUED' || new Prisma.Decimal(r.amount_paid ?? 0).gt(0))) {
+            return null;
+        }
+        if (pairIds.length && (await liveHeld(pairIds)) > 0) return null;
+
+        const loose = await tx.student_fees.findMany({
+            where: {
+                student_id: parent.student_id,
+                status: 'NOT_ISSUED',
+                is_discount: false,
+                is_arrear_surcharge: false,
+                fee_date: { lte: parent.fee_date },
+                id: { notIn: [...childFeeIds, ...pairIds] },
+                voucher_heads: { none: { vouchers: { status: { not: 'VOID' } } } },
+            },
+        });
+        if (loose.some((r: any) => new Prisma.Decimal(r.amount_paid ?? 0).gt(0))) return null;
+
+        const surcharges = (parent.voucher_arrear_surcharges ?? []) as any[];
+        const surchargeTotal = surcharges
+            .filter((s) => !s.waived)
+            .reduce((sum, s) => sum.add(new Prisma.Decimal(s.amount ?? 0)), new Prisma.Decimal(0));
+        const reprint = parent.reprint_fee_charge ? new Prisma.Decimal(parent.reprint_fee_amount ?? 0) : new Prisma.Decimal(0);
+        const expectedHeads = new Prisma.Decimal(parent.total_payable_before_due ?? 0).sub(surchargeTotal).sub(reprint);
+
+        const childNet = (child.voucher_heads as any[])
+            .reduce((sum, h) => sum.add(new Prisma.Decimal(h.net_amount ?? 0)), new Prisma.Decimal(0));
+        const rebuilt = [...pairRows, ...loose].map((sf: any) => ({ sf, net: new Prisma.Decimal(sf.amount ?? 0) }));
+        const rebuiltNet = rebuilt.reduce((sum, r) => sum.add(r.net), new Prisma.Decimal(0));
+
+        if (!childNet.add(rebuiltNet).eq(expectedHeads)) {
+            this.logger.warn(
+                `clearDeposit: split #${parent.id} left no balance voucher and its unpaid side doesn't reconcile ` +
+                `(receipt ${childNet} + unbilled ${rebuiltNet} ≠ ${expectedHeads}); not undoing the split.`,
+            );
+            return null;
+        }
+        return rebuilt;
+    }
+
+    /**
+     * TAFSD-613. After clearDeposit destroys a voucher, every fee the deposit paid is
+     * re-derived from the allocations that survive (finance rule 7), and one left
+     * unpaid with no live voucher holding it goes back to NOT_ISSUED for the next run.
+     * _destroyVoucherInTx only resets the voucher's current-period heads, so an older
+     * head the deposit paid used to stay PAID with nothing behind it. Fee rows the
+     * destroy already removed (merged split halves) are simply not found.
+     */
+    private async _settleFeesAfterReversalInTx(tx: any, feeIds: number[]): Promise<void> {
+        if (feeIds.length === 0) return;
+        await this._recomputeFeesFromAllocationsInTx(tx, feeIds);
+        const unpaid = await tx.student_fees.findMany({
+            where: { id: { in: feeIds }, status: 'ISSUED', is_discount: false },
+            select: { id: true },
+        });
+        if (unpaid.length === 0) return;
+        const held = await tx.voucher_heads.findMany({
+            where: { student_fee_id: { in: unpaid.map((r: any) => r.id) }, vouchers: { status: { not: 'VOID' } } },
+            select: { student_fee_id: true },
+        });
+        const heldSet = new Set(held.map((h: any) => h.student_fee_id));
+        const free = unpaid.map((r: any) => r.id).filter((id: number) => !heldSet.has(id));
+        if (free.length > 0) {
+            await tx.student_fees.updateMany({
+                where: { id: { in: free } },
+                data: { status: 'NOT_ISSUED', issue_date: null, due_date: null, validity_date: null } as any,
+            });
+        }
     }
 
     /** Resolve the logged-in staff member's full name for the "Generated By" stamp on a voucher PDF. */
