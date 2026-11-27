@@ -713,6 +713,25 @@ const EC_STUDENT_CHARGES_ACTIONS: TileAction[] = [
   { id: 'bulk_remove', label: 'Remove a head from many students at once', description: 'Only charges not yet on a voucher, with a preview first', implies: ['view'] },
 ];
 
+// TAFSD-605: Extracurricular Fees → Single Voucher. A new voucher never pulls
+// in or voids an older one; the older open ones are only listed beside it.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_SINGLE_VOUCHER_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Single Voucher', description: "See a student's unissued extracurricular charges and open vouchers", default: true },
+
+  { id: 'create', label: 'Issue an extracurricular voucher', description: 'Puts chosen unissued charges on one voucher, with an issue and a valid-till date', implies: ['view'] },
+];
+
+// TAFSD-605: Extracurricular Fees → Vouchers (the list of every EC voucher).
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_VOUCHERS_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Vouchers', description: 'See every extracurricular voucher, its lines and payments', default: true },
+
+  { id: 'download', label: 'Download challans', description: 'One at a time or many merged into one PDF', implies: ['view'] },
+  { id: 'delete', label: 'Delete a voucher with no payments', description: 'Its charges go back to unissued', implies: ['view'] },
+  { id: 'export', label: 'Export the list to Excel', implies: ['view'] },
+];
+
 // TAFSD-510: Exam Documents. Schedules, and the admit cards (VI–X) / statements
 // of entry (every other class) issued from them to students whose dues are
 // cleared through the schedule's fee month. Overriding the dues check is its own
@@ -1175,6 +1194,8 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'extracurricular.fee_heads', module: 'extracurricular', label: 'Fee Heads', description: 'Extracurricular heads: name, monthly or one-time, and the months they fall in', href: '/extracurricular/fee-heads', capabilities: ['extracurricular.fee_heads.view'], actions: EC_FEE_HEADS_ACTIONS },
   { id: 'extracurricular.class_schedule', module: 'extracurricular', label: 'Class Amounts', description: "Each extracurricular head's amount per class and academic year", href: '/extracurricular/class-schedule', capabilities: ['extracurricular.class_schedule.view'], actions: EC_CLASS_SCHEDULE_ACTIONS },
   { id: 'extracurricular.student_charges', module: 'extracurricular', label: 'Student Charges', description: 'What each student is charged for extracurricular heads, one by one or in bulk', href: '/extracurricular/student-charges', capabilities: ['extracurricular.student_charges.view'], actions: EC_STUDENT_CHARGES_ACTIONS },
+  { id: 'extracurricular.single_voucher', module: 'extracurricular', label: 'Single Voucher', description: "Issue one extracurricular voucher from a student's unissued charges", href: '/extracurricular/single-voucher', capabilities: ['extracurricular.single_voucher.view'], actions: EC_SINGLE_VOUCHER_ACTIONS },
+  { id: 'extracurricular.vouchers', module: 'extracurricular', label: 'Vouchers', description: 'Every extracurricular voucher: state, challans, delete and export', href: '/extracurricular/vouchers', capabilities: ['extracurricular.vouchers.view'], actions: EC_VOUCHERS_ACTIONS },
 
   // ── Communications ───────────────────────────────────────────────────────
   { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },

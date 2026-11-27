@@ -6,13 +6,14 @@ import {
     voucherPdfWorkerCount,
 } from './voucher-pdf.pool';
 import type { VoucherPdfData } from './voucher-pdf.types';
+import type { EcVoucherPdfData } from './ec-voucher-pdf.types';
 
 export type { VoucherPdfData } from './voucher-pdf.types';
 
 @Injectable()
 export class VoucherPdfService implements OnModuleDestroy {
     private readonly logger = new Logger(VoucherPdfService.name);
-    private readonly pool: Piscina<VoucherPdfData, Uint8Array> | null;
+    private readonly pool: Piscina<VoucherPdfData | EcVoucherPdfData, Uint8Array> | null;
 
     constructor() {
         const filename = resolveVoucherPdfWorkerFilename(__dirname);
@@ -26,7 +27,7 @@ export class VoucherPdfService implements OnModuleDestroy {
         }
 
         const maxThreads = voucherPdfWorkerCount();
-        this.pool = new Piscina<VoucherPdfData, Uint8Array>({
+        this.pool = new Piscina<VoucherPdfData | EcVoucherPdfData, Uint8Array>({
             filename,
             maxThreads,
             minThreads: Math.min(2, maxThreads),
@@ -55,6 +56,24 @@ export class VoucherPdfService implements OnModuleDestroy {
             return renderVoucherPdf(data);
         } catch (error) {
             this.logger.error(`Failed to generate React-PDF for ${data.voucherNumber}`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * TAFSD-605: the extracurricular challan (EcChallanPDF), on the same pool as
+     * a named task so it never changes how the academic task above is run.
+     */
+    async generateEcVoucherPdf(data: EcVoucherPdfData): Promise<Buffer> {
+        try {
+            if (this.pool) {
+                const bytes = await this.pool.run(data, { name: 'renderEcVoucherPdfTask' });
+                return Buffer.from(bytes);
+            }
+            const { renderEcVoucherPdf } = await import('./render-ec-voucher-pdf.js');
+            return renderEcVoucherPdf(data);
+        } catch (error) {
+            this.logger.error(`Failed to render extracurricular voucher ${data.voucherNumber}`, error);
             throw error;
         }
     }

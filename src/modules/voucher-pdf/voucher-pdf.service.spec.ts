@@ -59,9 +59,23 @@ describe('VoucherPdfService worker pool', () => {
 
         expect(run).toHaveBeenCalledTimes(1);
         expect(run.mock.calls[0][0]).toEqual(sample);
+        // The academic render is the worker's default task: no task name.
+        expect(run.mock.calls[0][1]).toBeUndefined();
         expect(Buffer.isBuffer(buf)).toBe(true);
         expect(buf.toString('ascii', 0, 4)).toBe('%PDF');
         await service.onModuleDestroy();
         expect(destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it('generateEcVoucherPdf (TAFSD-605) runs the named extracurricular task on the same pool', async () => {
+        const service = new VoucherPdfService();
+        const ecSample = { voucherNumber: 'EC1126000001' } as any;
+        const buf = await service.generateEcVoucherPdf(ecSample);
+
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(run.mock.calls[0][0]).toBe(ecSample);
+        expect(run.mock.calls[0][1]).toEqual({ name: 'renderEcVoucherPdfTask' });
+        expect(buf.toString('ascii', 0, 4)).toBe('%PDF');
+        await service.onModuleDestroy();
     });
 });
