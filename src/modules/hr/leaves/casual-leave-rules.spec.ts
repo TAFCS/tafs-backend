@@ -2,9 +2,10 @@ import { EmploymentSubtype, LeaveRequestStatus, StaffRole } from '@prisma/client
 import { LeaveRequestsService } from './leave-requests.service';
 
 // TAFSD-621 (Mirza, #bugs 12): casual leave is one day only, strictly for
-// permanent staff, and at most once per calendar month. Pending and approved
-// requests count toward the month when applying; only approved ones when HR
-// approves. Rejected, revoked and cancelled requests never count.
+// permanent staff, and at most once a month, where the month is the payroll
+// cycle, 26th to 25th (Aawaiz, 28 Nov 2026). Pending and approved requests
+// count toward the cycle when applying; only approved ones when HR approves.
+// Rejected, revoked and cancelled requests never count.
 
 jest.mock('../../../common/auth/super-admin', () => ({ assertMayChangeEmployee: jest.fn(async () => undefined) }));
 
@@ -90,8 +91,8 @@ describe('casual leave is one day only', () => {
     const { svc } = build(EmploymentSubtype.PERMANENT);
     const ctx = await svc.getSelfContext('u');
     const byCode = Object.fromEntries(ctx.leaveTypes.map((t) => [t.code, t]));
-    expect(byCode.CASUAL).toMatchObject({ single_day: true, max_per_month: 1, permanent_only: true });
-    expect(byCode.SICK).toMatchObject({ single_day: false, max_per_month: null });
+    expect(byCode.CASUAL).toMatchObject({ single_day: true, max_per_pay_cycle: 1, permanent_only: true });
+    expect(byCode.SICK).toMatchObject({ single_day: false, max_per_pay_cycle: null });
   });
 });
 
@@ -117,12 +118,13 @@ describe('casual leave is for permanent staff only', () => {
   });
 });
 
-describe('casual leave at most once per calendar month', () => {
-  it('refuses a second request in the month while the first is pending or approved', async () => {
+describe('casual leave at most once per pay cycle (26th to 25th)', () => {
+  it('refuses a second request in the cycle while the first is pending or approved', async () => {
     for (const status of [LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED]) {
+      // 3 Nov and 24 Nov are both in 26 Oct – 25 Nov.
       const { svc, prisma } = build(EmploymentSubtype.PERMANENT, [casualRow(1, '2026-11-03', status)]);
       await expect(svc.create('u', casual('2026-11-24'))).rejects.toThrow(
-        `once a month. You already have ${status === LeaveRequestStatus.PENDING ? 'a pending' : 'an approved'} casual leave on 2026-11-03 in November 2026`,
+        `once per pay cycle (26th to 25th). You already have ${status === LeaveRequestStatus.PENDING ? 'a pending' : 'an approved'} casual leave on 2026-11-03, in the 26 Oct – 25 Nov 2026 cycle`,
       );
       expect(prisma.leave_requests.create).not.toHaveBeenCalled();
     }
@@ -134,14 +136,25 @@ describe('casual leave at most once per calendar month', () => {
     expect(prisma.leave_requests.create).toHaveBeenCalled();
   });
 
-  it('counts calendar months: the 30th of one month does not block the 1st of the next', async () => {
-    const { svc, prisma } = build(EmploymentSubtype.PERMANENT, [casualRow(1, '2026-11-30', LeaveRequestStatus.APPROVED)]);
-    await svc.create('u', casual('2026-12-01'));
+  it('the 25th and the 26th are in different cycles', async () => {
+    const { svc, prisma } = build(EmploymentSubtype.PERMANENT, [casualRow(1, '2026-11-25', LeaveRequestStatus.APPROVED)]);
+    await svc.create('u', casual('2026-11-26'));
     expect(prisma.leave_requests.create).toHaveBeenCalledTimes(1);
-    // ...and the December one now blocks the rest of December, across the year end too.
-    await expect(svc.create('u', casual('2026-12-31'))).rejects.toThrow('December 2026');
-    await svc.create('u', casual('2027-01-01'));
+    // ...and 26 Nov now blocks the rest of its cycle, which runs into December.
+    await expect(svc.create('u', casual('2026-12-25'))).rejects.toThrow('26 Nov – 25 Dec 2026');
+    await svc.create('u', casual('2026-12-26'));
     expect(prisma.leave_requests.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('two dates in one calendar month can be in different cycles, and a cycle spans the year end', async () => {
+    const { svc, prisma } = build(EmploymentSubtype.PERMANENT, [casualRow(1, '2026-11-05', LeaveRequestStatus.APPROVED)]);
+    await svc.create('u', casual('2026-11-28'));
+    expect(prisma.leave_requests.create).toHaveBeenCalledTimes(1);
+
+    const yearEnd = build(EmploymentSubtype.PERMANENT, [casualRow(1, '2026-12-30', LeaveRequestStatus.APPROVED)]);
+    await expect(yearEnd.svc.create('u', casual('2027-01-12'))).rejects.toThrow('26 Dec – 25 Jan 2027');
+    await yearEnd.svc.create('u', casual('2027-01-26'));
+    expect(yearEnd.prisma.leave_requests.create).toHaveBeenCalledTimes(1);
   });
 
   it('does not count other leave types', async () => {
@@ -151,11 +164,17 @@ describe('casual leave at most once per calendar month', () => {
     expect(prisma.leave_requests.create).toHaveBeenCalled();
   });
 
-  it('tells the app which months are already used', async () => {
-    const thisMonth = new Date().toISOString().slice(0, 7);
-    const { svc } = build(EmploymentSubtype.PERMANENT, [casualRow(1, `${thisMonth}-01`, LeaveRequestStatus.PENDING)]);
-    const ctx = await svc.getSelfContext('u');
-    expect(ctx.leaveTypes.find((t) => t.code === 'CASUAL')!.months_at_limit).toEqual([thisMonth]);
+  it('tells the app which cycles are already used, as date ranges', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-28T08:00:00Z'));
+    try {
+      const { svc } = build(EmploymentSubtype.PERMANENT, [casualRow(1, '2026-12-02', LeaveRequestStatus.PENDING)]);
+      const ctx = await svc.getSelfContext('u');
+      expect(ctx.leaveTypes.find((t) => t.code === 'CASUAL')!.pay_cycles_at_limit).toEqual([
+        { start: '2026-11-26', end: '2026-12-25', label: '26 Nov – 25 Dec 2026' },
+      ]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
@@ -175,7 +194,7 @@ describe('approving casual leave checks the rules again', () => {
   };
   const approve = (svc: LeaveRequestsService) => svc.review(10, { status: LeaveRequestStatus.APPROVED }, admin);
 
-  it('refuses a second approval in the same month, but another pending one does not block', async () => {
+  it('refuses a second approval in the same cycle, but another pending one does not block', async () => {
     const pendingPair = reviewFor(EmploymentSubtype.PERMANENT, casualRow(10, '2026-11-20', LeaveRequestStatus.PENDING), [
       casualRow(11, '2026-11-05', LeaveRequestStatus.PENDING),
     ]);

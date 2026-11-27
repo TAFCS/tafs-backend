@@ -2,7 +2,7 @@
 -- leave rules enforced from TAFSD-621 on:
 --   1. one day only (start_date = end_date)
 --   2. permanent staff only (employment_subtype = PERMANENT)
---   3. at most one per calendar month, per employee
+--   3. at most one per pay cycle (26th to 25th), per employee
 --
 -- Rule 2 is checked against the employee's subtype TODAY: the database keeps
 -- no history of it, so someone made permanent since shows as fine, and
@@ -20,12 +20,14 @@ WITH casual AS (
   WHERE lt.code = 'CASUAL' AND lr.status = 'APPROVED'
 ),
 per_month AS (
-  -- Every calendar month each request touches.
-  SELECT c.id, c.employee_id, to_char(m, 'YYYY-MM') AS month
+  -- Every pay cycle each request touches, named by the month it ends in
+  -- (26 Nov - 25 Dec 2026 is 2026-12), as payroll names them.
+  SELECT DISTINCT c.id, c.employee_id,
+    to_char(CASE WHEN extract(day FROM day) >= 26
+                 THEN date_trunc('month', day) + interval '1 month'
+                 ELSE date_trunc('month', day) END, 'YYYY-MM') AS month
   FROM casual c
-  CROSS JOIN LATERAL generate_series(
-    date_trunc('month', c.start_date), date_trunc('month', c.end_date), interval '1 month'
-  ) AS m
+  CROSS JOIN LATERAL generate_series(c.start_date, c.end_date, interval '1 day') AS day
 ),
 month_counts AS (
   SELECT employee_id, month, count(*) AS approved_in_month
@@ -47,7 +49,7 @@ SELECT
   (SELECT string_agg(pm.month || ' x' || mc.approved_in_month, ', ' ORDER BY pm.month)
      FROM per_month pm
      JOIN month_counts mc ON mc.employee_id = pm.employee_id AND mc.month = pm.month
-    WHERE pm.id = c.id AND mc.approved_in_month > 1) AS months_over_limit,
+    WHERE pm.id = c.id AND mc.approved_in_month > 1) AS pay_cycles_over_limit,
   concat_ws('; ',
     CASE WHEN c.end_date <> c.start_date THEN 'more than one day' END,
     CASE WHEN ep.employment_subtype IS DISTINCT FROM 'PERMANENT' THEN 'not marked permanent today' END,
@@ -55,7 +57,7 @@ SELECT
       SELECT 1 FROM per_month pm
       JOIN month_counts mc ON mc.employee_id = pm.employee_id AND mc.month = pm.month
       WHERE pm.id = c.id AND mc.approved_in_month > 1
-    ) THEN 'more than one in a calendar month' END
+    ) THEN 'more than one in a pay cycle' END
   )                                            AS broken_rules,
   c.created_at::date                           AS applied_on,
   c.reviewed_at::date                          AS approved_on

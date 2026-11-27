@@ -5,7 +5,7 @@ import { Transform } from 'class-transformer';
 import { toNumberArray, toStringArray } from '../../../../common/transforms/query-array.transform';
 
 export class CreateLeaveRequestDto {
-  @ApiProperty({ description: 'Leave type code: SICK | CASUAL (permanent staff only, one day, once a calendar month) | UNPAID' })
+  @ApiProperty({ description: 'Leave type code: SICK | CASUAL (permanent staff only, one day, once per 26th–25th pay cycle) | UNPAID' })
   @IsString()
   @MinLength(2)
   @MaxLength(20)
