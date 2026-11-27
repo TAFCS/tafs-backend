@@ -5,7 +5,8 @@ import { Circle, Document, Font, G, Image, Line, Page, Rect, StyleSheet, Svg, Te
 import type { ExamDocType } from './exam-document-rules';
 import type { Notice, NoticeItem } from './exam-notices';
 import { noticeItemText } from './exam-notices';
-import { TIMES_DEFAULT_LH, timesLines } from './times-metrics';
+import { TIMES_DEFAULT_LH, timesLines } from '../documents/times-metrics';
+import { FOOTER_AREAS, fitFooterLine } from '../documents/campus-footer';
 
 /**
  * TAFSD-510: admit card (VI–X) and statement of entry (every other class).
@@ -96,12 +97,12 @@ export interface ExamDocPage {
     /** The schedule's title, heading its notes under the notice. */
     assessment: string;
     campusLine: string;
-    /** The campus record's address, in capitals; null when the campus has none. */
-    campusAddress: string | null;
-    /** TAFSD-549: the campus's UAN number; null when it has none. */
-    campusUan: string | null;
-    /** Emails and website, as written. */
-    webLine: string;
+    /**
+     * TAFSD-603: the lines under the campus line in the footer box: the campus's own document
+     * footer (Setup > Campuses), or its address with the UAN and the web line when it has none
+     * (exam-document-page.ts examFooterLines). Each prints on one line, shrunk to fit.
+     */
+    footerLines: string[];
     issuedLong: string;
 }
 
@@ -140,7 +141,7 @@ const s = StyleSheet.create({
     tr: { flexDirection: 'row', borderTopWidth: 0.5, borderTopColor: '#9a9a9a' },
     td: { fontSize: 10, paddingHorizontal: 5, textAlign: 'center' },
     vline: { borderLeftWidth: 0.5, borderLeftColor: '#9a9a9a' },
-    footerBox: { borderWidth: 0.9, borderColor: RULE, paddingVertical: 4, alignItems: 'center' },
+    footerBox: { borderWidth: 0.9, borderColor: RULE, paddingVertical: 4, paddingHorizontal: 6, alignItems: 'center' },
     footCampus: { fontFamily: F.b, fontSize: 9, letterSpacing: 0.4 },
     footText: { fontSize: 7.5, marginTop: 1.5, textAlign: 'center', color: MUTED },
     sysNote: { fontFamily: F.i, fontSize: 7.5, textAlign: 'center', marginTop: 3, color: MUTED },
@@ -419,10 +420,24 @@ export function fitEntry(lineCounts: number[], notes: string[], slack = 0): Fron
     });
 }
 
+/** TAFSD-603: one footer line as the footer box sets it (7.5pt Times Roman, 1.5pt above it). */
+const FOOTER_LINE_H = FOOTER_AREAS.EXAM_DOCUMENT.size * TIMES_DEFAULT_LH.r + 1.5;
+/** The footer FRONT_SPARE was measured with: the campus line and two lines under it. */
+const CALIBRATED_FOOTER_LINES = 2;
+
+/**
+ * TAFSD-603: room a campus footer of more than two lines takes from the front page. Footer lines
+ * never wrap, so this is exact. Shorter footers give nothing back: the spare room stays a low end.
+ */
+export function footerExtra(d: Partial<Pick<ExamDocPage, 'footerLines'>>): number {
+    return Math.max(0, (d.footerLines?.length ?? CALIBRATED_FOOTER_LINES) - CALIBRATED_FOOTER_LINES) * FOOTER_LINE_H;
+}
+
 /** The fit a document's front page prints with. */
-export function frontFit(d: Pick<ExamDocPage, 'docType' | 'papers' | 'frontNotes' | 'frontSlack'>): FrontFit {
+export function frontFit(d: Pick<ExamDocPage, 'docType' | 'papers' | 'frontNotes' | 'frontSlack'> & Partial<Pick<ExamDocPage, 'footerLines'>>): FrontFit {
     const lines = paperLines(d);
-    return d.docType === 'STATEMENT_OF_ENTRY' ? fitEntry(lines, d.frontNotes, d.frontSlack ?? 0) : fitAdmit(lines, d.frontNotes, d.frontSlack ?? 0);
+    const slack = (d.frontSlack ?? 0) + footerExtra(d);
+    return d.docType === 'STATEMENT_OF_ENTRY' ? fitEntry(lines, d.frontNotes, slack) : fitAdmit(lines, d.frontNotes, slack);
 }
 
 /** Text size that keeps a value on one line of its box (about 0.66em a capital, Times Bold). */
@@ -534,10 +549,11 @@ function Footer({ d, page, of, right }: { d: ExamDocPage; page: number; of: numb
             </View>
             <View style={s.footerBox}>
                 <Text style={s.footCampus}>{d.campusLine}</Text>
-                {d.campusAddress || d.campusUan ? (
-                    <Text style={s.footText}>{[d.campusAddress, d.campusUan ? `UAN : ${d.campusUan}` : null].filter(Boolean).join('  ·  ')}</Text>
-                ) : null}
-                <Text style={s.footText}>{d.webLine}</Text>
+                {d.footerLines.map((line, i) => (
+                    <Text key={i} style={[s.footText, { fontSize: fitFooterLine(line, FOOTER_AREAS.EXAM_DOCUMENT).size }]}>
+                        {line}
+                    </Text>
+                ))}
             </View>
             <Text style={s.sysNote}>
                 THIS IS A SYSTEM GENERATED DOCUMENT ISSUED WITHOUT ALTERATION OR ERASURE, AND DOES NOT REQUIRE A SIGNATURE.
@@ -725,6 +741,27 @@ export function ExamFrontPagePDF({ d, title = 'Front page' }: { d: ExamDocPage; 
     return (
         <Document title={title} author="TAFS">
             <FrontPage d={d} of={d.notice ? 2 : 1} />
+        </Document>
+    );
+}
+
+/** TAFSD-603: height of the footer strip the Setup > Campuses preview shows; a three-line footer needs about 150. */
+export const FOOTER_STRIP_HEIGHT = 180;
+
+/**
+ * TAFSD-603: the bottom of a front page, footer and all, for the Setup > Campuses preview: the
+ * same Footer component and styles a statement of entry or admit card prints with, inside the
+ * same page padding and frame, on a strip of page as wide as A4.
+ */
+export function ExamFooterStripPDF({ d }: { d: Pick<ExamDocPage, 'campusLine' | 'footerLines' | 'issuedLong'> }) {
+    return (
+        <Document title="Footer preview" author="TAFS">
+            <Page size={[595.28, FOOTER_STRIP_HEIGHT]} style={s.page}>
+                <View style={[s.frame, { borderTopWidth: 0, paddingTop: 0 }]}>
+                    <View style={{ flex: 1 }} />
+                    <Footer d={d as ExamDocPage} page={1} of={2} right="PLEASE TURN OVER FOR THE RULES OF ASSESSMENTS" />
+                </View>
+            </Page>
         </Document>
     );
 }

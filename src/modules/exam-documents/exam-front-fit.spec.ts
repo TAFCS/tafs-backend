@@ -1,7 +1,7 @@
 import { buildExamDocPage } from './exam-document-page';
-import { ExamDocPage, frontFit } from './ExamDocumentPDF';
+import { ExamDocPage, footerExtra, frontFit } from './ExamDocumentPDF';
 import { pdfPageCount, settleFrontFit, SLACK_STEP } from './exam-front-fit';
-import { timesLines, timesWidth } from './times-metrics';
+import { timesLines, timesWidth } from '../documents/times-metrics';
 
 const page = (classId: number, documentNotes: string[], papers = 10): ExamDocPage =>
     buildExamDocPage({
@@ -97,4 +97,24 @@ describe('TAFSD-555 settling the front page by rendering it', () => {
         const got = await settleFrontFit(d, fakeRender(() => 1));
         expect(got).toMatchObject({ slack: 0, fits: true, fullNoteSize: 9.5 });
     });
+});
+
+describe('TAFSD-603 a campus footer on the front page', () => {
+    const footer = [
+        'C-61, 62, 63, 64 & 65, BLOCK - 13, GULISTAN-E-JAUHAR, KARACHI, PAKISTAN.',
+        'Phone: 3461-2878, 3461-2879, 3461-2880 · Fax: (92-21) 3461-2881 · Helpline: 0300-8258061',
+        'E-mail: american@cyber.net.pk · info@tafs.edu.pk · Website: www.tafs.edu.pk',
+    ];
+
+    it('takes room for a third line only', () => {
+        expect(footerExtra({ footerLines: ['A'] })).toBe(0);
+        expect(footerExtra({ footerLines: ['A', 'B'] })).toBe(0);
+        expect(footerExtra({ footerLines: footer })).toBeGreaterThan(9);
+        const notes = Array<string>(6).fill('NO LENDING OR BORROWING WILL BE ALLOWED, STUDENTS HAVE TO BRING TRANSPARENT POUCHES.');
+        const two = frontFit({ ...page(18, notes), footerLines: footer.slice(0, 2) });
+        const three = frontFit({ ...page(18, notes), footerLines: footer });
+        expect(three.noteSize * 100 + three.size).toBeLessThanOrEqual(two.noteSize * 100 + two.size);
+    });
+
+    // react-pdf is stubbed in unit specs; scripts/campus-footer-samples.ts renders the tightest pages for real.
 });

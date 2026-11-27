@@ -26,6 +26,7 @@ import { Action } from '../auth/casl/actions';
 import { CreateCampusDto } from './dto/create-campus.dto';
 import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
 import { UpsertCampusSectionDto } from './dto/upsert-campus-section.dto';
+import { CampusDocumentFooterDto } from './dto/campus-document-footer.dto';
 import { createApiResponse } from '../../utils/serializer.util';
 import { CAMPUSES_MESSAGES } from '../../constants/api-response/campuses.constant';
 
@@ -96,6 +97,34 @@ export class CampusesController {
             HttpStatus.OK,
             CAMPUSES_MESSAGES.BULK_UPDATE_SUCCESS,
         );
+    }
+
+    // TAFSD-603: the campus's document footer and its live preview (Setup > Campuses).
+    @Post(':id/document-footer/preview')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+    @RequireAction('school-setup.campuses#edit')
+    async previewDocumentFooter(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: CampusDocumentFooterDto,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        return createApiResponse(await this.campusesService.previewDocumentFooter(id, dto.lines, user), HttpStatus.OK, 'Document footer preview');
+    }
+
+    @Put(':id/document-footer')
+    @HttpCode(HttpStatus.OK)
+    @CheckPolicies((ability) => ability.can(Action.Update, 'Campus'))
+    @RequireAction('school-setup.campuses#edit')
+    async updateDocumentFooter(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: CampusDocumentFooterDto,
+        @Req() req: Request,
+        @CurrentUser() user: IJwtStaffPayload,
+    ) {
+        const changedBy = (req.user as any)?.username || (req.user as any)?.id || 'system';
+        const saved = await this.campusesService.updateDocumentFooter(id, dto.lines, changedBy, user);
+        return createApiResponse(saved, HttpStatus.OK, 'Document footer saved');
     }
 
     @Delete(':id')

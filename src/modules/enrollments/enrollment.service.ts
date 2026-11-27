@@ -8,6 +8,7 @@ import { student_status } from '@prisma/client';
 import { StudentAllocationService } from '../student-allocation/student-allocation.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { ProgressionHistoryService } from '../students/progression-history.service';
+import { cleanFooterLines } from '../documents/campus-footer';
 import {
   computeNextGrNumber,
   checkIsALevel,
@@ -1133,6 +1134,8 @@ export class EnrollmentService {
       /** The pre-printed blank this student's certificate is filled onto. */
       slc_template: slcTemplate.id,
       slc_template_prefix: slcTemplate.prefix,
+      /** TAFSD-603: the campus's document footer, printed over the blank's own. Empty: the blank's stays. */
+      campus_footer: cleanFooterLines(student.campuses?.document_footer),
       slc_number: String(slcNumber),
       cc: student.cc,
       gr_number: student.gr_number || '—',
@@ -1216,7 +1219,8 @@ export class EnrollmentService {
     if (!merged.photograph_base64 && merged.photograph_url) {
       merged.photograph_base64 = await this.fetchPhotographBase64(merged.photograph_url);
     }
-    return { pdf: await fillLeavingCertificate(merged, template), prefix: template.prefix };
+    // TAFSD-603: the footer follows the student's campus, as the blank does, never the request body.
+    return { pdf: await fillLeavingCertificate(merged, template, base.campus_footer), prefix: template.prefix };
   }
 
   /**

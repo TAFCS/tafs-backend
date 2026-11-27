@@ -3,7 +3,7 @@ import { renderToBuffer } from '@react-pdf/renderer';
 import { ExamDocPage, ExamFrontPagePDF, FULL_NOTE_SIZE, frontFit, FrontFit } from './ExamDocumentPDF';
 
 /**
- * TAFSD-555: the front note is measured with the PDF's own font metrics (times-metrics.ts), but
+ * TAFSD-555: the front note is measured with the PDF's own font metrics (documents/times-metrics.ts), but
  * only a render proves the front page holds on one sheet. settleFrontFit renders the front page,
  * and while it spills onto a second sheet takes room from the note and the paper rows a step
  * at a time. Every document of a class shares its papers and front note, so the service settles
