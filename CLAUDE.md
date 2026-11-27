@@ -82,6 +82,13 @@ change makes one false, the change is wrong, not the rule.
    `clearDeposit` re-derive `student_fees.amount_paid`,
    `voucher_arrear_surcharges.amount_paid` and each voucher's heads/status from
    the allocations that survive. A reversed head keeps any *other* payment.
+   **A split with no balance voucher (DO_NOT_ISSUE) undoes too (TAFSD-613):**
+   `_reverseSplitFamilyInTx` rebuilds the discarded balance side
+   (`_rebuildDiscardedBalanceSideInTx`) and undoes the split only when it adds up
+   to the original voucher's stored total. Otherwise the destroy fallback runs, and
+   `_settleFeesAfterReversalInTx` re-derives every fee the deposit paid, older
+   (arrear) heads included, which `_destroyVoucherInTx` alone leaves PAID.
+   `test/db/split-do-not-issue-clear-deposit.db-spec.ts`.
 8. **Stamped PDFs are write-once** — `paid_pdf_url` / `paid_pdf_filename` and
    `waived_pdf_url` / `waived_pdf_filename` are minted once and never
    re-rendered. Only the matching reversal clears them: `clearDeposit` /

@@ -775,10 +775,14 @@ describe('VouchersService — supersession by fee date', () => {
         { log: jest.fn().mockResolvedValue(1) } as any, {} as any, {} as any,
       );
       const destroy = jest.spyOn(service as any, '_destroyVoucherInTx').mockResolvedValue({ id: 310 });
+      // TAFSD-613: after the destroy, every fee the deposit paid is re-derived from
+      // the allocations left, so none stays PAID with nothing behind it.
+      const settle = jest.spyOn(service as any, '_settleFeesAfterReversalInTx').mockResolvedValue(undefined);
 
       const result = await service.clearDeposit(310, 777, 'tester');
 
       expect(destroy).toHaveBeenCalledWith(310, legacy, tx, true, expect.any(Array));
+      expect(settle).toHaveBeenCalledWith(tx, [103]);
       expect(result).toBeNull();
     });
 
