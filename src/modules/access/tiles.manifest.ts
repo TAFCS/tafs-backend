@@ -730,6 +730,25 @@ const EC_VOUCHERS_ACTIONS: TileAction[] = [
   { id: 'download', label: 'Download challans', description: 'One at a time or many merged into one PDF', implies: ['view'] },
   { id: 'delete', label: 'Delete a voucher with no payments', description: 'Its charges go back to unissued', implies: ['view'] },
   { id: 'export', label: 'Export the list to Excel', implies: ['view'] },
+  { id: 'reissue', label: 'Reissue an expired voucher', description: 'Puts its unpaid part on a fresh voucher with new dates; the old one stays as history', implies: ['view'] },
+  { id: 'waive', label: 'Waive a voucher, and undo a waiver', description: 'Writes off what is still owed, with a reason', implies: ['view'] },
+];
+
+// TAFSD-605: Extracurricular Fees → Receive Deposit. Payments are recorded by
+// hand only (desk or bank counter), never more than the voucher's balance.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_RECEIVE_DEPOSIT_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Receive Deposit', description: "Find a student's or a voucher's open extracurricular vouchers", default: true },
+
+  { id: 'record', label: 'Record a payment', description: 'Full or partial, dated on or before the valid-till date', implies: ['view'] },
+];
+
+// TAFSD-605: Extracurricular Fees → Payment History.
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_PAYMENT_HISTORY_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Payment History', description: "See a student's extracurricular vouchers and payments", default: true },
+
+  { id: 'reverse', label: 'Reverse a payment', description: 'Only the latest payment on a voucher, with a reason', implies: ['view'] },
 ];
 
 // TAFSD-510: Exam Documents. Schedules, and the admit cards (VI–X) / statements
@@ -1195,7 +1214,9 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'extracurricular.class_schedule', module: 'extracurricular', label: 'Class Amounts', description: "Each extracurricular head's amount per class and academic year", href: '/extracurricular/class-schedule', capabilities: ['extracurricular.class_schedule.view'], actions: EC_CLASS_SCHEDULE_ACTIONS },
   { id: 'extracurricular.student_charges', module: 'extracurricular', label: 'Student Charges', description: 'What each student is charged for extracurricular heads, one by one or in bulk', href: '/extracurricular/student-charges', capabilities: ['extracurricular.student_charges.view'], actions: EC_STUDENT_CHARGES_ACTIONS },
   { id: 'extracurricular.single_voucher', module: 'extracurricular', label: 'Single Voucher', description: "Issue one extracurricular voucher from a student's unissued charges", href: '/extracurricular/single-voucher', capabilities: ['extracurricular.single_voucher.view'], actions: EC_SINGLE_VOUCHER_ACTIONS },
-  { id: 'extracurricular.vouchers', module: 'extracurricular', label: 'Vouchers', description: 'Every extracurricular voucher: state, challans, delete and export', href: '/extracurricular/vouchers', capabilities: ['extracurricular.vouchers.view'], actions: EC_VOUCHERS_ACTIONS },
+  { id: 'extracurricular.vouchers', module: 'extracurricular', label: 'Vouchers', description: 'Every extracurricular voucher: state, challans, reissue, waive, delete and export', href: '/extracurricular/vouchers', capabilities: ['extracurricular.vouchers.view'], actions: EC_VOUCHERS_ACTIONS },
+  { id: 'extracurricular.receive_deposit', module: 'extracurricular', label: 'Receive Deposit', description: 'Record full or partial payments against extracurricular vouchers', href: '/extracurricular/receive-deposit', capabilities: ['extracurricular.receive_deposit.view'], actions: EC_RECEIVE_DEPOSIT_ACTIONS },
+  { id: 'extracurricular.payment_history', module: 'extracurricular', label: 'Payment History', description: "A student's extracurricular vouchers and payments; reverse the latest payment", href: '/extracurricular/payment-history', capabilities: ['extracurricular.payment_history.view'], actions: EC_PAYMENT_HISTORY_ACTIONS },
 
   // ── Communications ───────────────────────────────────────────────────────
   { id: 'communication.notice_board', module: 'communication', label: 'Notice Board', description: 'Broadcast announcements', href: '/notice-board', capabilities: ['communication.send_announcements'], actions: NOTICE_BOARD_ACTIONS, legacyFullAccessCapabilities: ['communication.send_announcements'] },

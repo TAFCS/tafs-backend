@@ -8,14 +8,21 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import type { IJwtStaffPayload } from '../../auth/interfaces/jwt-payload.interface';
 import { findStudentSearchHits } from '../../students/student-search-match';
 import { EcChargesService } from '../charges/ec-charges.service';
-import { EC_DEFAULT_VALIDITY_DAYS, EC_SEARCH_LIMIT } from '../ec.constants';
+import { EC_ALLOW_REISSUE_BEFORE_EXPIRY, EC_DEFAULT_VALIDITY_DAYS, EC_SEARCH_LIMIT } from '../ec.constants';
 import { actorNameOf, actorOf, normalizeEcAcademicYear } from '../ec-common.util';
 import { addDays, dateKey, ecPeriodLabel, parseDateKey, todayPktDate, todayPktKey } from '../ec-dates.util';
 import { createVoucherInTx, resolveEcBank } from '../ec-issue';
 import { remainingOf } from '../ec-money.util';
 import { lockEcVoucher, recomputeVoucherInTx } from '../ec-recompute';
-import { ecStateWhere, ecVoucherState, type EcVoucherState } from '../ec-voucher-state';
-import { CreateEcVoucherDto, EcVoucherFilterDto, EcVoucherListQueryDto, EcVoucherSearchQueryDto } from './dto/ec-vouchers.dto';
+import { ecStateWhere, ecVoucherIsLive, ecVoucherState, type EcVoucherState } from '../ec-voucher-state';
+import {
+    CreateEcVoucherDto,
+    EcVoucherFilterDto,
+    EcVoucherListQueryDto,
+    EcVoucherSearchQueryDto,
+    ReissueEcVoucherDto,
+    WaiveEcVoucherDto,
+} from './dto/ec-vouchers.dto';
 
 const LIST_SELECT = {
     id: true,
@@ -445,6 +452,189 @@ export class EcVouchersService {
             changed_by: actorOf(user),
         });
         return this.detail(user, result.id);
+    }
+
+    // ─── Reissue an expired voucher ───────────────────────────────────────
+
+    /**
+     * An expired voucher can't take payment, so its unpaid part is put on a
+     * fresh voucher with new dates. The old voucher stays as history (shown
+     * REISSUED, out of the lapsed totals); its charges move to the new one by
+     * compare-and-set. reissued_from_voucher_id is unique, so a voucher is
+     * reissued at most once even if two people click at the same time.
+     */
+    async reissue(user: IJwtStaffPayload, id: number, dto: ReissueEcVoucherDto) {
+        await this.assertVisible(user, id);
+        const issueDate = parseDateKey(dto.issue_date, 'Issue date');
+        const expiryDate = dto.expiry_date ? parseDateKey(dto.expiry_date, 'Valid-till date') : addDays(issueDate, EC_DEFAULT_VALIDITY_DAYS);
+        if (expiryDate < issueDate) throw new BadRequestException('The valid-till date is before the issue date');
+        if (dateKey(expiryDate) < todayPktKey()) throw new BadRequestException('The valid-till date has already passed');
+
+        const old = await this.prisma.ec_vouchers.findUniqueOrThrow({ where: { id }, select: { student_id: true, bank_account_id: true } });
+        const student = await this.prisma.students.findUnique({
+            where: { cc: old.student_id },
+            select: { cc: true, status: true, deleted_at: true, campus_id: true, class_id: true, section_id: true },
+        });
+        if (!student || student.status !== 'ENROLLED' || student.deleted_at) throw new BadRequestException('Only an enrolled student can be reissued a voucher');
+        if (!student.campus_id || !student.class_id) throw new BadRequestException('Place the student in a campus and class first');
+        let bank;
+        try {
+            bank = await resolveEcBank(this.prisma, dto.bank_account_id ?? old.bank_account_id);
+        } catch {
+            if (dto.bank_account_id) throw new BadRequestException(`Bank account #${dto.bank_account_id} can't be used`);
+            bank = await resolveEcBank(this.prisma, null);
+        }
+
+        const result = await this.prisma.$transaction(
+            async (tx) => {
+                await lockEcVoucher(tx, id);
+                const v = await tx.ec_vouchers.findUniqueOrThrow({
+                    where: { id },
+                    select: {
+                        id: true,
+                        voucher_number: true,
+                        status: true,
+                        expiry_date: true,
+                        academic_year: true,
+                        reissued_to: { select: { id: true } },
+                        ec_voucher_lines: {
+                            select: {
+                                charge_id: true,
+                                description: true,
+                                sort_order: true,
+                                ec_student_charges: { select: { amount: true, amount_paid: true, waived_amount: true } },
+                            },
+                            orderBy: { sort_order: 'asc' },
+                        },
+                    },
+                });
+                const state = ecVoucherState(v, todayPktKey());
+                const allowed = state === 'EXPIRED' || (EC_ALLOW_REISSUE_BEFORE_EXPIRY && ecVoucherIsLive(state));
+                if (!allowed) throw new ConflictException(`Only an expired voucher can be reissued; ${v.voucher_number} is ${state.toLowerCase().replace('_', ' ')}`);
+
+                const lines = v.ec_voucher_lines
+                    .map((l) => ({
+                        charge_id: l.charge_id,
+                        description: l.description,
+                        sort_order: l.sort_order,
+                        amount: remainingOf({
+                            amount: Number(l.ec_student_charges.amount),
+                            amount_paid: Number(l.ec_student_charges.amount_paid),
+                            waived_amount: Number(l.ec_student_charges.waived_amount),
+                        }),
+                    }))
+                    .filter((l) => l.amount > 0);
+                if (!lines.length) throw new ConflictException(`${v.voucher_number} has nothing left to collect`);
+
+                const created = await createVoucherInTx(tx, {
+                    student: { cc: student.cc, campus_id: student.campus_id!, class_id: student.class_id!, section_id: student.section_id },
+                    academicYear: v.academic_year,
+                    issueDate,
+                    expiryDate,
+                    bank,
+                    lines,
+                    expectCurrentVoucherId: v.id,
+                    reissuedFromVoucherId: v.id,
+                    createdBy: actorOf(user),
+                    generatedByName: actorNameOf(user),
+                });
+                await recomputeVoucherInTx(tx, v.id);
+                return { ...created, old_number: v.voucher_number, total: lines.reduce((n, l) => n + l.amount, 0) };
+            },
+            { timeout: 20_000 },
+        );
+
+        await this.auditLogs.log({
+            entity_type: 'EC_VOUCHER',
+            entity_id: String(result.id),
+            action: 'CREATED',
+            section: 'finance',
+            student_id: student.cc,
+            new_value: JSON.stringify({ voucher_number: result.voucher_number, reissued_from: result.old_number, total: result.total, expiry_date: dateKey(expiryDate) }),
+            note: `Reissued ${result.old_number} as ${result.voucher_number}`,
+            changed_by: actorOf(user),
+        });
+        return this.detail(user, result.id);
+    }
+
+    // ─── Waive / unwaive ──────────────────────────────────────────────────
+
+    /**
+     * Write off everything still owed on a voucher, with a reason. Expired
+     * vouchers can be waived (that is how a lapsed amount is cleared for good);
+     * a reissued one can't (waive the new voucher instead). What was already
+     * paid stays paid; the voucher shows WAIVED.
+     */
+    async waive(user: IJwtStaffPayload, id: number, dto: WaiveEcVoucherDto) {
+        await this.assertVisible(user, id);
+        const reason = dto.reason.trim();
+        if (reason.length < 3) throw new BadRequestException('Give a reason for the waiver');
+        const by = actorOf(user);
+        const outcome = await this.prisma.$transaction(async (tx) => {
+            await lockEcVoucher(tx, id);
+            const v = await tx.ec_vouchers.findUniqueOrThrow({
+                where: { id },
+                select: {
+                    voucher_number: true,
+                    student_id: true,
+                    status: true,
+                    reissued_to: { select: { voucher_number: true } },
+                    ec_voucher_lines: { select: { id: true, amount: true, amount_paid: true, waived_amount: true } },
+                },
+            });
+            if (v.status === 'WAIVED') throw new ConflictException(`${v.voucher_number} is already waived`);
+            if (v.status === 'PAID') throw new ConflictException(`${v.voucher_number} is paid; nothing is left to waive`);
+            if (v.reissued_to) throw new ConflictException(`${v.voucher_number} was reissued as ${v.reissued_to.voucher_number}; waive that one instead`);
+            let written = 0;
+            for (const l of v.ec_voucher_lines) {
+                const rest = Number(l.amount) - Number(l.amount_paid);
+                if (rest > 0) {
+                    await tx.ec_voucher_lines.update({ where: { id: l.id }, data: { waived_amount: rest } });
+                    written += rest - Number(l.waived_amount);
+                }
+            }
+            await tx.ec_vouchers.update({ where: { id }, data: { waived_at: new Date(), waived_by: by, waive_reason: reason } });
+            await recomputeVoucherInTx(tx, id);
+            return { voucher_number: v.voucher_number, student_id: v.student_id, written };
+        });
+        await this.auditLogs.log({
+            entity_type: 'EC_VOUCHER',
+            entity_id: String(id),
+            action: 'UPDATED',
+            section: 'finance',
+            field: 'status',
+            new_value: 'WAIVED',
+            student_id: outcome.student_id,
+            note: `Waived Rs ${outcome.written} on ${outcome.voucher_number}: ${reason}`,
+            changed_by: by,
+        });
+        return this.detail(user, id);
+    }
+
+    async unwaive(user: IJwtStaffPayload, id: number) {
+        await this.assertVisible(user, id);
+        const outcome = await this.prisma.$transaction(async (tx) => {
+            await lockEcVoucher(tx, id);
+            const v = await tx.ec_vouchers.findUniqueOrThrow({ where: { id }, select: { voucher_number: true, student_id: true, status: true, waive_reason: true } });
+            if (v.status !== 'WAIVED') throw new ConflictException(`${v.voucher_number} is not waived`);
+            await tx.ec_voucher_lines.updateMany({ where: { voucher_id: id }, data: { waived_amount: 0 } });
+            await tx.ec_vouchers.update({ where: { id }, data: { waived_at: null, waived_by: null, waive_reason: null } });
+            const r = await recomputeVoucherInTx(tx, id);
+            return { ...v, newStatus: r.status };
+        });
+        await this.auditLogs.log({
+            entity_type: 'EC_VOUCHER',
+            entity_id: String(id),
+            action: 'UPDATED',
+            section: 'finance',
+            field: 'status',
+            old_value: 'WAIVED',
+            new_value: outcome.newStatus,
+            student_id: outcome.student_id,
+            note: `Waiver undone on ${outcome.voucher_number} (was: ${outcome.waive_reason ?? '-'})`,
+            changed_by: actorOf(user),
+        });
+        return this.detail(user, id);
     }
 
     // ─── Delete (the way to fix a mistake; there is no VOID) ──────────────

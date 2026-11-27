@@ -10,6 +10,8 @@ export const EC_TILE = {
     studentCharges: 'extracurricular.student_charges',
     singleVoucher: 'extracurricular.single_voucher',
     vouchers: 'extracurricular.vouchers',
+    receiveDeposit: 'extracurricular.receive_deposit',
+    paymentHistory: 'extracurricular.payment_history',
 } as const;
 
 /**
@@ -23,7 +25,23 @@ export const EC_LIVE_TILES: string[] = [
     EC_TILE.studentCharges,
     EC_TILE.singleVoucher,
     EC_TILE.vouchers,
+    EC_TILE.receiveDeposit,
+    EC_TILE.paymentHistory,
 ];
+
+/**
+ * How an EC payment can be recorded: by hand only (desk or bank counter).
+ * Matches the webapp's MANUAL_PAYMENT_METHODS. EC vouchers are never paid
+ * through 1Bill, Meezan or family credit.
+ */
+export const EC_PAYMENT_METHODS = ['cash', 'bank_transfer', 'cheque', 'online', 'pos', 'pay_order'] as const;
+export type EcPaymentMethod = (typeof EC_PAYMENT_METHODS)[number];
+
+/** Off: a payment must be dated on or before the voucher's valid-till date. */
+export const EC_ALLOW_PAYMENT_AFTER_EXPIRY = false;
+
+/** Off: only an expired voucher can be reissued. */
+export const EC_ALLOW_REISSUE_BEFORE_EXPIRY = false;
 
 /** A new voucher is valid through this many days after its issue date unless told otherwise. */
 export const EC_DEFAULT_VALIDITY_DAYS = 15;

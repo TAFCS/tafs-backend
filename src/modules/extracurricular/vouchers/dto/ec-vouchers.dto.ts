@@ -12,6 +12,7 @@ import {
     Max,
     MaxLength,
     Min,
+    MinLength,
 } from 'class-validator';
 import { toIntArray, toUpperStringArray } from '../../ec-common.util';
 import { EC_VOUCHER_STATES, type EcVoucherState } from '../../ec-voucher-state';
@@ -178,6 +179,31 @@ export class CreateEcVoucherDto {
     @Type(() => Number)
     @IsInt()
     bank_account_id?: number;
+}
+
+export class ReissueEcVoucherDto {
+    @ApiProperty({ example: '2026-12-01' })
+    @Matches(DATE, { message: 'issue_date must be YYYY-MM-DD' })
+    issue_date: string;
+
+    @ApiPropertyOptional({ description: 'Default: 15 days after the issue date' })
+    @IsOptional()
+    @Matches(DATE, { message: 'expiry_date must be YYYY-MM-DD' })
+    expiry_date?: string;
+
+    @ApiPropertyOptional({ description: "Default: the old voucher's bank if still active, else the default bank" })
+    @IsOptional()
+    @Type(() => Number)
+    @IsInt()
+    bank_account_id?: number;
+}
+
+export class WaiveEcVoucherDto {
+    @ApiProperty({ description: 'Why the rest of the voucher is written off (kept on the voucher and in the log)' })
+    @IsString()
+    @MinLength(3)
+    @MaxLength(500)
+    reason: string;
 }
 
 export class EcPdfPrepareDto {

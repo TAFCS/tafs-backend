@@ -3,6 +3,7 @@ import 'reflect-metadata';
 import { StaffRole } from '@prisma/client';
 import { EcChargesController } from '../extracurricular/charges/ec-charges.controller';
 import { EcClassScheduleController } from '../extracurricular/class-schedule/ec-class-schedule.controller';
+import { EcDepositsController } from '../extracurricular/deposits/ec-deposits.controller';
 import { EcFeeHeadsController } from '../extracurricular/fee-heads/ec-fee-heads.controller';
 import { EcVouchersController } from '../extracurricular/vouchers/ec-vouchers.controller';
 import { StudentsController } from '../students/students.controller';
@@ -17,10 +18,15 @@ import { REQUIRE_ACTION_KEY, type RequireActionMetadata } from '../../decorators
  * allowlist (EC_LIVE_TILES) matches the manifest.
  */
 
-const EC_CONTROLLERS = [EcFeeHeadsController, EcClassScheduleController, EcChargesController, EcVouchersController];
+const EC_CONTROLLERS = [EcFeeHeadsController, EcClassScheduleController, EcChargesController, EcVouchersController, EcDepositsController];
 
 /** EC tiles whose pages pick a student, and so must be on the student search allowlist. */
-const EC_TILES_WITH_STUDENT_SEARCH = ['extracurricular.student_charges', 'extracurricular.single_voucher'];
+const EC_TILES_WITH_STUDENT_SEARCH = [
+    'extracurricular.student_charges',
+    'extracurricular.single_voucher',
+    'extracurricular.receive_deposit',
+    'extracurricular.payment_history',
+];
 
 const ecTiles = TILES_MANIFEST.filter((t) => t.module === 'extracurricular');
 const tile = (id: string) => TILES_MANIFEST.find((t) => t.id === id);
@@ -50,6 +56,8 @@ describe('Extracurricular Fees tiles', () => {
         expect(ecTiles.map((t) => t.id).sort()).toEqual([
             'extracurricular.class_schedule',
             'extracurricular.fee_heads',
+            'extracurricular.payment_history',
+            'extracurricular.receive_deposit',
             'extracurricular.single_voucher',
             'extracurricular.student_charges',
             'extracurricular.vouchers',

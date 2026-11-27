@@ -15,6 +15,8 @@ import {
     EcVoucherFilterDto,
     EcVoucherListQueryDto,
     EcVoucherSearchQueryDto,
+    ReissueEcVoucherDto,
+    WaiveEcVoucherDto,
 } from './dto/ec-vouchers.dto';
 import { EcVoucherPdfService } from './ec-voucher-pdf.service';
 import { EcVouchersService } from './ec-vouchers.service';
@@ -56,7 +58,7 @@ export class EcVouchersController {
 
     @Get('search-simple')
     @ApiOperation({ summary: 'Find vouchers by number or student (empty text finds nothing)' })
-    @RequireAnyTile('extracurricular.vouchers', 'extracurricular.single_voucher')
+    @RequireAnyTile('extracurricular.vouchers', 'extracurricular.single_voucher', 'extracurricular.receive_deposit', 'extracurricular.payment_history')
     async searchSimple(@Query() query: EcVoucherSearchQueryDto, @CurrentUser() user: IJwtStaffPayload) {
         return createApiResponse(await this.service.searchSimple(user, query), HttpStatus.OK, 'Extracurricular vouchers found');
     }
@@ -70,7 +72,12 @@ export class EcVouchersController {
 
     @Get('student/:cc')
     @ApiOperation({ summary: "One student's extracurricular vouchers, payments and unissued charges" })
-    @RequireAnyAction('extracurricular.vouchers#view', 'extracurricular.single_voucher#view')
+    @RequireAnyAction(
+        'extracurricular.vouchers#view',
+        'extracurricular.single_voucher#view',
+        'extracurricular.receive_deposit#view',
+        'extracurricular.payment_history#view',
+    )
     async forStudent(@Param('cc', ParseIntPipe) cc: number, @CurrentUser() user: IJwtStaffPayload) {
         return createApiResponse(await this.service.forStudent(user, cc), HttpStatus.OK, 'Student vouchers fetched');
     }
@@ -100,7 +107,12 @@ export class EcVouchersController {
 
     @Get(':id')
     @ApiOperation({ summary: 'One voucher with its lines and payments' })
-    @RequireAnyAction('extracurricular.vouchers#view', 'extracurricular.single_voucher#view')
+    @RequireAnyAction(
+        'extracurricular.vouchers#view',
+        'extracurricular.single_voucher#view',
+        'extracurricular.receive_deposit#view',
+        'extracurricular.payment_history#view',
+    )
     async detail(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
         return createApiResponse(await this.service.detail(user, id), HttpStatus.OK, 'Extracurricular voucher fetched');
     }
@@ -115,10 +127,39 @@ export class EcVouchersController {
     @Post(':id/pdf')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'The challan PDF (the stamped receipt once paid)' })
-    @RequireAnyAction('extracurricular.vouchers#download', 'extracurricular.single_voucher#create')
+    @RequireAnyAction(
+        'extracurricular.vouchers#download',
+        'extracurricular.single_voucher#create',
+        'extracurricular.receive_deposit#view',
+        'extracurricular.payment_history#view',
+    )
     async renderPdf(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
         await this.service.assertVisible(user, id);
         return createApiResponse(await this.pdf.ensurePdf(id), HttpStatus.OK, 'Challan ready');
+    }
+
+    @Post(':id/reissue')
+    @HttpCode(HttpStatus.CREATED)
+    @ApiOperation({ summary: "Put an expired voucher's unpaid part on a fresh voucher with new dates" })
+    @RequireAction('extracurricular.vouchers#reissue')
+    async reissue(@Param('id', ParseIntPipe) id: number, @Body() dto: ReissueEcVoucherDto, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.service.reissue(user, id, dto), HttpStatus.CREATED, 'Voucher reissued');
+    }
+
+    @Post(':id/waive')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Write off what is still owed on a voucher, with a reason' })
+    @RequireAction('extracurricular.vouchers#waive')
+    async waive(@Param('id', ParseIntPipe) id: number, @Body() dto: WaiveEcVoucherDto, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.service.waive(user, id, dto), HttpStatus.OK, 'Voucher waived');
+    }
+
+    @Post(':id/unwaive')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Undo a waiver' })
+    @RequireAction('extracurricular.vouchers#waive')
+    async unwaive(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.service.unwaive(user, id), HttpStatus.OK, 'Waiver undone');
     }
 
     @Delete(':id')
