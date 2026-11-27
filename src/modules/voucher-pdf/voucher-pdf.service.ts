@@ -70,7 +70,11 @@ export class VoucherPdfService implements OnModuleDestroy {
                 const bytes = await this.pool.run(data, { name: 'renderEcVoucherPdfTask' });
                 return Buffer.from(bytes);
             }
-            const { renderEcVoucherPdf } = await import('./render-ec-voucher-pdf.js');
+            // Loaded lazily (so importing this service never loads the template), and
+            // with require rather than import(): a dynamic import() throws under Jest
+            // (no --experimental-vm-modules), which broke the DB suite.
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const { renderEcVoucherPdf } = require('./render-ec-voucher-pdf') as typeof import('./render-ec-voucher-pdf');
             return renderEcVoucherPdf(data);
         } catch (error) {
             this.logger.error(`Failed to render extracurricular voucher ${data.voucherNumber}`, error);
