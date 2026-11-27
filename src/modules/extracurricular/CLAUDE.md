@@ -67,6 +67,22 @@ tables, and these rules do not apply to the academic ones.
 14. **Whole rupees.** Every EC amount is a whole number.
 15. **Academic year** is stored as `YYYY-YYYY` (`normalizeEcAcademicYear`).
 
+## Where the rules live
+
+| File | Owns |
+|---|---|
+| `ec-issue.ts` | `createVoucherInTx`: the only way a voucher is created (single, bulk, reissue); `resolveEcBank` |
+| `ec-recompute.ts` | `recomputeVoucherInTx` (the only writer of money totals/statuses), `lockEcVoucher` |
+| `ec-money.util.ts` | voucher number, remaining, auto/manual split, status from money (pure, unit-tested) |
+| `ec-voucher-state.ts` | shown state (EXPIRED / REISSUED derived) and the matching list filter |
+| `ec-dates.util.ts` | Pakistan "today", strict date parsing, charge periods per class term |
+| `voucher-pdf/EcChallanPDF.tsx` | the challan; bump `EC_PDF_TEMPLATE_VERSION` when it changes |
+| `test/db/helpers/ec-invariants.ts` | every money identity, checked from the rows |
+
+Bulk issuance has no job table: the page sends chunks of students to
+`POST /ec-vouchers/bulk/issue`, each re-deriving eligibility, so a retry is
+harmless and the academic bulk-voucher deploy gate does not apply.
+
 ## Access
 
 The Extracurricular Fees module (`extracurricular.*` tiles) is granted per
