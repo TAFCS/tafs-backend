@@ -45,32 +45,17 @@ describe('monthsUntilPermanent (TAFSD-442)', () => {
   });
 });
 
-describe('isPermanentForLeave (TAFSD-321)', () => {
-  const now = new Date('2026-10-14T10:00:00Z');
-  const base = { is_permanent_employee: false, employment_subtype: EmploymentSubtype.NON_PERMANENT };
-
-  it('Academics needs 14 months: a teacher who joined 28 Aug 2025 is permanent from 28 Oct 2026', () => {
-    expect(isPermanentForLeave({ ...base, join_date: new Date('2025-08-28'), departmentName: 'ACADEMICS' }, new Date('2026-10-27T10:00:00Z'))).toBe(false);
-    expect(isPermanentForLeave({ ...base, join_date: new Date('2025-08-28'), departmentName: 'ACADEMICS' }, new Date('2026-10-28T10:00:00Z'))).toBe(true);
+describe('isPermanentForLeave (TAFSD-621: marked PERMANENT only)', () => {
+  it('only the PERMANENT subtype counts, whatever the flag', () => {
+    expect(isPermanentForLeave({ is_permanent_employee: true, employment_subtype: EmploymentSubtype.PERMANENT })).toBe(true);
+    expect(isPermanentForLeave({ is_permanent_employee: false, employment_subtype: EmploymentSubtype.PERMANENT })).toBe(true);
+    expect(isPermanentForLeave({ is_permanent_employee: true, employment_subtype: EmploymentSubtype.NON_PERMANENT })).toBe(false);
+    expect(isPermanentForLeave({ is_permanent_employee: true, employment_subtype: EmploymentSubtype.CONTRACTUAL })).toBe(false);
   });
 
-  it('everyone else: permanent at 12 months, not at 11', () => {
-    expect(isPermanentForLeave({ ...base, join_date: new Date('2025-10-14'), departmentName: 'ADMINISTRATION' }, now)).toBe(true);
-    expect(isPermanentForLeave({ ...base, join_date: new Date('2025-11-14'), departmentName: 'SUPPORT SERVICES' }, now)).toBe(false);
-  });
-
-  it('contractual is never permanent, whatever the service or flag', () => {
-    expect(
-      isPermanentForLeave(
-        { is_permanent_employee: true, employment_subtype: EmploymentSubtype.CONTRACTUAL, join_date: new Date('2010-01-01'), departmentName: 'ACADEMICS' },
-        now,
-      ),
-    ).toBe(false);
-  });
-
-  it('the permanent flag wins for everyone else; no joining date is not permanent', () => {
-    expect(isPermanentForLeave({ ...base, is_permanent_employee: true, join_date: null, departmentName: 'ACADEMICS' }, now)).toBe(true);
-    expect(isPermanentForLeave({ ...base, join_date: null, departmentName: 'ACADEMICS' }, now)).toBe(false);
+  it('no subtype (left, or not yet classified) falls back to the flag', () => {
+    expect(isPermanentForLeave({ is_permanent_employee: true, employment_subtype: null })).toBe(true);
+    expect(isPermanentForLeave({ is_permanent_employee: false, employment_subtype: null })).toBe(false);
   });
 });
 

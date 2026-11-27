@@ -42,7 +42,7 @@ export class LeaveRequestsController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: IJwtStaffPayload,
   ) {
-    const data = await this.leaveService.getById(id, user);
+    const data = await this.leaveService.getForReview(id, user);
     return createApiResponse(data, HttpStatus.OK, 'Leave request retrieved successfully');
   }
 

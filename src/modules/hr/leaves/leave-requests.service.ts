@@ -22,6 +22,13 @@ import {
 import { LeaveAttendanceSyncService } from './leave-attendance-sync.service';
 import { ScopeService } from '../../../common/scope/scope.service';
 import { isPermanentForLeave, monthsUntilPermanent } from '../employees/employment-permanence.util';
+import {
+  calendarMonthBounds,
+  leaveTypeRules,
+  monthKeysBetween,
+  monthLabel,
+  type LeaveTypeRules,
+} from './leave-type-rules';
 import { assertMayChangeEmployee } from '../../../common/auth/super-admin';
 
 /**
@@ -51,7 +58,9 @@ const LEAVE_INCLUDE = {
       department_id: true,
       staff_category_id: true,
       is_permanent_employee: true,
+      employment_subtype: true,
       join_date: true,
+      departments: { select: { name: true } },
       campuses: { select: { id: true, campus_name: true } },
     },
   },
@@ -105,6 +114,13 @@ export class LeaveRequestsService {
       throw new BadRequestException('End date must be on or after start date');
     }
 
+    await this.assertTypeLimits(
+      { id: leaveType.id, code: leaveType.code, name: leaveType.name },
+      profile,
+      startDate,
+      endDate,
+      { stage: 'create' },
+    );
     await this.assertNoOverlap(profile.id, startDate, endDate);
 
     const request = await this.prisma.leave_requests.create({
@@ -161,12 +177,29 @@ export class LeaveRequestsService {
     const isPermanentEmployee = this.isPermanentEmployee(profile);
     // TAFSD-461: only what this employee can apply for — Casual is for
     // permanent staff only, and retired types are never offered.
-    const leaveTypes = (
+    // TAFSD-621: each type carries its rules (leave-type-rules.ts) so the app
+    // can follow them, plus the months already at their monthly limit.
+    const offered = (
       await this.prisma.leave_types.findMany({
         select: { id: true, code: true, name: true, is_paid: true },
       })
-    ).filter(
-      (t) => !RETIRED_LEAVE_CODES.has(t.code) && (t.code !== 'CASUAL' || isPermanentEmployee),
+    ).filter((t) => {
+      const rules = leaveTypeRules(t.code);
+      return !RETIRED_LEAVE_CODES.has(t.code) && !!rules && (!rules.permanentOnly || isPermanentEmployee);
+    });
+    const leaveTypes = await Promise.all(
+      offered.map(async (t) => {
+        const rules = leaveTypeRules(t.code)!;
+        return {
+          ...t,
+          single_day: rules.singleDay,
+          max_per_month: rules.maxPerMonth,
+          permanent_only: rules.permanentOnly,
+          months_at_limit: rules.maxPerMonth
+            ? await this.monthsAtLimit(profile.id, t.id, rules.maxPerMonth)
+            : [],
+        };
+      }),
     );
     const typeOrder = ['SICK', 'CASUAL', 'UNPAID'];
     leaveTypes.sort(
@@ -231,10 +264,79 @@ export class LeaveRequestsService {
         : {}),
     };
 
-    return this.prisma.leave_requests.findMany({
+    const rows = await this.prisma.leave_requests.findMany({
       where,
       include: LEAVE_INCLUDE,
       orderBy: [{ status: 'asc' }, { created_at: 'desc' }],
+    });
+    return this.withRuleIssues(rows);
+  }
+
+  /** getById for the review screen: adds rule_issues (TAFSD-621). */
+  async getForReview(id: number, user: IJwtStaffPayload) {
+    const row = await this.getById(id, user);
+    return (await this.withRuleIssues([row]))[0];
+  }
+
+  /**
+   * TAFSD-621: for each PENDING request, the leave-type rules it breaks
+   * (requests made before the rules existed can), so HR sees why approving
+   * it will be refused. Other rows get an empty list.
+   */
+  async withRuleIssues<T extends Prisma.leave_requestsGetPayload<{ include: typeof LEAVE_INCLUDE }>>(
+    rows: T[],
+  ): Promise<(T & { rule_issues: string[] })[]> {
+    const pending = rows.filter(
+      (r) => r.status === LeaveRequestStatus.PENDING && leaveTypeRules(r.leave_types.code)?.maxPerMonth,
+    );
+    let others: { id: number; employee_id: number; leave_type_id: number; start_date: Date; end_date: Date; status: LeaveRequestStatus }[] = [];
+    if (pending.length) {
+      const min = new Date(Math.min(...pending.map((r) => r.start_date.getTime())));
+      const max = new Date(Math.max(...pending.map((r) => r.end_date.getTime())));
+      others = await this.prisma.leave_requests.findMany({
+        where: {
+          employee_id: { in: [...new Set(pending.map((r) => r.employee_id))] },
+          leave_type_id: { in: [...new Set(pending.map((r) => r.leave_type_id))] },
+          status: { in: [LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED] },
+          start_date: { lte: calendarMonthBounds(max).end },
+          end_date: { gte: calendarMonthBounds(min).start },
+        },
+        select: { id: true, employee_id: true, leave_type_id: true, start_date: true, end_date: true, status: true },
+        orderBy: { start_date: 'asc' },
+      });
+    }
+
+    return rows.map((r) => {
+      const rules = leaveTypeRules(r.leave_types.code);
+      const issues: string[] = [];
+      if (rules && r.status === LeaveRequestStatus.PENDING) {
+        const name = `${r.leave_types.name} leave`;
+        if (rules.permanentOnly && !this.isPermanentEmployee(r.employee_profiles)) {
+          issues.push(`${name} is only for permanent staff, and this employee is not marked permanent.`);
+        }
+        if (rules.singleDay && r.start_date.getTime() !== r.end_date.getTime()) {
+          issues.push(`${name} is for one day only; this request covers several days.`);
+        }
+        if (rules.maxPerMonth) {
+          const months = new Set(monthKeysBetween(r.start_date, r.end_date));
+          const clash = others.filter(
+            (o) =>
+              o.id !== r.id &&
+              o.employee_id === r.employee_id &&
+              o.leave_type_id === r.leave_type_id &&
+              monthKeysBetween(o.start_date, o.end_date).some((k) => months.has(k)),
+          );
+          if (clash.length >= rules.maxPerMonth) {
+            const list = clash
+              .map((o) => `${this.formatDate(o.start_date)} (${o.status.toLowerCase()})`)
+              .join(', ');
+            issues.push(
+              `${name} is limited to ${rules.maxPerMonth === 1 ? 'once' : `${rules.maxPerMonth} times`} a month; this employee also has ${list}.`,
+            );
+          }
+        }
+      }
+      return { ...r, rule_issues: issues };
     });
   }
 
@@ -285,6 +387,15 @@ export class LeaveRequestsService {
       if (!existing.employee_profiles.campus_id) {
         throw new BadRequestException('Employee has no campus assigned — cannot sync attendance');
       }
+      // TAFSD-621: requests made before the rules existed (or a status change
+      // since) are checked again here, against approved requests only.
+      await this.assertTypeLimits(
+        existing.leave_types,
+        existing.employee_profiles,
+        existing.start_date,
+        existing.end_date,
+        { stage: 'approve', excludeId: id },
+      );
       await this.assertNoOverlap(
         existing.employee_id,
         existing.start_date,
@@ -399,13 +510,7 @@ export class LeaveRequestsService {
   ) {
     switch (code) {
       case 'CASUAL':
-        if (!this.isPermanentEmployee(profile)) {
-          throw new BadRequestException(
-            profile.employment_subtype === EmploymentSubtype.CONTRACTUAL
-              ? 'Casual leave is only available to permanent staff'
-              : `Casual leave is only available after ${monthsUntilPermanent(profile.departments?.name)} months of service`,
-          );
-        }
+        // Permanence, one day and once a month: assertTypeLimits.
         break;
       case 'SICK':
         if (!dto.attachmentUrl?.trim() || !dto.attachmentType?.trim()) {
@@ -434,8 +539,111 @@ export class LeaveRequestsService {
     }
   }
 
+  /**
+   * TAFSD-621: the rules in leave-type-rules.ts that depend on who and when —
+   * permanent staff only, one day, a monthly limit. Shared by create and
+   * approve, and written to be reused by any HR path that puts someone on
+   * leave (TAFSD-624).
+   *
+   * - create: PENDING and APPROVED requests count toward the monthly limit,
+   *   so a second request in the month is refused while the first is waiting.
+   * - approve: only APPROVED ones count, so two old pending requests in one
+   *   month don't block each other; approving one then blocks the other.
+   * Rejected, revoked and cancelled requests never count.
+   */
+  async assertTypeLimits(
+    leaveType: { id: number; code: string; name: string },
+    employee: PermanenceProfile & { id: number },
+    start: Date,
+    end: Date,
+    opts: { stage: 'create' | 'approve'; excludeId?: number },
+  ) {
+    const rules = leaveTypeRules(leaveType.code);
+    if (!rules) return;
+    const self = opts.stage === 'create';
+    const name = `${leaveType.name} leave`;
+
+    if (rules.permanentOnly && !this.isPermanentEmployee(employee)) {
+      const who = self ? 'You are' : 'This employee is';
+      const tail =
+        employee.employment_subtype === EmploymentSubtype.CONTRACTUAL
+          ? `${who} on contract.`
+          : `${who} not marked permanent (staff become permanent after ${monthsUntilPermanent(employee.departments?.name)} months of service).`;
+      throw new BadRequestException(`${name} is only for permanent staff. ${tail}`);
+    }
+
+    if (rules.singleDay && start.getTime() !== end.getTime()) {
+      throw new BadRequestException(
+        `${name} is for one day only. Choose a single date${self ? ', and apply again for another day in a different month' : ''}.`,
+      );
+    }
+
+    if (rules.maxPerMonth) {
+      await this.assertMonthlyLimit(leaveType, employee.id, start, end, rules, opts);
+    }
+  }
+
+  private async assertMonthlyLimit(
+    leaveType: { id: number; name: string },
+    employeeId: number,
+    start: Date,
+    end: Date,
+    rules: LeaveTypeRules,
+    opts: { stage: 'create' | 'approve'; excludeId?: number },
+  ) {
+    const statuses =
+      opts.stage === 'create'
+        ? [LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED]
+        : [LeaveRequestStatus.APPROVED];
+    // A single-day type covers one month; a range is checked month by month.
+    for (const key of monthKeysBetween(start, end)) {
+      const month = calendarMonthBounds(new Date(`${key}-01T00:00:00Z`));
+      const taken = await this.prisma.leave_requests.findMany({
+        where: {
+          employee_id: employeeId,
+          leave_type_id: leaveType.id,
+          status: { in: statuses },
+          start_date: { lte: month.end },
+          end_date: { gte: month.start },
+          ...(opts.excludeId != null ? { id: { not: opts.excludeId } } : {}),
+        },
+        select: { start_date: true, status: true },
+        orderBy: { start_date: 'asc' },
+        take: rules.maxPerMonth!,
+      });
+      if (taken.length >= rules.maxPerMonth!) {
+        const first = taken[0];
+        const limit = rules.maxPerMonth === 1 ? 'once a month' : `${rules.maxPerMonth} times a month`;
+        const whose = opts.stage === 'create' ? 'You already have' : 'This employee already has';
+        throw new BadRequestException(
+          `${leaveType.name} leave can be taken ${limit}. ${whose} ${first.status === LeaveRequestStatus.PENDING ? 'a pending' : 'an approved'} ${leaveType.name.toLowerCase()} leave on ${this.formatDate(first.start_date)} in ${monthLabel(month.start)}.`,
+        );
+      }
+    }
+  }
+
+  /** "YYYY-MM" months, from last month on, where the employee is already at the limit (pending + approved). */
+  private async monthsAtLimit(employeeId: number, leaveTypeId: number, max: number): Promise<string[]> {
+    const now = new Date();
+    const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    const rows = await this.prisma.leave_requests.findMany({
+      where: {
+        employee_id: employeeId,
+        leave_type_id: leaveTypeId,
+        status: { in: [LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED] },
+        end_date: { gte: from },
+      },
+      select: { start_date: true, end_date: true },
+    });
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      for (const k of monthKeysBetween(r.start_date, r.end_date)) counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return [...counts].filter(([, n]) => n >= max).map(([k]) => k).sort();
+  }
+
   private isPermanentEmployee(profile: PermanenceProfile): boolean {
-    return isPermanentForLeave({ ...profile, departmentName: profile.departments?.name });
+    return isPermanentForLeave(profile);
   }
 
 

@@ -44,21 +44,22 @@ export function permanenceCutoff(months: number, now: Date = new Date()): Date {
 }
 
 /**
- * Whether leave policy treats the employee as permanent: marked permanent, or
- * served their department's period. Contractual staff never are, whatever
- * their length of service.
+ * Whether leave policy treats the employee as permanent (Casual leave).
+ *
+ * TAFSD-621: only staff marked PERMANENT. Length of service still makes
+ * someone permanent, but through the nightly PermanentEmployeeScheduler, which
+ * moves the subtype to PERMANENT once they have served their department's
+ * period (monthsUntilPermanent). Leave no longer second-guesses the subtype by
+ * reading join_date itself: before, staff marked NON_PERMANENT who had served
+ * 12 or 14 months were offered Casual leave.
+ *
+ * A null subtype (LEFT / TERMINATED, or not yet classified) falls back to the
+ * flag, which permanenceFields keeps in step with the subtype.
  */
-export function isPermanentForLeave(
-  profile: {
-    is_permanent_employee: boolean;
-    employment_subtype: EmploymentSubtype | null;
-    join_date: Date | null;
-    departmentName: string | null | undefined;
-  },
-  now: Date = new Date(),
-): boolean {
-  if (profile.employment_subtype === EmploymentSubtype.CONTRACTUAL) return false;
-  if (profile.is_permanent_employee) return true;
-  if (!profile.join_date) return false;
-  return profile.join_date <= permanenceCutoff(monthsUntilPermanent(profile.departmentName), now);
+export function isPermanentForLeave(profile: {
+  is_permanent_employee: boolean;
+  employment_subtype: EmploymentSubtype | null;
+}): boolean {
+  if (profile.employment_subtype != null) return profile.employment_subtype === EmploymentSubtype.PERMANENT;
+  return profile.is_permanent_employee;
 }
