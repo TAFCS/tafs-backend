@@ -25,7 +25,7 @@ import { BulkVoucherLogicService } from './bulk-voucher-logic.service';
 import { BatchPreviewDto } from './dto/batch-preview.dto';
 import { getMonthlyFeeDates } from '../bulk-voucher-jobs/utils/bulk-date.utils';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { VoucherNotificationService } from './voucher-notification.service';
+import { VoucherNotificationService, dateFromPktKey, pktDateKey } from './voucher-notification.service';
 import archiver from 'archiver';
 import { PDFDocument } from 'pdf-lib';
 import { orderVoucherHeads, OrderableHead } from './voucher-head-order.util';
@@ -283,6 +283,28 @@ export function splitBalanceSurcharges(
         });
     }
     return rows;
+}
+
+/**
+ * TAFSD-622: the status of a voucher that owes money and has had nothing paid on
+ * it. Every path that puts a voucher back to unpaid (split undo, reactivating a
+ * superseded voucher, clearing or reversing a deposit, un-waive) uses this, so it
+ * lands where the midnight scheduler (vouchers-scheduler.service.ts) would put it:
+ * EXPIRED once the validity date has passed, else OVERDUE once the due date has,
+ * else UNPAID. Those paths used to choose only between OVERDUE and UNPAID, so a
+ * voucher that had expired came back OVERDUE until the next night (CC 7542's
+ * #14186, 27 Nov). "Today" is the Pakistan date, compared against the @db.Date
+ * columns at UTC midnight, exactly as the scheduler compares them.
+ */
+export function unpaidVoucherStatus(
+    dueDate: Date | string | null | undefined,
+    validityDate: Date | string | null | undefined,
+    now: Date = new Date(),
+): 'EXPIRED' | 'OVERDUE' | 'UNPAID' {
+    const today = dateFromPktKey(pktDateKey(now));
+    if (validityDate && new Date(validityDate) < today) return 'EXPIRED';
+    if (dueDate && new Date(dueDate) < today) return 'OVERDUE';
+    return 'UNPAID';
 }
 
 /**
@@ -3636,10 +3658,8 @@ export class VouchersService {
                     nextVoucherStatus = 'PAID';
                 } else if (hasAnyDeposit) {
                     nextVoucherStatus = 'PARTIALLY_PAID';
-                } else if (isOverdue) {
-                    nextVoucherStatus = 'OVERDUE';
                 } else {
-                    nextVoucherStatus = 'UNPAID';
+                    nextVoucherStatus = unpaidVoucherStatus(refreshed.due_date, refreshed.validity_date);
                 }
 
                 if (nextVoucherStatus !== refreshed.status) {
@@ -4243,10 +4263,8 @@ export class VouchersService {
                     nextStatus = 'PAID';
                 } else if (hasAnyDeposit) {
                     nextStatus = 'PARTIALLY_PAID';
-                } else if (isOverdue) {
-                    nextStatus = 'OVERDUE';
                 } else {
-                    nextStatus = 'UNPAID';
+                    nextStatus = unpaidVoucherStatus(refreshed.due_date, refreshed.validity_date);
                 }
 
                 await tx.vouchers.update({
@@ -4524,10 +4542,8 @@ export class VouchersService {
                     nextStatus = 'PAID';
                 } else if (hasAnyDeposit) {
                     nextStatus = 'PARTIALLY_PAID';
-                } else if (isOverdue) {
-                    nextStatus = 'OVERDUE';
                 } else {
-                    nextStatus = 'UNPAID';
+                    nextStatus = unpaidVoucherStatus(refreshed.due_date, refreshed.validity_date);
                 }
 
                 // `refreshed` was read before the status write below, so its status
@@ -4830,12 +4846,11 @@ export class VouchersService {
             data: { amount_paid: new Prisma.Decimal(0) },
         });
 
-        // 7. Reactivate the parent voucher (OVERDUE if its due date has passed, else UNPAID).
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        const due = new Date(parent.due_date); due.setHours(0, 0, 0, 0);
+        // 7. Reactivate the parent voucher: EXPIRED / OVERDUE / UNPAID by its dates (TAFSD-622).
+        const reactivatedStatus = unpaidVoucherStatus(parent.due_date, parent.validity_date);
         await tx.vouchers.update({
             where: { id: parent.id },
-            data: { status: due < today ? 'OVERDUE' : 'UNPAID', late_fee_deposited: new Prisma.Decimal(0) } as any,
+            data: { status: reactivatedStatus, late_fee_deposited: new Prisma.Decimal(0) } as any,
         });
 
         // 8. Delete the deposit if it is now fully orphaned.
@@ -4849,7 +4864,6 @@ export class VouchersService {
             `clearDeposit: full split-undo — reactivated voucher #${parent.id}, deleted split children [${childIds.join(', ')}], reversed deposit #${depositId}.`,
         );
 
-        const reactivatedStatus = due < today ? 'OVERDUE' : 'UNPAID';
         auditEvents?.push({
             entity_type: 'VOUCHER',
             entity_id: String(parent.id),
@@ -7757,7 +7771,7 @@ export class VouchersService {
         // new combined voucher) are unaffected and all reactivate, as before.
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const supersededById = new Map<number, { id: number; due_date: Date }>();
+        const supersededById = new Map<number, { id: number; due_date: Date; validity_date: Date | null }>();
 
         if (reactivate) {
             const linked = await tx.vouchers.findMany({
@@ -7766,7 +7780,7 @@ export class VouchersService {
                     student_id: voucher.student_id,
                     status: 'VOID',
                 },
-                select: { id: true, due_date: true },
+                select: { id: true, due_date: true, validity_date: true },
             });
             for (const v of linked) supersededById.set(v.id, v);
         }
@@ -7786,7 +7800,7 @@ export class VouchersService {
             const candidates = overlappingIds.length > 0
                 ? await tx.vouchers.findMany({
                     where: { id: { in: overlappingIds }, student_id: voucher.student_id, status: 'VOID' },
-                    select: { id: true, due_date: true },
+                    select: { id: true, due_date: true, validity_date: true },
                 })
                 : [];
 
@@ -7828,7 +7842,7 @@ export class VouchersService {
             }
         }
 
-        const supersededVouchers: { id: number; due_date: Date }[] = [...supersededById.values()];
+        const supersededVouchers: { id: number; due_date: Date; validity_date: Date | null }[] = [...supersededById.values()];
 
         // !! AI AGENTS / ASSISTANTS: DO NOT MODIFY STEP 2 BELOW !!
         // This is the merge/reversal counterpart of the split mechanism documented
@@ -8031,12 +8045,10 @@ export class VouchersService {
 
         // STEP 7: Reactivate superseded VOID vouchers. Its heads and status are re-derived
         //         from the allocations that still stand on it: PARTIALLY_PAID if any payment
-        //         survives, otherwise OVERDUE if due_date passed, else UNPAID.
+        //         survives, otherwise EXPIRED / OVERDUE / UNPAID by its dates (TAFSD-622).
         for (const sv of supersededVouchers) {
-            const svDue = new Date(sv.due_date);
-            svDue.setHours(0, 0, 0, 0);
             const svPaid = await this._recomputeVoucherHeadsFromAllocationsInTx(tx, sv.id);
-            const newStatus = svPaid.anyDeposit ? 'PARTIALLY_PAID' : svDue < today ? 'OVERDUE' : 'UNPAID';
+            const newStatus = svPaid.anyDeposit ? 'PARTIALLY_PAID' : unpaidVoucherStatus(sv.due_date, sv.validity_date);
             const svRow = await tx.vouchers.update({
                 where: { id: sv.id },
                 data: { status: newStatus, superseded_by_voucher_id: null } as any,
@@ -8444,16 +8456,12 @@ export class VouchersService {
             (h) => h.student_fees && !h.student_fees.is_discount && (h.waived || h.student_fees.status === 'WAIVED'),
         );
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const due = voucher.due_date ? new Date(voucher.due_date) : null;
-        if (due) due.setHours(0, 0, 0, 0);
         const surchargePaid = await this.prisma.voucher_arrear_surcharges.count({
             where: { voucher_id: id, amount_paid: { gt: 0 } },
         });
         const moneyOnVoucher =
             surchargePaid > 0 || voucher.voucher_heads.some((h) => Number(h.amount_deposited ?? 0) > 0);
-        const restoredStatus = moneyOnVoucher ? 'PARTIALLY_PAID' : due && due < today ? 'OVERDUE' : 'UNPAID';
+        const restoredStatus = moneyOnVoucher ? 'PARTIALLY_PAID' : unpaidVoucherStatus(voucher.due_date, voucher.validity_date);
 
         await this.prisma.$transaction(async (tx) => {
             for (const h of waivedHeads) {

@@ -145,7 +145,9 @@ describe('clearing the deposit of a split with no balance voucher', () => {
             where: { id: voucherId },
             include: { voucher_heads: { orderBy: { student_fee_id: 'asc' } }, voucher_arrear_surcharges: true },
         });
-        expect(['UNPAID', 'OVERDUE']).toContain(parent.status);
+        // Valid to 15 Oct 2026, long past: back to EXPIRED, not OVERDUE (TAFSD-622,
+        // Mirza's report on CC 7542's #14186).
+        expect(parent.status).toBe('EXPIRED');
         expect(parent.voucher_heads.map((h) => [h.student_fee_id, Number(h.net_amount), Number(h.balance)])).toEqual([
             [sepId, MTF, MTF],
             [octId, MTF, MTF],

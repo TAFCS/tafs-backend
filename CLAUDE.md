@@ -168,14 +168,17 @@ change makes one false, the change is wrong, not the rule.
 **Invariant.** When voucher issuance supersedes older vouchers
 (`_planFeeDateSupersession`: blunt "void every not-fully-paid voucher with
 `fee_date <= new`"), deleting that superseding voucher (most-recent-first) MUST
-bring every one of those predecessors back — `OVERDUE` if `due_date` has passed,
-else `UNPAID` — via `_destroyVoucherInTx` STEP 1 + STEP 7.
+bring every one of those predecessors back — `EXPIRED` if `validity_date` has
+passed, `OVERDUE` if `due_date` has, else `UNPAID` (`unpaidVoucherStatus`, the
+same dates the midnight scheduler uses; TAFSD-622) — via `_destroyVoucherInTx`
+STEP 1 + STEP 7. Every other path that puts a voucher back to unpaid (split undo,
+clearing or reversing a deposit, un-waive) uses the same function.
 
 **Mechanism (fixed 2026-09-09).** `create()` step 6 stamps each voided
 predecessor with `vouchers.superseded_by_voucher_id = <new voucher id>`.
 `_destroyVoucherInTx` STEP 1 reactivates **exactly** the `status = 'VOID'`
 vouchers whose `superseded_by_voucher_id` equals the voucher being deleted;
-STEP 7 flips them to `OVERDUE`/`UNPAID` and clears the link. Already-`VOID`
+STEP 7 flips them to `EXPIRED`/`OVERDUE`/`UNPAID` and clears the link. Already-`VOID`
 predecessors are never re-stamped, so a chain V1→V2→V3 keeps V1 pointing at V2
 and only V2 reactivates when V3 is deleted.
 

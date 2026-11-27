@@ -150,7 +150,9 @@ describe('POST /vouchers/:id/regenerate', () => {
         const del = await admin.delete(`/vouchers/${v2}`);
         expect(del.status).toBe(200);
         const restored = await prisma.vouchers.findUniqueOrThrow({ where: { id: v1 } });
-        expect(['UNPAID', 'OVERDUE']).toContain(restored.status);
+        // Valid to 20 Sep 2026, long past: it comes back EXPIRED, as the scheduler
+        // would make it, not OVERDUE (TAFSD-622).
+        expect(restored.status).toBe('EXPIRED');
         expect(restored.superseded_by_voucher_id).toBeNull();
     });
 
