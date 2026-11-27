@@ -2516,6 +2516,28 @@ export class StaffEditingService {
       await tx.vouchers.deleteMany({ where: { student_id: cc } });
       await tx.deposits.deleteMany({ where: { student_id: cc } });
 
+      // B2. TAFSD-605: extracurricular rows, children first. The EC tables link to
+      // each other with NO ACTION, and leaving them to the students cascade fails
+      // (Postgres checks ec_voucher_lines → ec_student_charges before the
+      // voucher cascade has removed the lines).
+      await tx.ec_deposit_allocations.deleteMany({
+        where: {
+          OR: [
+            { ec_deposits: { student_id: cc } },
+            { ec_student_charges: { student_id: cc } },
+            { ec_voucher_lines: { ec_vouchers: { student_id: cc } } },
+          ],
+        },
+      });
+      await tx.ec_deposits.deleteMany({ where: { student_id: cc } });
+      await tx.ec_student_charges.updateMany({ where: { student_id: cc }, data: { current_voucher_id: null } });
+      await tx.ec_voucher_lines.deleteMany({
+        where: { OR: [{ ec_vouchers: { student_id: cc } }, { ec_student_charges: { student_id: cc } }] },
+      });
+      await tx.ec_vouchers.updateMany({ where: { student_id: cc }, data: { reissued_from_voucher_id: null } });
+      await tx.ec_vouchers.deleteMany({ where: { student_id: cc } });
+      await tx.ec_student_charges.deleteMany({ where: { student_id: cc } });
+
       // C. Clear Academic & Identity Sub-tables
       await tx.student_activities.deleteMany({ where: { student_id: cc } });
       await tx.student_admissions.deleteMany({ where: { student_id: cc } });

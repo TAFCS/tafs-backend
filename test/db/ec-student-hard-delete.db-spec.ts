@@ -1,9 +1,8 @@
 /**
  * TAFSD-605: permanently deleting a student who has extracurricular data still
- * works. EC tables point at students with ON DELETE CASCADE and at each other
- * with NO ACTION (checked at the end of the statement), so the existing
- * hard-delete (staff-editing) clears them in the same statement without
- * knowing they exist.
+ * works. The hard-delete (staff-editing) clears the EC rows itself, children
+ * first, because the EC tables link to each other with NO ACTION and the
+ * students cascade alone fails on ec_voucher_lines → ec_student_charges.
  */
 import type { INestApplication } from '@nestjs/common';
 import type { JwtService } from '@nestjs/jwt';

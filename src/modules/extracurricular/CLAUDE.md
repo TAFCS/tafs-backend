@@ -83,6 +83,10 @@ Bulk issuance has no job table: the page sends chunks of students to
 `POST /ec-vouchers/bulk/issue`, each re-deriving eligibility, so a retry is
 harmless and the academic bulk-voucher deploy gate does not apply.
 
+Permanently deleting a student (`staff-editing.service.ts`, hard delete) removes
+their EC rows explicitly, children first. A new EC table that points at a
+student's EC rows must be added there too, or that delete fails.
+
 ## Access
 
 The Extracurricular Fees module (`extracurricular.*` tiles) is granted per
