@@ -168,7 +168,7 @@ describe('Consolidated Fee Position export over HTTP (TAFSD-620)', () => {
         });
       expect(res.status).toBe(200);
       const wb = new ExcelJS.Workbook();
-      await wb.xlsx.load(res.body as Buffer);
+      await wb.xlsx.load(res.body);
       const ws = wb.worksheets[0];
       const texts: string[] = [];
       ws.eachRow((r) => texts.push(String(r.getCell(1).value ?? '')));
