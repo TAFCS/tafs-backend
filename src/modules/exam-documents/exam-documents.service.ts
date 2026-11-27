@@ -18,7 +18,9 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { findStudentSearchHits } from '../students/student-search-match';
 import {
     ExamFeeDatePreviewDto,
+    ExamFrontNotePreviewDto,
     ExamIssueDto,
+    FRONT_NOTE_MAX_LINES,
     ExamOverrideDto,
     ExamPresetCreateDto,
     ExamReleaseDto,
@@ -57,6 +59,7 @@ import {
 } from './exam-document-release';
 import { ExamDocPage, ExamDocumentsPDF } from './ExamDocumentPDF';
 import { CAMBRIDGE_CENTRE, buildExamDocPage, dmy } from './exam-document-page';
+import { SettledFront, settleFrontFit } from './exam-front-fit';
 import { buildScheduleWorkbook } from './exam-schedule-export';
 import {
     RunStudent,
@@ -81,6 +84,61 @@ const PHOTO_CONCURRENCY = 8;
 
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
+
+/** TAFSD-555: front-note lines, trimmed and without a typed "1." or bullet (the PDF numbers or bullets them). */
+const cleanNotes = (lines: string[] | undefined) =>
+    (lines ?? []).map((n) => n.replace(/^\s*(\d+[.)]|[•·-])\s*/, '').trim()).filter(Boolean);
+
+/** TAFSD-555: a draft paper the front-note preview and the save check lay out. */
+interface FrontPaper {
+    class_id: number;
+    paper_date?: string | null;
+    time_text?: string | null;
+    subject?: string | null;
+    code?: string | null;
+}
+
+/**
+ * TAFSD-555: the front page of a class's documents with a made-up student. Everything about the
+ * student sits in fixed boxes (the name shrinks to one line, the photo box is a set size), so
+ * this page is laid out exactly like every real student's. A paper without a date yet takes
+ * Wednesday, 30 September, the longest date there is.
+ */
+function sampleFrontPage(
+    s: { title: string; segmentLine: string | null; academicYear: string; documentNotes: string[]; papers: FrontPaper[] },
+    campus: { campus_name: string; address: string | null; uan_number: string | null },
+    classId: number,
+    className: string,
+): ExamDocPage {
+    return buildExamDocPage({
+        schedule: {
+            title: s.title || 'ASSESSMENTS',
+            segmentLine: s.segmentLine,
+            academicYear: s.academicYear,
+            notes: [],
+            documentNotes: s.documentNotes,
+            campusName: campus.campus_name,
+            campusAddress: campus.address,
+            campusUan: campus.uan_number,
+            papers: s.papers
+                .filter((p) => p.class_id === classId)
+                .map((p) => ({
+                    class_id: p.class_id,
+                    paper_date: new Date(`${(p.paper_date || '2026-09-30').slice(0, 10)}T00:00:00Z`),
+                    time_text: p.time_text?.trim() || '-',
+                    subject: p.subject?.trim() || '-',
+                    code: p.code?.trim() || null,
+                })),
+        },
+        classId,
+        className,
+        sectionName: 'A',
+        serialNo: 1,
+        issuedAt: new Date(),
+        student: { cc: 1234, gr: '0000', fullName: 'Sample Student', father: 'Sample Father', dob: new Date('2012-01-01T00:00:00Z'), gender: null },
+        photo: null,
+    });
+}
 
 function karachiToday(): string {
     return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(new Date());
@@ -172,6 +230,8 @@ export class ExamDocumentsService {
             students_with_own_fee_date: row._count.exam_schedule_fee_dates,
             issue_from: iso(row.issue_from),
             notes: row.notes,
+            /** TAFSD-555: the front-of-document note; empty prints the standard two lines. */
+            document_notes: row.document_notes ?? [],
             /** TAFSD-525: the sheet the export copies; `layout_chosen` false when it was taken from the classes. */
             layout: isScheduleLayout(row.layout) ? row.layout : inferScheduleLayout(classes.map((c) => c.id)),
             layout_chosen: isScheduleLayout(row.layout),
@@ -290,6 +350,7 @@ export class ExamDocumentsService {
             classes: r.class_ids.map((id) => ({ id, description: names.get(id) ?? `Class ${id}` })),
             rows: presetRows(r.rows),
             notes: r.notes,
+            document_notes: r.document_notes ?? [],
             created_by: r.created_by,
             updated_at: r.updated_at,
         }));
@@ -313,6 +374,7 @@ export class ExamDocumentsService {
                 class_ids: classIds.sort((a, b) => a - b),
                 rows: rows as unknown as Prisma.InputJsonValue,
                 notes: dto.notes.map((n) => n.trim()).filter(Boolean),
+                document_notes: cleanNotes(dto.document_notes),
                 sort_order: (last._max.sort_order ?? 0) + 10,
                 created_by: this.by(user),
             },
@@ -344,7 +406,10 @@ export class ExamDocumentsService {
 
     private async validateUpsert(dto: ExamScheduleUpsertDto, user: Staff) {
         this.scope.assertCampus(user, dto.campus_id);
-        const campus = await this.prisma.campuses.findUnique({ where: { id: dto.campus_id }, select: { id: true } });
+        const campus = await this.prisma.campuses.findUnique({
+            where: { id: dto.campus_id },
+            select: { id: true, campus_name: true, address: true, uan_number: true },
+        });
         if (!campus) throw new BadRequestException('Unknown campus');
 
         // TAFSD-522: a real session, consecutive years.
@@ -375,7 +440,96 @@ export class ExamDocumentsService {
 
         const feeDate = dto.fee_date.slice(0, 10);
         const notes = dto.notes.map((n) => n.trim()).filter(Boolean);
-        return { classIds, feeDate, notes };
+        const documentNotes = cleanNotes(dto.document_notes);
+
+        // TAFSD-555: a front note that spills onto a second sheet, even at the smallest sizes, is refused.
+        if (documentNotes.length) {
+            const spills = (await this.settleFronts(dto, documentNotes, campus, classes)).filter((r) => !r.settled.fits);
+            if (spills.length) {
+                throw new BadRequestException(
+                    `The front note does not fit on the front of the ${spills.map((r) => r.className).join(', ')} documents. Shorten it.`,
+                );
+            }
+        }
+        return { classIds, feeDate, notes, documentNotes };
+    }
+
+    /** TAFSD-555: lay out and render the front page of every class's documents, as they would print. */
+    private async settleFronts(
+        draft: { title?: string; segment_line?: string | null; academic_year?: string; papers: FrontPaper[] },
+        documentNotes: string[],
+        campus: { campus_name: string; address: string | null; uan_number: string | null },
+        classes: { id: number; description: string }[],
+    ): Promise<{ classId: number; className: string; page: ExamDocPage; settled: SettledFront }[]> {
+        const out: { classId: number; className: string; page: ExamDocPage; settled: SettledFront }[] = [];
+        for (const c of [...classes].sort((a, b) => a.id - b.id)) {
+            const page = sampleFrontPage(
+                {
+                    title: draft.title?.trim() ?? '',
+                    segmentLine: draft.segment_line?.trim() || null,
+                    academicYear: draft.academic_year ?? '',
+                    documentNotes,
+                    papers: draft.papers,
+                },
+                campus,
+                c.id,
+                c.description,
+            );
+            out.push({ classId: c.id, className: c.description, page, settled: await settleFrontFit(page) });
+        }
+        return out;
+    }
+
+    /**
+     * TAFSD-555: the schedule editor's live preview of the front note. Renders the front page of
+     * each class's documents from the unsaved draft, through the same layout and the same render
+     * check the issued documents go through, and says per class whether the note fits, at what
+     * size, and whether it had to shrink. Returns the PDF of one class: the one asked for, or the
+     * tightest.
+     */
+    async previewFrontNote(dto: ExamFrontNotePreviewDto, user: Staff) {
+        this.scope.assertCampus(user, dto.campus_id);
+        const campus = await this.prisma.campuses.findUnique({
+            where: { id: dto.campus_id },
+            select: { campus_name: true, address: true, uan_number: true },
+        });
+        if (!campus) throw new BadRequestException('Unknown campus');
+        const classIds = [...new Set(dto.class_ids)];
+        const classes = await this.prisma.classes.findMany({ where: { id: { in: classIds } }, select: { id: true, description: true } });
+        if (!classes.length) throw new BadRequestException('Tick at least one class');
+
+        const documentNotes = cleanNotes(dto.document_notes);
+        const results = await this.settleFronts(dto, documentNotes, campus, classes);
+        const rows = results.map(({ classId, className, page, settled }) => ({
+            class_id: classId,
+            class_name: className,
+            doc_type: page.docType,
+            papers: page.papers.length,
+            /** The front note this class prints: the schedule's own, or the two standard lines. */
+            standard_lines: !documentNotes.length,
+            fits: settled.fits,
+            note_size: settled.fit.noteSize,
+            full_note_size: settled.fullNoteSize,
+            /** True when the note (and the paper rows with it) print smaller than usual to fit. */
+            shrunk: settled.fit.noteSize < settled.fullNoteSize,
+            table_size: settled.fit.size,
+        }));
+        // The tightest class: one that spills, then the smallest note, then the smallest paper rows.
+        const tightest = [...results].sort(
+            (a, b) =>
+                Number(a.settled.fits) - Number(b.settled.fits) ||
+                a.settled.fit.noteSize / a.settled.fullNoteSize - b.settled.fit.noteSize / b.settled.fullNoteSize ||
+                a.settled.fit.size - b.settled.fit.size,
+        )[0];
+        const shown = results.find((r) => r.classId === dto.class_id) ?? tightest;
+        return {
+            lines: documentNotes.length,
+            max_lines: FRONT_NOTE_MAX_LINES,
+            classes: rows,
+            shown_class_id: shown.classId,
+            tightest_class_id: tightest.classId,
+            pdf_base64: shown.settled.pdf.toString('base64'),
+        };
     }
 
     private paperRows(dto: ExamScheduleUpsertDto) {
@@ -391,7 +545,7 @@ export class ExamDocumentsService {
     }
 
     async createSchedule(dto: ExamScheduleUpsertDto, user: Staff) {
-        const { classIds, feeDate, notes } = await this.validateUpsert(dto, user);
+        const { classIds, feeDate, notes, documentNotes } = await this.validateUpsert(dto, user);
         const created = await this.prisma.exam_schedules.create({
             data: {
                 campus_id: dto.campus_id,
@@ -403,6 +557,7 @@ export class ExamDocumentsService {
                 fee_date: new Date(`${feeDate}T00:00:00Z`),
                 issue_from: dto.issue_from ? new Date(`${dto.issue_from.slice(0, 10)}T00:00:00Z`) : null,
                 notes,
+                document_notes: documentNotes,
                 status: 'DRAFT',
                 created_by: this.by(user),
                 updated_by: this.by(user),
@@ -423,7 +578,7 @@ export class ExamDocumentsService {
 
     async updateSchedule(id: number, dto: ExamScheduleUpsertDto, user: Staff) {
         const existing = await this.loadSchedule(id, user);
-        const { classIds, feeDate, notes } = await this.validateUpsert(dto, user);
+        const { classIds, feeDate, notes, documentNotes } = await this.validateUpsert(dto, user);
 
         if (existing._count.exam_documents > 0) {
             if (dto.campus_id !== existing.campus_id) {
@@ -454,6 +609,7 @@ export class ExamDocumentsService {
                     fee_date: new Date(`${feeDate}T00:00:00Z`),
                     issue_from: dto.issue_from ? new Date(`${dto.issue_from.slice(0, 10)}T00:00:00Z`) : null,
                     notes,
+                    document_notes: documentNotes,
                     updated_by: this.by(user),
                     exam_schedule_classes: { create: classIds.map((class_id) => ({ class_id })) },
                     exam_schedule_papers: { create: this.paperRows(dto) },
@@ -1610,6 +1766,13 @@ export class ExamDocumentsService {
         );
         const photos = await this.photos(ordered.map((d) => students.get(d.student_id)!).filter(Boolean));
         const pages = ordered.map((d) => this.page(schedule, d, students.get(d.student_id)!, classNames, sections, photos));
+        // TAFSD-555: render one front page per class and give its documents the room that held on one sheet.
+        const slack = new Map<number, number>();
+        for (const [i, d] of ordered.entries()) {
+            if (slack.has(d.class_id) || !pages[i].frontNotes.length) continue;
+            slack.set(d.class_id, (await settleFrontFit(pages[i])).slack);
+        }
+        for (const [i, d] of ordered.entries()) pages[i].frontSlack = slack.get(d.class_id) ?? 0;
         const element = React.createElement(ExamDocumentsPDF, { pages, title: schedule.title }) as any;
         return { buffer: Buffer.from(await renderToBuffer(element)), photos };
     }
@@ -1629,6 +1792,7 @@ export class ExamDocumentsService {
                 segmentLine: schedule.segment_line,
                 academicYear: schedule.academic_year,
                 notes: schedule.notes,
+                documentNotes: schedule.document_notes ?? [],
                 campusName: schedule.campuses.campus_name,
                 campusAddress: schedule.campuses.address,
                 campusUan: schedule.campuses.uan_number,

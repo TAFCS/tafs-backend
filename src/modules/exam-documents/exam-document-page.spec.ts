@@ -1,5 +1,5 @@
 import { buildExamDocPage, ExamDocPageInput, longDate } from './exam-document-page';
-import { fitAdmit, fitOneLine, fitTable, frontNotes, pageCountLabel, rowPadding, subjectLines } from './ExamDocumentPDF';
+import { fitAdmit, fitEntry, fitOneLine, fitTable, standardFrontNotes, pageCountLabel, rowPadding, subjectLines } from './ExamDocumentPDF';
 
 const base = (over: Partial<ExamDocPageInput> = {}): ExamDocPageInput => ({
     schedule: {
@@ -80,8 +80,8 @@ describe('TAFSD-528 exam document page', () => {
     });
 
     it('names the right document in the front-page lines', () => {
-        expect(frontNotes({ docType: 'ADMIT_CARD' })[1]).toBe('BRING THIS ADMIT CARD EVERY DAY UNTIL THE LAST DAY OF THE ASSESSMENTS.');
-        expect(frontNotes({ docType: 'STATEMENT_OF_ENTRY' })[1]).toContain('STATEMENT OF ENTRY');
+        expect(standardFrontNotes({ docType: 'ADMIT_CARD' })[1]).toBe('BRING THIS ADMIT CARD EVERY DAY UNTIL THE LAST DAY OF THE ASSESSMENTS.');
+        expect(standardFrontNotes({ docType: 'STATEMENT_OF_ENTRY' })[1]).toContain('STATEMENT OF ENTRY');
     });
 
     it('keeps the Sr I row spacing for ten one-line papers and tightens for wrapped ones', () => {
@@ -141,3 +141,61 @@ describe('TAFSD-528 exam document page', () => {
         expect(long).toBeGreaterThanOrEqual(7);
     });
 });
+
+/** The school's own admit card note (Class VI, First Semester 2026-2027), as Hassan sent it. */
+const SCHOOL_CARD_NOTE = [
+    'REGULAR SCHOOL TIMINGS WILL BE FOLLOWED DURING THE ORAL ASSESSMENTS.',
+    'ONLY SIMPLE CALCULATORS ARE ALLOWED.',
+    'KINDLY REVIEW THE WORK DONE WITH YOUR CHILD SO THAT HE / SHE MAY ACHIEVE THE BEST GRADES.',
+    'RESOURCE MATERIALS : LECTURES, TEXT BOOKS, REFERENCE BOOKS, REGISTERS / NOTE BOOKS.',
+    'NO LENDING OR BORROWING WILL BE ALLOWED, STUDENTS HAVE TO BRING TRANSPARENT POUCHES FOR STATIONERY.',
+    'NO BAGS AND NOTEBOOKS ARE ALLOWED DURING THE ASSESSMENTS.',
+    'USAGE OF ASSESSMENT BOARD IS NOT ALLOWED.',
+    'IN FAILURE TO BRING ADMIT CARD, NO STUDENT WILL BE ALLOWED TO APPEAR IN THE FIRST SEMESTER ASSESSMENTS.',
+    "IN CASE OF SCHOOL'S CLOSURE DUE TO ANY CITY DISTURBANCE, THE ASSESSMENT OF THAT DAY WILL BE ASSESSED AFTER THE LAST SCHEDULED ASSESSMENT.",
+    'NO PRE OR POST ASSESSMENT WILL BE CONDUCTED.',
+    'THE RESULT WILL BE DISTRIBUTED IN THE PTM SCHEDULED ON SATURDAY, OCTOBER 31, 2026 , IN SHA ALLAH.',
+];
+
+describe('TAFSD-555 the front note', () => {
+    const withNotes = (classId: number, notes: string[], documentNotes?: string[]) =>
+        buildExamDocPage(base({ classId, className: 'X', schedule: { ...base().schedule, notes, documentNotes } }));
+
+    it("keeps the schedule sheet's notes off an admit card", () => {
+        const d = withNotes(18, ['ADMIT CARDS WILL BE ISSUED ON 9 DECEMBER, SUBJECT TO DUES.']);
+        expect(d.docType).toBe('ADMIT_CARD');
+        expect(d.notes).toEqual([]);
+        expect(d.frontNotes).toEqual([]);
+    });
+
+    it('prints the front note on the front of both documents', () => {
+        expect(withNotes(18, [], ['  Bring a clear pouch. ', '']).frontNotes).toEqual(['Bring a clear pouch.']);
+        expect(withNotes(9, [], ['Bring a clear pouch.']).frontNotes).toEqual(['Bring a clear pouch.']);
+    });
+
+    it("leaves the statement of entry's back page alone: notice, then only the results line", () => {
+        const d = withNotes(4, ['REACH 15 MINUTES EARLY.', 'THE RESULT WILL BE DISTRIBUTED IN THE PTM ON 31 OCTOBER.'], ['A front line.']);
+        expect(d.notes).toEqual(['THE RESULT WILL BE DISTRIBUTED IN THE PTM ON 31 OCTOBER.']);
+        expect(d.notice).not.toBeNull();
+    });
+
+    it("fits the school's eleven-line note on an admit card with a full IX schedule", () => {
+        const fit = fitAdmit(Array<number>(10).fill(1), SCHOOL_CARD_NOTE);
+        expect(fit.size).toBeGreaterThanOrEqual(fit.noteSize);
+        expect(fit.noteSize).toBeGreaterThanOrEqual(6.5);
+    });
+
+    it('keeps the statement of entry table at its TAFSD-528 size with the standard lines', () => {
+        const lines = Array<number>(10).fill(1);
+        expect(fitEntry(lines, [])).toEqual({ ...fitTable(lines, 204), noteSize: 9.5 });
+    });
+
+    it('shrinks a statement of entry note and table together, never under 6.5pt', () => {
+        const fit = fitEntry(Array<number>(12).fill(1), Array<string>(12).fill('x'.repeat(240)));
+        expect(fit.noteSize).toBeGreaterThanOrEqual(6.5);
+        expect(fit.size).toBeGreaterThanOrEqual(6.5);
+        const short = fitEntry(Array<number>(8).fill(1), ['BRING THIS STATEMENT OF ENTRY EVERY DAY.', 'NO PHONES.', 'REACH EARLY.']);
+        expect(short).toMatchObject({ size: 10, noteSize: 9.5 });
+    });
+});
+

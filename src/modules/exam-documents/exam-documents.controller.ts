@@ -25,6 +25,7 @@ import { createApiResponse } from '../../utils/serializer.util';
 import type { IJwtParentPayload, IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
 import {
     ExamFeeDatePreviewDto,
+    ExamFrontNotePreviewDto,
     ExamIssueDto,
     ExamOverrideDto,
     ExamPresetCreateDto,
@@ -100,6 +101,14 @@ export class ExamDocumentsController {
     @RequireAction('student.exam_documents#manage_schedules')
     async deletePreset(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: IJwtStaffPayload) {
         return createApiResponse(await this.service.deletePreset(id, user), HttpStatus.OK, 'Preset removed');
+    }
+
+    @Post('schedules/front-note-preview')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: "Live preview of an unsaved schedule's front note: each class's front page as it would print" })
+    @RequireAction('student.exam_documents#manage_schedules')
+    async previewFrontNote(@Body() dto: ExamFrontNotePreviewDto, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.service.previewFrontNote(dto, user), HttpStatus.OK, 'Front note preview');
     }
 
     @Post('schedules')

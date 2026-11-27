@@ -56,7 +56,10 @@ export interface ExamDocPageInput {
         title: string;
         segmentLine: string | null;
         academicYear: string;
+        /** The schedule sheet's notes. Only a results / PTM line reaches a document (the back of a statement of entry). */
         notes: string[];
+        /** TAFSD-555: the front-of-document note. Empty: the two standard lines. */
+        documentNotes?: string[];
         campusName: string;
         campusAddress: string | null;
         /** TAFSD-549: the campus's UAN number, from its record. */
@@ -125,8 +128,10 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         photo: p.photo,
         initials: initialsOf(s.fullName),
         papers,
-        // Admit card: every schedule note, under the table. Statement of entry: only what the back page takes.
-        notes: notice ? backPageNotes(notice, schedule.notes) : schedule.notes,
+        // TAFSD-555: the schedule sheet's notes stay on the sheet. The front of both documents carries the
+        // schedule's own front note (or the standard lines); only a statement of entry has a back page.
+        notes: notice ? backPageNotes(notice, schedule.notes) : [],
+        frontNotes: (schedule.documentNotes ?? []).map((n) => n.trim()).filter(Boolean),
         centre: CAMBRIDGE_CENTRE,
         notice,
         assessment: schedule.title.toUpperCase(),

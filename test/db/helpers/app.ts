@@ -60,6 +60,7 @@ export function client(app: INestApplication, token: string) {
         get: (path: string) => auth(request(server).get(`/api/v1${path}`)),
         post: (path: string) => auth(request(server).post(`/api/v1${path}`)),
         patch: (path: string) => auth(request(server).patch(`/api/v1${path}`)),
+        put: (path: string) => auth(request(server).put(`/api/v1${path}`)),
         delete: (path: string) => auth(request(server).delete(`/api/v1${path}`)),
     };
 }

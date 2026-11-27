@@ -5,15 +5,23 @@ import { Circle, Document, Font, G, Image, Line, Page, Rect, StyleSheet, Svg, Te
 import type { ExamDocType } from './exam-document-rules';
 import type { Notice, NoticeItem } from './exam-notices';
 import { noticeItemText } from './exam-notices';
+import { TIMES_DEFAULT_LH, timesLines } from './times-metrics';
 
 /**
  * TAFSD-510: admit card (VI–X) and statement of entry (every other class).
  * TAFSD-528: both follow the A Level Sr I statement of entry the school signed off
  * (scripts/exam-docs-sample.cjs, StatementOfEntry): set in Times, school name and
  * document title in Stencil. A statement of entry always has a back page: the
- * segment's Notice to Candidates (exam-notices.ts) and then the schedule's notes. An
- * admit card is one page, its notes under the table. Every page ends with
- * "PAGE # 01 OF 02".
+ * segment's Notice to Candidates (exam-notices.ts) and then the schedule's results /
+ * PTM line. An admit card is one page. Every page ends with "PAGE # 01 OF 02".
+ *
+ * TAFSD-555: which note goes where.
+ *   Front of both documents, the box under the table: the schedule's front note
+ *     (`frontNotes`, set in the editor), or the two standard lines when it is empty.
+ *     Bullets on a statement of entry, numbered under NOTE: on an admit card.
+ *   Back of a statement of entry: the fixed Notice to Candidates, then the results /
+ *     PTM line from the schedule sheet's notes (`notes`).
+ *   The rest of the schedule sheet's notes print only on the sheet and its Excel export.
  */
 
 // Never hyphenate ("OB-TAINED").
@@ -71,8 +79,16 @@ export interface ExamDocPage {
     photo: string | null;
     initials: string;
     papers: ExamPaperLine[];
-    /** The schedule's notes: under the notice on a statement of entry, under the table on an admit card. */
+    /** Statement of entry only: the schedule's results / PTM line, the last bullet under the notice. */
     notes: string[];
+    /** TAFSD-555: the box under the table on the front. Empty: the two standard lines. */
+    frontNotes: string[];
+    /**
+     * TAFSD-555: points taken off the room the front note may use, found by rendering the front
+     * page (exam-front-fit.ts settleFrontFit) when the measured fit still spilled onto a second
+     * sheet. 0 when the measurement held, which is nearly always.
+     */
+    frontSlack?: number;
     /** Cambridge centre number, printed before the candidate number (the C.C.) on a statement of entry. */
     centre: string;
     /** Statement of entry only: the Notice to Candidates on its back page. */
@@ -138,8 +154,8 @@ export function pageCountLabel(page: number, of: number): string {
     return `PAGE # ${two(page)} OF ${two(of)}`;
 }
 
-/** The two lines under the table on the front page, as on the Sr I statement of entry. */
-export function frontNotes(d: Pick<ExamDocPage, 'docType'>): string[] {
+/** The two standard lines under the table on the front page, as on the Sr I statement of entry. */
+export function standardFrontNotes(d: Pick<ExamDocPage, 'docType'>): string[] {
     const doc = d.docType === 'ADMIT_CARD' ? 'admit card' : 'statement of entry';
     return [
         'All entry details, including the spelling of your name and date of birth, must be checked for accuracy.',
@@ -275,11 +291,50 @@ const LINE_H = 11.5;
 const ADMIT_BUDGET = 325;
 const ADMIT_NOTE_SIZES = [8.5, 8, 7.5, 7, 6.5];
 
-/** Height of the admit card's NOTE box; with no notes it carries the two front-page lines. */
+/** Height of the box carrying the two standard front-page lines (the TAFSD-528 calibration). */
+const STANDARD_NOTES_H = 42;
+
+/**
+ * TAFSD-555: the front note's box, in points, from the page's own measurements:
+ * A4 595.28 wide, less the page padding (18 a side), the frame's border (1.2) and padding (16),
+ * then the box's border (0.9) and padding (8), then the bullet (12) or the number (16).
+ */
+export const FRONT_BOX = {
+    entryTextW: 595.28 - 2 * 18 - 2 * 1.2 - 2 * 16 - 2 * 0.9 - 2 * 8 - 12,
+    admitTextW: 595.28 - 2 * 18 - 2 * 1.2 - 2 * 16 - 2 * 0.9 - 2 * 8 - 16,
+    /** Border and vertical padding of the box. */
+    chrome: 2 * 0.9 + 2 * 5,
+    /** The admit card's underlined NOTE: heading (9pt Times Bold) and the 3pt under it. */
+    admitHeading: 9 * TIMES_DEFAULT_LH.b + 3,
+} as const;
+
+/**
+ * TAFSD-555: the empty space left above the footer, beyond the paper rows' budget and the box
+ * of standard lines. Found by rendering the school's December 2026 schedules with longer and
+ * longer notes (scripts/exam-front-note-calibrate.ts): 118.5 to 156 points on a statement of
+ * entry (Jr I has the least), 52 to 64 on an admit card. These are the low ends, so a measured
+ * fit rarely spills; settleFrontFit renders the page and takes room back when one does.
+ */
+export const FRONT_SPARE = { entry: 118, admit: 52 };
+
+const ENTRY_NOTE_SIZES = [9.5, 9, 8.5, 8, 7.5, 7, 6.5];
+
+/** The size a front note prints at when nothing has to shrink (9.5pt bullets, 8.5pt numbered). */
+export const FULL_NOTE_SIZE = { STATEMENT_OF_ENTRY: ENTRY_NOTE_SIZES[0], ADMIT_CARD: ADMIT_NOTE_SIZES[0] } as const;
+
+/** Height of a front box of bold bullets (the standard lines, or a statement of entry's own note). */
+export function entryNotesHeight(notes: string[], size = ENTRY_NOTE_SIZES[0]): number {
+    const lh = size * TIMES_DEFAULT_LH.b;
+    return FRONT_BOX.chrome + notes.reduce((h, n, i) => h + timesLines(n.toUpperCase(), 'b', size, FRONT_BOX.entryTextW) * lh + (i ? 2 : 0), 0);
+}
+
+/** Height of the admit card's numbered NOTE box (Times Roman, line height 1.3). */
 export function admitNotesHeight(notes: string[], size = ADMIT_NOTE_SIZES[0]): number {
-    if (!notes.length) return 42;
-    const cpl = Math.floor(480 / (size * 0.66));
-    return 24 + notes.reduce((h, n) => h + subjectLines(n, cpl) * size * 1.3 + 1.5, 0);
+    return (
+        FRONT_BOX.chrome +
+        FRONT_BOX.admitHeading +
+        notes.reduce((h, n, i) => h + timesLines(n.toUpperCase(), 'r', size, FRONT_BOX.admitTextW) * size * 1.3 + (i ? 1.5 : 0), 0)
+    );
 }
 
 export interface TableFit {
@@ -302,15 +357,72 @@ export function fitTable(lineCounts: number[], budget: number): TableFit {
     return { pv: 1.5, size };
 }
 
-/** The admit card's table and notes share one budget and shrink together, the table staying a step larger. */
-export function fitAdmit(lineCounts: number[], notes: string[]): TableFit & { noteSize: number } {
-    let last: TableFit & { noteSize: number } = { pv: 1.5, size: 6.5, noteSize: 6.5 };
-    for (const noteSize of ADMIT_NOTE_SIZES) {
-        last = { ...fitTable(lineCounts, ADMIT_BUDGET - admitNotesHeight(notes, noteSize)), noteSize };
-        // Keep the table a step larger than the notes: 8.5pt notes want a full 10pt table.
-        if (last.size >= Math.min(10, noteSize + 1.5)) return last;
+/** Height the paper rows take at a fit (LINE_H is a 10pt line). */
+export function tableHeight(lineCounts: number[], fit: TableFit): number {
+    const lines = lineCounts.reduce((a, b) => a + b, 0);
+    return (lines * LINE_H * fit.size) / 10 + Math.max(lineCounts.length, 1) * 2 * fit.pv;
+}
+
+export interface FrontFit extends TableFit {
+    /** Size the front note prints at. */
+    noteSize: number;
+}
+
+/**
+ * TAFSD-555: the paper rows and an own front note share the room the rows and the standard
+ * box leave, plus the page's spare space. With the standard lines nothing changes (TAFSD-528).
+ * With a note: the note takes the spare room first, the rows never grow past their own budget,
+ * and when it is too tight both shrink together, the rows staying `lead` points larger.
+ */
+function fitFront(
+    lineCounts: number[],
+    notes: string[],
+    o: { rowsBudget: number; standardH: number; spare: number; sizes: number[]; noteH: (size: number) => number; lead: number; slack: number },
+): FrontFit {
+    const standard = fitTable(lineCounts, o.rowsBudget);
+    if (!notes.length) return { ...standard, noteSize: o.sizes[0] };
+    const room = o.rowsBudget + o.standardH + o.spare - o.slack;
+    let last: FrontFit = { pv: 1.5, size: 6.5, noteSize: o.sizes[o.sizes.length - 1] };
+    for (const noteSize of o.sizes) {
+        const noteH = o.noteH(noteSize);
+        const table = fitTable(lineCounts, Math.min(o.rowsBudget, room - noteH));
+        last = { ...table, noteSize };
+        if (table.size >= Math.min(10, noteSize + o.lead) && tableHeight(lineCounts, table) + noteH <= room) return last;
     }
     return last;
+}
+
+/** The admit card's table and front note (numbered under NOTE:), the table staying a step larger. */
+export function fitAdmit(lineCounts: number[], notes: string[], slack = 0): FrontFit {
+    return fitFront(lineCounts, notes, {
+        rowsBudget: ADMIT_BUDGET - STANDARD_NOTES_H,
+        standardH: entryNotesHeight(standardFrontNotes({ docType: 'ADMIT_CARD' })),
+        spare: FRONT_SPARE.admit,
+        sizes: ADMIT_NOTE_SIZES,
+        noteH: (size) => admitNotesHeight(notes, size),
+        // 8.5pt notes want a full 10pt table.
+        lead: 1.5,
+        slack,
+    });
+}
+
+/** A statement of entry's table and front note (bold bullets), the table at least as large as the note. */
+export function fitEntry(lineCounts: number[], notes: string[], slack = 0): FrontFit {
+    return fitFront(lineCounts, notes, {
+        rowsBudget: ROWS_BUDGET,
+        standardH: entryNotesHeight(standardFrontNotes({ docType: 'STATEMENT_OF_ENTRY' })),
+        spare: FRONT_SPARE.entry,
+        sizes: ENTRY_NOTE_SIZES,
+        noteH: (size) => entryNotesHeight(notes, size),
+        lead: 0.5,
+        slack,
+    });
+}
+
+/** The fit a document's front page prints with. */
+export function frontFit(d: Pick<ExamDocPage, 'docType' | 'papers' | 'frontNotes' | 'frontSlack'>): FrontFit {
+    const lines = paperLines(d);
+    return d.docType === 'STATEMENT_OF_ENTRY' ? fitEntry(lines, d.frontNotes, d.frontSlack ?? 0) : fitAdmit(lines, d.frontNotes, d.frontSlack ?? 0);
 }
 
 /** Text size that keeps a value on one line of its box (about 0.66em a capital, Times Bold). */
@@ -326,13 +438,12 @@ export function rowPadding(lineCounts: number[], budget = ROWS_BUDGET): number {
     return Math.max(1.5, Math.min(6.5, Math.floor(pv * 10) / 10));
 }
 
-const paperLines = (d: ExamDocPage) =>
+export const paperLines = (d: Pick<ExamDocPage, 'docType' | 'papers'>) =>
     d.papers.map((p) => subjectLines(p.subject, d.docType === 'STATEMENT_OF_ENTRY' ? SUBJECT_CHARS.entry : SUBJECT_CHARS.admit));
 
 function PapersTable({ d }: { d: ExamDocPage }) {
     const entry = d.docType === 'STATEMENT_OF_ENTRY';
-    const lines = paperLines(d);
-    const { pv, size } = entry ? fitTable(lines, ROWS_BUDGET) : fitAdmit(lines, d.notes);
+    const { pv, size } = frontFit(d);
     const W: Record<string, number | null> = { code: 84, subject: null, day: 84, date: 104, dayDate: 178, time: 74 };
     const cs = (k: string) => (W[k] ? { width: W[k] } : { flex: 1, textAlign: 'left' as const, paddingLeft: 8 });
     const cell = (v: string | null) => (v && v.trim() ? v : '-');
@@ -377,17 +488,26 @@ function PapersTable({ d }: { d: ExamDocPage }) {
     );
 }
 
-function FrontNotes({ d }: { d: ExamDocPage }) {
+/** The front box as bold bullets: the standard lines, or a statement of entry's own front note. */
+function FrontNotes({ lines, size = 9.5 }: { lines: string[]; size?: number }) {
     return (
         <View style={{ marginTop: 9, borderWidth: 0.9, borderColor: RULE, paddingVertical: 5, paddingHorizontal: 8 }}>
-            {frontNotes(d).map((n, i) => (
-                <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? 2 : 0 }]}>
-                    <Text style={{ width: 12, fontSize: 9.5 }}>•</Text>
-                    <Text style={{ flex: 1, fontFamily: F.b, fontSize: 9.5 }}>{n}</Text>
+            {lines.map((n, i) => (
+                <View key={i} style={[s.row, { alignItems: 'flex-start', marginTop: i ? 2 : 0 }]} wrap={false}>
+                    <Text style={{ width: 12, fontSize: size }}>•</Text>
+                    <Text style={{ flex: 1, fontFamily: F.b, fontSize: size }}>{n.toUpperCase()}</Text>
                 </View>
             ))}
         </View>
     );
+}
+
+/** TAFSD-555: the box under the table on the front of either document. */
+function FrontNoteBox({ d }: { d: ExamDocPage }) {
+    if (!d.frontNotes.length) return <FrontNotes lines={standardFrontNotes(d)} />;
+    const { noteSize } = frontFit(d);
+    if (d.docType === 'ADMIT_CARD') return <AdmitNotes notes={d.frontNotes} size={noteSize} />;
+    return <FrontNotes lines={d.frontNotes} size={noteSize} />;
 }
 
 /** The admit card's notes, numbered under NOTE: as on the school's own admit card. */
@@ -434,7 +554,7 @@ function FrontPage({ d, of }: { d: ExamDocPage; of: number }) {
                 <Header d={d} />
                 {d.docType === 'ADMIT_CARD' ? <AdmitFields d={d} /> : <EntryFields d={d} />}
                 <PapersTable d={d} />
-                {d.docType === 'ADMIT_CARD' && d.notes.length ? <AdmitNotes notes={d.notes} size={fitAdmit(paperLines(d), d.notes).noteSize} /> : <FrontNotes d={d} />}
+                <FrontNoteBox d={d} />
                 <View style={{ flex: 1 }} />
                 {/* TAFSD-528: no signature boxes on either document; the footer says none is needed. */}
                 <Footer d={d} page={1} of={of} right={of > 1 ? 'PLEASE TURN OVER FOR THE RULES OF ASSESSMENTS' : undefined} />
@@ -593,6 +713,18 @@ export function ExamDocumentsPDF({ pages, title }: { pages: ExamDocPage[]; title
             {pages.map((d, i) => (
                 <ExamDocPages key={`${d.cc}-${i}`} d={d} />
             ))}
+        </Document>
+    );
+}
+
+/**
+ * TAFSD-555: the front page alone, exactly as it prints in a document. settleFrontFit renders it
+ * to check the page holds on one sheet; the schedule editor's live preview shows it.
+ */
+export function ExamFrontPagePDF({ d, title = 'Front page' }: { d: ExamDocPage; title?: string }) {
+    return (
+        <Document title={title} author="TAFS">
+            <FrontPage d={d} of={d.notice ? 2 : 1} />
         </Document>
     );
 }
