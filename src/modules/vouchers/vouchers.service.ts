@@ -29,6 +29,7 @@ import { VoucherNotificationService } from './voucher-notification.service';
 import archiver from 'archiver';
 import { PDFDocument } from 'pdf-lib';
 import { orderVoucherHeads, OrderableHead } from './voucher-head-order.util';
+import { discountLeftUnusedByCash } from './discount-overcollection';
 import { isFatherRelationship } from './invalidate-unpaid-pdfs';
 import type { Response } from 'express';
 import { ScopeService } from '../../common/scope/scope.service';
@@ -3568,6 +3569,7 @@ export class VouchersService {
                         distributionHeadIds,
                         depositRecord.id,
                     );
+                    await this.assertDiscountNotPaidInCashInTx(tx, voucherId, headsTotal);
                 }
 
                 // ── Step D: Update late_fee_deposited on voucher ───────────────
@@ -3851,6 +3853,51 @@ export class VouchersService {
      * Returns the total amount actually applied (0 if there's no discount on
      * this voucher, or no capacity left).
      */
+    /**
+     * TAFSD-581: refuse a deposit whose cash pays every head in full while the
+     * voucher's discount is left unused. See discountLeftUnusedByCash. Runs
+     * after applyDiscountCreditInTx inside recordDeposit's transaction, so a
+     * refusal rolls the whole deposit back. Forfeiting a discount is done by
+     * removing the discount row, not by collecting over it.
+     */
+    private async assertDiscountNotPaidInCashInTx(
+        tx: Prisma.TransactionClient,
+        voucherId: number,
+        cashToHeads: Prisma.Decimal,
+    ): Promise<void> {
+        const heads = await tx.voucher_heads.findMany({
+            where: { voucher_id: voucherId },
+            include: { student_fees: true },
+        });
+        const discountCapacity = heads
+            .filter((h) => h.student_fees?.is_discount)
+            .reduce((sum, h) => sum.add(new Prisma.Decimal(h.student_fees!.amount ?? 0)), new Prisma.Decimal(0));
+        if (discountCapacity.lte(0)) return;
+
+        const consumedAgg = await tx.deposit_allocations.aggregate({
+            where: { voucher_id: voucherId, type: 'DISCOUNT' },
+            _sum: { amount: true },
+        });
+        const headsStillShort = heads
+            .filter((h) => !h.student_fees?.is_discount && h.waived !== true && h.student_fees?.status !== 'WAIVED')
+            .reduce((sum, h) => sum.add(Prisma.Decimal.max(new Prisma.Decimal(h.balance ?? 0), 0)), new Prisma.Decimal(0));
+
+        const over = discountLeftUnusedByCash({
+            discountCapacity,
+            discountConsumed: new Prisma.Decimal(consumedAgg._sum.amount ?? 0),
+            headsStillShort,
+            cashToHeads,
+        });
+        if (over.gt(0)) {
+            const rs = (d: Prisma.Decimal) => `Rs. ${Number(d.toFixed(0)).toLocaleString('en-US')}`;
+            throw new BadRequestException(
+                `Voucher #${voucherId} carries a discount of ${rs(discountCapacity)}, and this deposit pays every fee head ` +
+                `in full, so ${rs(over)} of the discount would go unused and be recorded as cash. ` +
+                `Enter ${rs(over)} less on the fee heads. If the discount no longer applies, remove it before recording the full amount.`,
+            );
+        }
+    }
+
     /** Public — MeezanService's bank auto-reconciliation flow also uses this. */
     async applyDiscountCreditInTx(
         tx: Prisma.TransactionClient,
@@ -6743,14 +6790,23 @@ export class VouchersService {
 
         // VOID is a manual override (superseded voucher) — never recalculate it.
         // PAID is also definitional — hardcoded by deposit flow or split transaction.
-        // EXPIRED is set by the validity-date cron and must not be overridden back to OVERDUE.
         // WAIVED is a manual write-off (see waiveVoucher) — only un-waive restores it.
         // Re-deriving it from student_fees breaks split vouchers where a head only
         // covers a *portion* of the underlying student_fee amount.
+        //
+        // EXPIRED is NOT terminal here (TAFSD-581). It is a live voucher whose
+        // validity window closed, and recordDeposit still accepts deposits on it,
+        // so it needs the same derived balances as OVERDUE. It used to take this
+        // early return, which attached no total_balance / total_discount_unapplied:
+        // the deposit page then fell back to summing the heads and skipped any
+        // attached discount, asking for the gross amount. Voucher 14176 printed
+        // Rs 233,943 after due, the deposit page asked for Rs 273,599, and that is
+        // what was recorded; the Rs 39,656 discount was never used. Its status is
+        // still kept as EXPIRED below — the validity-date cron set it and it must
+        // not be overridden back to OVERDUE.
         if (
             voucher.status === 'VOID' ||
             voucher.status === 'PAID' ||
-            voucher.status === 'EXPIRED' ||
             voucher.status === 'WAIVED'
         ) {
             const getAcademicMonthIndex = (m: number) => m >= 8 ? m - 8 : m + 4;
@@ -7036,7 +7092,9 @@ export class VouchersService {
             sf_net_total: sfNetTotal.add(surchargeNetTotal).toFixed(2),
             sf_gross_total: sfGrossTotal.add(surchargeNetTotal).toFixed(2),
             sf_discount_total: sfDiscountTotal.toFixed(2),
-            status: computedStatus,
+            // EXPIRED is the cron's call (see the early return above): keep it
+            // unless a deposit has actually settled the voucher.
+            status: voucher.status === 'EXPIRED' && computedStatus !== 'PAID' ? 'EXPIRED' : computedStatus,
             // Add explicitly for frontend convenience
             surcharge_balance: surchargeRemTotal.toFixed(2),
             head_balance: totalRemHeads.toFixed(2),
