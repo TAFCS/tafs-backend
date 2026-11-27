@@ -3518,8 +3518,14 @@ model exam_schedules {
   fee_date                DateTime                  @db.Date
   /// No document can be issued before this date.
   issue_from              DateTime?                 @db.Date
-  /// Printed under the papers, in order.
+  /// Printed under the papers on the schedule sheet and its Excel export, in order.
+  /// A results / PTM line among them is also the last bullet on the back of a
+  /// statement of entry (exam-notices.ts backPageNotes). Never on an admit card.
   notes                   String[]                  @default([])
+  /// TAFSD-555: the note in the box under the table on the FRONT of every statement
+  /// of entry and admit card. Empty: the two standard lines (ExamDocumentPDF
+  /// standardFrontNotes). The back page (Notice to Candidates) stays fixed in code.
+  document_notes          String[]                  @default([])
   /// TAFSD-525: SECONDARY | O_LEVEL | SENIOR | JUNIOR — which of the school's
   /// sheets the Excel export copies. Null: taken from the classes.
   layout                  String?                   @db.VarChar(20)
@@ -3544,19 +3550,21 @@ model exam_schedules {
 /// subject of every paper row and the notes. Choosing one fills a new schedule;
 /// the admin then only enters the paper dates.
 model exam_schedule_presets {
-  id           Int      @id @default(autoincrement())
-  name         String   @db.VarChar(150)
-  layout       String   @db.VarChar(20)
-  title        String   @db.VarChar(150)
-  segment_line String?  @db.VarChar(150)
-  class_ids    Int[]    @default([])
+  id             Int      @id @default(autoincrement())
+  name           String   @db.VarChar(150)
+  layout         String   @db.VarChar(20)
+  title          String   @db.VarChar(150)
+  segment_line   String?  @db.VarChar(150)
+  class_ids      Int[]    @default([])
   /// Paper rows without dates: [{ time, cells: { "<class_id>": subject }, times?: { "<class_id>": time } }]
-  rows         Json     @default("[]")
-  notes        String[] @default([])
-  sort_order   Int      @default(0)
-  created_by   String?  @db.VarChar(100)
-  created_at   DateTime @default(now()) @db.Timestamp(6)
-  updated_at   DateTime @updatedAt @db.Timestamp(6)
+  rows           Json     @default("[]")
+  notes          String[] @default([])
+  /// TAFSD-555: the front-of-document note a schedule made from this preset starts with.
+  document_notes String[] @default([])
+  sort_order     Int      @default(0)
+  created_by     String?  @db.VarChar(100)
+  created_at     DateTime @default(now()) @db.Timestamp(6)
+  updated_at     DateTime @updatedAt @db.Timestamp(6)
 }
 
 model exam_schedule_classes {

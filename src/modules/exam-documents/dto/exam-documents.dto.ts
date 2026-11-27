@@ -27,6 +27,9 @@ const toIntArray = ({ value }: { value: unknown }) => {
     const parts = (Array.isArray(value) ? value : [value]).flatMap((v) => String(v).split(','));
     return parts.map((p) => p.trim()).filter(Boolean).map(Number);
 };
+/** TAFSD-555: the most lines a front note may have; the front of a document stays one page. */
+export const FRONT_NOTE_MAX_LINES = 12;
+
 export const MISSING_DATA = ['photo', 'father', 'dob'] as const;
 export type MissingData = (typeof MISSING_DATA)[number];
 export const FEE_DATE_KINDS = ['SCHEDULE', 'OWN'] as const;
@@ -138,6 +141,18 @@ export class ExamScheduleUpsertDto {
     @MaxLength(600, { each: true })
     notes!: string[];
 
+    @ApiPropertyOptional({
+        type: [String],
+        description:
+            'TAFSD-555: the note on the front of every statement of entry and admit card. Empty: the two standard lines.',
+    })
+    @IsOptional()
+    @IsArray()
+    @ArrayMaxSize(FRONT_NOTE_MAX_LINES)
+    @IsString({ each: true })
+    @MaxLength(250, { each: true })
+    document_notes?: string[];
+
     @ApiProperty({ type: [Number] })
     @IsArray()
     @ArrayMinSize(1)
@@ -216,6 +231,18 @@ export class ExamPresetCreateDto {
     @IsString({ each: true })
     @MaxLength(600, { each: true })
     notes!: string[];
+
+    @ApiPropertyOptional({
+        type: [String],
+        description:
+            'TAFSD-555: the note on the front of every statement of entry and admit card. Empty: the two standard lines.',
+    })
+    @IsOptional()
+    @IsArray()
+    @ArrayMaxSize(FRONT_NOTE_MAX_LINES)
+    @IsString({ each: true })
+    @MaxLength(250, { each: true })
+    document_notes?: string[];
 }
 
 export class ExamScheduleStatusDto {
@@ -372,4 +399,92 @@ export class ExamOverrideDto {
     @MinLength(5)
     @MaxLength(500)
     reason!: string;
+}
+
+/** TAFSD-555: a paper as the editor has it so far; anything not filled in yet is laid out with a stand-in. */
+export class ExamFrontPreviewPaperDto {
+    @ApiProperty()
+    @Type(() => Number)
+    @IsInt()
+    class_id!: number;
+
+    @ApiPropertyOptional({ example: '2026-12-11' })
+    @IsOptional()
+    @IsDateString()
+    paper_date?: string;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    @MaxLength(60)
+    time_text?: string;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    @MaxLength(255)
+    subject?: string;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    @MaxLength(40)
+    code?: string;
+}
+
+/**
+ * TAFSD-555: the unsaved schedule the editor's live preview lays out. Looser than a save: lines
+ * may run over the limits, so the preview can show how far over they are.
+ */
+export class ExamFrontNotePreviewDto {
+    @ApiProperty()
+    @Type(() => Number)
+    @IsInt()
+    campus_id!: number;
+
+    @ApiPropertyOptional({ example: '2026-2027' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(20)
+    academic_year?: string;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    @MaxLength(150)
+    title?: string;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    @MaxLength(150)
+    segment_line?: string;
+
+    @ApiProperty({ type: [String] })
+    @IsArray()
+    @ArrayMaxSize(40)
+    @IsString({ each: true })
+    @MaxLength(1000, { each: true })
+    document_notes!: string[];
+
+    @ApiProperty({ type: [Number] })
+    @IsArray()
+    @ArrayMinSize(1)
+    @ArrayMaxSize(25)
+    @Type(() => Number)
+    @IsInt({ each: true })
+    class_ids!: number[];
+
+    @ApiProperty({ type: [ExamFrontPreviewPaperDto] })
+    @IsArray()
+    @ArrayMaxSize(400)
+    @ValidateNested({ each: true })
+    @Type(() => ExamFrontPreviewPaperDto)
+    papers!: ExamFrontPreviewPaperDto[];
+
+    @ApiPropertyOptional({ description: 'The class whose front page to return. Left out: the tightest.' })
+    @IsOptional()
+    @Type(() => Number)
+    @IsInt()
+    class_id?: number;
 }
