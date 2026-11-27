@@ -146,7 +146,7 @@ export class EcChargesService {
      * caller's scope, narrowed by explicit C.C.s and/or placement filters (at
      * least one of them, so nobody charges the whole school by accident).
      */
-    private async targetStudents(user: IJwtStaffPayload, dto: EcBulkTargetDto): Promise<StudentRow[]> {
+    async targetStudents(user: IJwtStaffPayload, dto: EcBulkTargetDto): Promise<StudentRow[]> {
         const has = (a?: number[]) => (a?.length ?? 0) > 0;
         if (!has(dto.student_ids) && !has(dto.campus_ids) && !has(dto.class_ids) && !has(dto.section_ids)) {
             throw new BadRequestException('Pick the students: by campus, class, section or C.C.');

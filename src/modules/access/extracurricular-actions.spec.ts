@@ -26,6 +26,7 @@ const EC_TILES_WITH_STUDENT_SEARCH = [
     'extracurricular.single_voucher',
     'extracurricular.receive_deposit',
     'extracurricular.payment_history',
+    'extracurricular.bulk_voucher',
 ];
 
 const ecTiles = TILES_MANIFEST.filter((t) => t.module === 'extracurricular');
@@ -54,6 +55,7 @@ const base = {
 describe('Extracurricular Fees tiles', () => {
     it('is a module of its own with the expected tiles', () => {
         expect(ecTiles.map((t) => t.id).sort()).toEqual([
+            'extracurricular.bulk_voucher',
             'extracurricular.class_schedule',
             'extracurricular.fee_heads',
             'extracurricular.payment_history',

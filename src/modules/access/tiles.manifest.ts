@@ -722,6 +722,16 @@ const EC_SINGLE_VOUCHER_ACTIONS: TileAction[] = [
   { id: 'create', label: 'Issue an extracurricular voucher', description: 'Puts chosen unissued charges on one voucher, with an issue and a valid-till date', implies: ['view'] },
 ];
 
+// TAFSD-605: Extracurricular Fees → Bulk Voucher. One voucher per student per
+// academic year for the chosen heads and months, issued in chunks the page
+// sends one after another (no background job).
+// MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
+const EC_BULK_VOUCHER_ACTIONS: TileAction[] = [
+  { id: 'view', label: 'Open Extracurricular Bulk Voucher', description: 'Preview who would get a voucher and for how much', default: true },
+
+  { id: 'create', label: 'Issue vouchers in bulk', description: 'Also downloads their challans as one PDF', implies: ['view'] },
+];
+
 // TAFSD-605: Extracurricular Fees → Vouchers (the list of every EC voucher).
 // MAINTENANCE: adding a route/feature to this tile? Give it its own action above and @RequireAction it on the route -- new surfaces are not covered automatically. See the `actions` field doc on TileManifestEntry.
 const EC_VOUCHERS_ACTIONS: TileAction[] = [
@@ -1214,6 +1224,7 @@ export const TILES_MANIFEST: TileManifestEntry[] = [
   { id: 'extracurricular.class_schedule', module: 'extracurricular', label: 'Class Amounts', description: "Each extracurricular head's amount per class and academic year", href: '/extracurricular/class-schedule', capabilities: ['extracurricular.class_schedule.view'], actions: EC_CLASS_SCHEDULE_ACTIONS },
   { id: 'extracurricular.student_charges', module: 'extracurricular', label: 'Student Charges', description: 'What each student is charged for extracurricular heads, one by one or in bulk', href: '/extracurricular/student-charges', capabilities: ['extracurricular.student_charges.view'], actions: EC_STUDENT_CHARGES_ACTIONS },
   { id: 'extracurricular.single_voucher', module: 'extracurricular', label: 'Single Voucher', description: "Issue one extracurricular voucher from a student's unissued charges", href: '/extracurricular/single-voucher', capabilities: ['extracurricular.single_voucher.view'], actions: EC_SINGLE_VOUCHER_ACTIONS },
+  { id: 'extracurricular.bulk_voucher', module: 'extracurricular', label: 'Bulk Voucher', description: 'Issue extracurricular vouchers to many students at once and print them as one PDF', href: '/extracurricular/bulk-voucher', capabilities: ['extracurricular.bulk_voucher.view'], actions: EC_BULK_VOUCHER_ACTIONS },
   { id: 'extracurricular.vouchers', module: 'extracurricular', label: 'Vouchers', description: 'Every extracurricular voucher: state, challans, reissue, waive, delete and export', href: '/extracurricular/vouchers', capabilities: ['extracurricular.vouchers.view'], actions: EC_VOUCHERS_ACTIONS },
   { id: 'extracurricular.receive_deposit', module: 'extracurricular', label: 'Receive Deposit', description: 'Record full or partial payments against extracurricular vouchers', href: '/extracurricular/receive-deposit', capabilities: ['extracurricular.receive_deposit.view'], actions: EC_RECEIVE_DEPOSIT_ACTIONS },
   { id: 'extracurricular.payment_history', module: 'extracurricular', label: 'Payment History', description: "A student's extracurricular vouchers and payments; reverse the latest payment", href: '/extracurricular/payment-history', capabilities: ['extracurricular.payment_history.view'], actions: EC_PAYMENT_HISTORY_ACTIONS },

@@ -62,6 +62,7 @@ export class StudentsController {
     'extracurricular.single_voucher',
     'extracurricular.receive_deposit',
     'extracurricular.payment_history',
+    'extracurricular.bulk_voucher',
   )
   async searchSimple(@Query() query: SearchSimpleQueryDto, @CurrentUser() user: IJwtStaffPayload) {
     const results = await this.studentsService.searchSimple(query, user);

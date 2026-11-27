@@ -12,6 +12,7 @@ export const EC_TILE = {
     vouchers: 'extracurricular.vouchers',
     receiveDeposit: 'extracurricular.receive_deposit',
     paymentHistory: 'extracurricular.payment_history',
+    bulkVoucher: 'extracurricular.bulk_voucher',
 } as const;
 
 /**
@@ -27,6 +28,7 @@ export const EC_LIVE_TILES: string[] = [
     EC_TILE.vouchers,
     EC_TILE.receiveDeposit,
     EC_TILE.paymentHistory,
+    EC_TILE.bulkVoucher,
 ];
 
 /**

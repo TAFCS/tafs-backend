@@ -18,6 +18,8 @@ import {
     ReissueEcVoucherDto,
     WaiveEcVoucherDto,
 } from './dto/ec-vouchers.dto';
+import { EcBulkIssueDto, EcBulkIssueFilterDto } from './dto/ec-bulk.dto';
+import { EcVoucherBulkService } from './ec-voucher-bulk.service';
 import { EcVoucherPdfService } from './ec-voucher-pdf.service';
 import { EcVouchersService } from './ec-vouchers.service';
 
@@ -34,6 +36,7 @@ export class EcVouchersController {
     constructor(
         private readonly service: EcVouchersService,
         private readonly pdf: EcVoucherPdfService,
+        private readonly bulk: EcVoucherBulkService,
     ) {}
 
     @Get()
@@ -82,10 +85,26 @@ export class EcVouchersController {
         return createApiResponse(await this.service.forStudent(user, cc), HttpStatus.OK, 'Student vouchers fetched');
     }
 
+    @Post('bulk/preview')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Who would get a bulk voucher, and for how much, without issuing anything' })
+    @RequireAction('extracurricular.bulk_voucher#view')
+    async bulkPreview(@Body() dto: EcBulkIssueFilterDto, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.bulk.preview(user, dto), HttpStatus.OK, 'Bulk preview');
+    }
+
+    @Post('bulk/issue')
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Issue one chunk (up to 100 students) of a bulk run' })
+    @RequireAction('extracurricular.bulk_voucher#create')
+    async bulkIssue(@Body() dto: EcBulkIssueDto, @CurrentUser() user: IJwtStaffPayload) {
+        return createApiResponse(await this.bulk.issue(user, dto), HttpStatus.OK, 'Bulk chunk issued');
+    }
+
     @Post('pdf/prepare')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'Make sure up to 25 challans are rendered and stored' })
-    @RequireAction('extracurricular.vouchers#download')
+    @RequireAnyAction('extracurricular.vouchers#download', 'extracurricular.bulk_voucher#create')
     async preparePdfs(@Body() dto: EcPdfPrepareDto, @CurrentUser() user: IJwtStaffPayload) {
         const out: { id: number; url: string; filename: string }[] = [];
         for (const id of [...new Set(dto.ids)]) {
@@ -98,7 +117,7 @@ export class EcVouchersController {
     @Post('batch-merge')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'Up to 500 challans merged into one PDF' })
-    @RequireAction('extracurricular.vouchers#download')
+    @RequireAnyAction('extracurricular.vouchers#download', 'extracurricular.bulk_voucher#create')
     async batchMerge(@Body() dto: EcPdfMergeDto, @CurrentUser() user: IJwtStaffPayload) {
         const ids = [...new Set(dto.ids)];
         for (const id of ids) await this.service.assertVisible(user, id);

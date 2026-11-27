@@ -60,6 +60,7 @@ const permissionsList = [
     { key: 'extracurricular.class_schedule.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Class Amounts' },
     { key: 'extracurricular.student_charges.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Student Charges' },
     { key: 'extracurricular.single_voucher.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Single Voucher' },
+    { key: 'extracurricular.bulk_voucher.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Bulk Voucher' },
     { key: 'extracurricular.vouchers.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Vouchers' },
     { key: 'extracurricular.receive_deposit.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Receive Deposit' },
     { key: 'extracurricular.payment_history.view', module: 'Extracurricular Fees', description: 'Open Extracurricular Payment History' },
