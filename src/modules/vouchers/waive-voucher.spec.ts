@@ -189,10 +189,11 @@ describe('unwaiveVoucher', () => {
     expect(tx.vouchers.update.mock.calls[0][0].data.status).toBe('PARTIALLY_PAID');
   });
 
-  it('returns an untouched voucher to OVERDUE when past due', async () => {
+  it('returns an untouched voucher to OVERDUE when past due but still valid', async () => {
     const v = voucherRow({
       status: 'WAIVED',
       due_date: new Date('2020-01-01'),
+      validity_date: new Date('2099-01-01'),
       voucher_heads: [head(fee({ status: 'WAIVED' }), { waived: true })],
     });
     const { service, tx } = build(v);
@@ -200,6 +201,20 @@ describe('unwaiveVoucher', () => {
     await service.unwaiveVoucher(77, 'admin');
 
     expect(tx.vouchers.update.mock.calls[0][0].data.status).toBe('OVERDUE');
+  });
+
+  it('returns an untouched voucher to EXPIRED once its validity date has passed (TAFSD-622)', async () => {
+    const v = voucherRow({
+      status: 'WAIVED',
+      due_date: new Date('2020-01-01'),
+      validity_date: new Date('2020-01-05'),
+      voucher_heads: [head(fee({ status: 'WAIVED' }), { waived: true })],
+    });
+    const { service, tx } = build(v);
+
+    await service.unwaiveVoucher(77, 'admin');
+
+    expect(tx.vouchers.update.mock.calls[0][0].data.status).toBe('EXPIRED');
   });
 });
 
