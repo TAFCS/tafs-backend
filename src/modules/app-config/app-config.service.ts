@@ -60,6 +60,9 @@ export const DEVELOPER_SETTINGS_KEYS = new Set([
 
   // System & Developer Feature Flags
   'pay_immediately_enabled',
+  // TAFSD-625: REVISED stamp and FINAL NOTICE line, off unless 'true'
+  'voucher_revised_enabled',
+  'pay_immediately_repeat_enabled',
   'attendance_same_day_override_cutoff',
   'slc_last_number',
 ]);
@@ -501,7 +504,8 @@ export class AppConfigService {
     }
 
     // 3. Boolean flags
-    if (key.endsWith('_mode') || key.endsWith('_disabled') || key === 'pay_immediately_enabled') {
+    if (key.endsWith('_mode') || key.endsWith('_disabled') || key === 'pay_immediately_enabled' ||
+        key === 'voucher_revised_enabled' || key === 'pay_immediately_repeat_enabled') {
       const trimmed = value.trim().toLowerCase();
       if (trimmed !== 'true' && trimmed !== 'false') {
         throw new BadRequestException(`Value for "${key}" must be "true" or "false".`);
