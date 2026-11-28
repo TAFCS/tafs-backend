@@ -26,7 +26,11 @@ function build(permanent: boolean) {
       findMany: jest.fn(async () => TYPES),
       findUnique: jest.fn(async ({ where }: any) => TYPES.find((t) => t.code === where.code) ?? null),
     },
-    leave_requests: { findFirst: jest.fn(async () => null), create: jest.fn(async () => ({ id: 1 })) },
+    leave_requests: {
+      findFirst: jest.fn(async () => null),
+      findMany: jest.fn(async () => []),
+      create: jest.fn(async () => ({ id: 1 })),
+    },
   };
   const svc = new LeaveRequestsService(prisma as any, {} as any, {} as any, {} as any, { log: jest.fn() } as any, {} as any);
   (svc as any).notifyApprovers = jest.fn(async () => undefined);
