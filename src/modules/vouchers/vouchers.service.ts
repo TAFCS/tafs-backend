@@ -31,6 +31,7 @@ import { PDFDocument } from 'pdf-lib';
 import { orderVoucherHeads, OrderableHead } from './voucher-head-order.util';
 import { discountLeftUnusedByCash } from './discount-overcollection';
 import { isFatherRelationship } from './invalidate-unpaid-pdfs';
+import { countVoucherStatuses } from './voucher-status-counts';
 import type { Response } from 'express';
 import { ScopeService } from '../../common/scope/scope.service';
 import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -1676,7 +1677,7 @@ export class VouchersService {
             // Fetch all IDs matching the filter for custom sorting in JS
             const allMatching = await this.prisma.vouchers.findMany({
                 where,
-                select: { id: true, status: true, issue_date: true, student_id: true },
+                select: { id: true, status: true, issue_date: true },
             });
 
             // Default sort: most recent first, regardless of status.
@@ -1686,20 +1687,6 @@ export class VouchersService {
                 if (timeA !== timeB) return timeB - timeA; // desc issue_date
                 return b.id - a.id; // desc id
             });
-
-            // Vouchers may only be deleted in descending (most-recent-first) order per
-            // student. Since allMatching is already sorted most-recent-first, each
-            // student's first appearance here is their latest voucher overall — this
-            // is scoped to `where` (e.g. within a single-student filter), which matches
-            // what the frontend list actually shows.
-            const latestVoucherIdByStudent = new Set<number>();
-            const seenStudents = new Set<number>();
-            for (const v of allMatching) {
-                if (!seenStudents.has(v.student_id)) {
-                    seenStudents.add(v.student_id);
-                    latestVoucherIdByStudent.add(v.id);
-                }
-            }
 
             const total = allMatching.length;
             const paginatedIds = allMatching.slice(skip, skip + take).map(v => v.id);
@@ -1715,25 +1702,19 @@ export class VouchersService {
             // Restore sorted order
             const vouchers = unsortedVouchers.sort((a, b) => paginatedIds.indexOf(a.id) - paginatedIds.indexOf(b.id));
 
+            // Delete and Regenerate only work on the student's latest voucher of
+            // ALL their vouchers (remove() and regenerate() look it up with no
+            // filters, issue_date desc then id desc). Working it out from the
+            // filtered rows would offer them on a voucher that isn't the newest
+            // when a status or date filter hides the newer one (TAFSD-617).
+            const latestVoucherIdByStudent = await this.latestVoucherIdsFor(
+                vouchers.map((v) => v.student_id),
+            );
+
             // Status breakdown is derived from the SAME rows the list is built from
             // (allMatching == every voucher matching `where`, status filter included),
             // so the cards always reconcile with Total and with the filtered list.
-            // PARTIALLY_PAID and any null status fall into `unpaid`.
-            const statusStats = {
-                paid: 0,
-                unpaid: 0,
-                overdue: 0,
-                void: 0,
-                expired: 0
-            };
-
-            allMatching.forEach(v => {
-                if (v.status === 'PAID') statusStats.paid += 1;
-                else if (v.status === 'VOID') statusStats.void += 1;
-                else if (v.status === 'EXPIRED') statusStats.expired += 1;
-                else if (v.status === 'OVERDUE') statusStats.overdue += 1;
-                else statusStats.unpaid += 1;
-            });
+            const statusStats = countVoucherStatuses(allMatching);
 
             return {
                 items: vouchers.map((v) => ({
@@ -1754,6 +1735,24 @@ export class VouchersService {
                 `Voucher query failed: ${err?.message ?? 'Unknown error'}`,
             );
         }
+    }
+
+    /**
+     * The id of each student's latest voucher, of all their vouchers whatever
+     * their status: the same lookup remove() and regenerate() make (issue_date
+     * desc, then id desc; Postgres sorts a null issue_date first, as Prisma's
+     * findFirst does there).
+     */
+    private async latestVoucherIdsFor(studentIds: number[]): Promise<Set<number>> {
+        const ids = [...new Set(studentIds)];
+        if (ids.length === 0) return new Set();
+        const rows = await this.prisma.$queryRaw<{ id: number }[]>`
+            SELECT DISTINCT ON (student_id) id
+            FROM public.vouchers
+            WHERE student_id IN (${Prisma.join(ids)})
+            ORDER BY student_id, issue_date DESC, id DESC
+        `;
+        return new Set(rows.map((r) => Number(r.id)));
     }
 
     async findPendingRelease(filters: {
