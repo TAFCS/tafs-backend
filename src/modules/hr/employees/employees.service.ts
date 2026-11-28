@@ -2171,6 +2171,14 @@ export class EmployeesService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // TAFSD-602: rejoining clears date_of_leaving, which is what keeps the
+      // last day worked on roll (see computeTenureWindows). Move the leave's
+      // progression boundary onto the day after that date first, so the cycle
+      // it fell in still pays through it once the date is gone.
+      if (wasOffboarded && !leavingNow && previousLeavingDate) {
+        await this.employeeProgression.alignLeaveBoundary(tx, id, previousLeavingDate);
+      }
+
       if (existing.user_id && deactivatePortal) {
         await tx.users.update({
           where: { id: existing.user_id },

@@ -4,6 +4,9 @@ import { timingsKey, type EmployeeTimingsSnapshot } from './employee-day-timings
 
 export type PrismaTx = Prisma.TransactionClient;
 
+/** Statuses that take an employee off the roll (TAFSD-602; same set as tenure-window.util). */
+const OFF_PAYROLL_STATUSES = new Set(['LEFT', 'TERMINATED']);
+
 export type ClassSectionSnapshot = { class_id: number; section_id: number | null };
 
 /** The employment state that is tracked over time. */
@@ -192,6 +195,46 @@ export class EmployeeProgressionService {
         valid_to: null,
       },
     });
+  }
+
+  /**
+   * TAFSD-602: the LEFT / TERMINATED row opens when the status change is
+   * recorded, which is rarely the day after the date of leaving. Move the
+   * boundary between the last ACTIVE row and the first row of the current
+   * leave to UTC midnight of the day after `dateOfLeaving`, so the ACTIVE row
+   * (valid_to exclusive) covers the leaving date itself. Called on rejoin,
+   * just before date_of_leaving is cleared.
+   *
+   * The boundary never moves past now or past the end of that first leave
+   * row (a leave revoked before its date leaves no gap), and never back past
+   * the ACTIVE row's own start. No-op when the rows aren't shaped as
+   * expected.
+   */
+  async alignLeaveBoundary(tx: PrismaTx, employeeId: number, dateOfLeaving: Date): Promise<void> {
+    const periods = await tx.employee_progression_periods.findMany({
+      where: { employee_id: employeeId },
+      orderBy: [{ valid_from: 'asc' }, { id: 'asc' }],
+      select: { id: true, employment_status: true, valid_from: true, valid_to: true },
+    });
+    let lastActive = -1;
+    for (let i = 0; i < periods.length; i++) {
+      if (!OFF_PAYROLL_STATUSES.has(periods[i].employment_status)) lastActive = i;
+    }
+    if (lastActive < 0 || lastActive === periods.length - 1) return;
+    const active = periods[lastActive];
+    const firstLeave = periods[lastActive + 1];
+    if (!OFF_PAYROLL_STATUSES.has(firstLeave.employment_status)) return;
+    if (!active.valid_to || active.valid_to.getTime() !== firstLeave.valid_from.getTime()) return;
+
+    const dayAfter = new Date(
+      Date.UTC(dateOfLeaving.getUTCFullYear(), dateOfLeaving.getUTCMonth(), dateOfLeaving.getUTCDate() + 1),
+    );
+    const ceiling = Math.min(Date.now(), firstLeave.valid_to?.getTime() ?? Number.POSITIVE_INFINITY);
+    const boundary = new Date(Math.max(Math.min(dayAfter.getTime(), ceiling), active.valid_from.getTime()));
+    if (boundary.getTime() === firstLeave.valid_from.getTime()) return;
+
+    await tx.employee_progression_periods.update({ where: { id: active.id }, data: { valid_to: boundary } });
+    await tx.employee_progression_periods.update({ where: { id: firstLeave.id }, data: { valid_from: boundary } });
   }
 
   /**

@@ -103,6 +103,30 @@ export function computeTenureWindows(inputs: TenureInputs): TenureWindow[] {
         rawWindows.push({ start: clampedStart, end: clampedEnd });
       }
     }
+
+    // TAFSD-602: the date of leaving is the last day worked and is paid. The
+    // LEFT / TERMINATED row is opened when the status change is *recorded*,
+    // not on the leaving date, so marking someone left on their last day
+    // closed the ACTIVE row that morning and the day itself fell out (valid_to
+    // is exclusive), and a leave entered ahead of time ended at the click.
+    // While a leaving date is on file, the stretch of the current leave's
+    // off-payroll rows up to and including that date is still on roll. Only
+    // the rows after the latest ACTIVE row belong to the current leave; an
+    // earlier leave that ended in a rejoin keeps its gap. A past-dated leave
+    // needs nothing here: the clip below cuts the ACTIVE row back to the date.
+    if (leavingDate) {
+      const latestActiveFrom = progression
+        .filter((p) => !OFF_PAYROLL_STATUSES.has(p.employment_status))
+        .reduce<number | null>((max, p) => (max === null || p.valid_from.getTime() > max ? p.valid_from.getTime() : max), null);
+      for (const period of progression) {
+        if (!OFF_PAYROLL_STATUSES.has(period.employment_status)) continue;
+        if (latestActiveFrom !== null && period.valid_from.getTime() < latestActiveFrom) continue;
+        const rowEnd = period.valid_to ? new Date(period.valid_to.getTime() - 86_400_000) : leavingDate;
+        const start = maxDate(period.valid_from, periodStart);
+        const end = minDate(minDate(rowEnd, leavingDate), periodEnd);
+        if (start.getTime() <= end.getTime()) rawWindows.push({ start, end });
+      }
+    }
   } else {
     // No progression history available — fall back to the current join/leaving
     // fields on the employee profile. Covers the simple cases: a joiner (no
@@ -221,6 +245,7 @@ export function describeCycleTenure(inputs: TenureInputs): CycleTenure {
   const first = windows[0];
   const last = windows[windows.length - 1];
   const joinDate = inputs.joinDate ? toDateOnly(inputs.joinDate) : null;
+  const leavingDate = inputs.dateOfLeaving ? toDateOnly(inputs.dateOfLeaving) : null;
   let joinedOn: string | null = null;
   if (first && first.start.getTime() > periodStart.getTime()) joinedOn = ymd(first.start);
   else if (!first && joinDate && joinDate.getTime() > periodEnd.getTime()) joinedOn = ymd(joinDate);
@@ -230,7 +255,11 @@ export function describeCycleTenure(inputs: TenureInputs): CycleTenure {
     in_tenure_days: totalWindowDays(windows),
     period_days: periodDays,
     joined_on: joinedOn,
-    left_on: last && last.end.getTime() < periodEnd.getTime() ? ymd(last.end) : null,
+    // TAFSD-602: leaving on the cycle's last day is still leaving inside it.
+    left_on:
+      last && (last.end.getTime() < periodEnd.getTime() || (leavingDate !== null && last.end.getTime() === leavingDate.getTime()))
+        ? ymd(last.end)
+        : null,
     rejoined: windows.length > 1,
   };
 }

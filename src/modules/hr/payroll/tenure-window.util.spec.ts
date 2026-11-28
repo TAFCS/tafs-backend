@@ -1,6 +1,8 @@
 import {
   computeTenureWindows,
+  describeCycleTenure,
   isDateInAnyWindow,
+  offRollReason,
   totalWindowDays,
 } from './tenure-window.util';
 
@@ -258,5 +260,172 @@ describe('isDateInAnyWindow', () => {
   it('is false outside every window', () => {
     expect(isDateInAnyWindow(d('2026-08-25'), windows)).toBe(false);
     expect(isDateInAnyWindow(d('2026-09-26'), windows)).toBe(false);
+  });
+});
+
+/**
+ * TAFSD-602: the date of leaving is the last day worked and is paid. The LEFT
+ * row opens when the status change is recorded (a timestamp), not on the
+ * leaving date, so these cases use realistic click times.
+ */
+describe('TAFSD-602 — the date of leaving is on roll', () => {
+  const at = (iso: string) => new Date(iso);
+  // Nov 2026 cycle: Oct 26 → Nov 25.
+  const novStart = d('2026-10-26');
+  const novEnd = d('2026-11-25');
+  const leftAt = (click: string, joined = '2024-11-11') => [
+    { employment_status: 'ACTIVE', valid_from: d(joined), valid_to: at(click) },
+    { employment_status: 'LEFT', valid_from: at(click), valid_to: null },
+  ];
+
+  it('normal day: marked left on the leaving day itself, the day is paid', () => {
+    const inputs = {
+      periodStart: novStart,
+      periodEnd: novEnd,
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: d('2026-11-18'),
+      progression: leftAt('2026-11-18T07:30:00.000Z'), // 12:30 PKT
+    };
+    expect(computeTenureWindows(inputs)).toEqual([{ start: novStart, end: d('2026-11-18') }]);
+    const tenure = describeCycleTenure(inputs);
+    expect(tenure.left_on).toBe('2026-11-18');
+    expect(tenure.in_tenure_days).toBe(24); // Oct 26 → Nov 18
+    expect(offRollReason('2026-11-18', tenure)).toBeNull();
+    expect(offRollReason('2026-11-19', tenure)).toBe('AFTER_LEAVE');
+  });
+
+  it('cycle end (bug 11): leaving on Nov 25, marked at 23:59 PKT, pays the whole cycle and still shows Left 25 Nov', () => {
+    const inputs = {
+      periodStart: novStart,
+      periodEnd: novEnd,
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: d('2026-11-25'),
+      progression: leftAt('2026-11-25T18:59:00.000Z'),
+    };
+    expect(computeTenureWindows(inputs)).toEqual([{ start: novStart, end: novEnd }]);
+    const tenure = describeCycleTenure(inputs);
+    expect(tenure.in_tenure_days).toBe(31);
+    expect(tenure.left_on).toBe('2026-11-25');
+    expect(offRollReason('2026-11-25', tenure)).toBeNull();
+  });
+
+  it('calendar month end: leaving on Oct 31 counts Oct 31', () => {
+    const inputs = {
+      periodStart: novStart,
+      periodEnd: novEnd,
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: d('2026-10-31'),
+      progression: leftAt('2026-10-31T10:00:00.000Z'),
+    };
+    expect(computeTenureWindows(inputs)).toEqual([{ start: novStart, end: d('2026-10-31') }]);
+    expect(describeCycleTenure(inputs).in_tenure_days).toBe(6); // Oct 26 → Oct 31
+  });
+
+  it('1st of a month: leaving on Nov 1 counts Nov 1', () => {
+    const inputs = {
+      periodStart: novStart,
+      periodEnd: novEnd,
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: d('2026-11-01'),
+      progression: leftAt('2026-11-01T04:00:00.000Z'),
+    };
+    expect(computeTenureWindows(inputs)).toEqual([{ start: novStart, end: d('2026-11-01') }]);
+    expect(describeCycleTenure(inputs).left_on).toBe('2026-11-01');
+  });
+
+  it('first day of a cycle: leaving on Oct 26 is a one-day cycle', () => {
+    const inputs = {
+      periodStart: novStart,
+      periodEnd: novEnd,
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: d('2026-10-26'),
+      progression: leftAt('2026-10-26T09:00:00.000Z'),
+    };
+    expect(computeTenureWindows(inputs)).toEqual([{ start: novStart, end: novStart }]);
+  });
+
+  it('past-dated: marked on Nov 20 with a leaving date of Nov 12, pays through Nov 12 only', () => {
+    const windows = computeTenureWindows({
+      periodStart: novStart,
+      periodEnd: novEnd,
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: d('2026-11-12'),
+      progression: leftAt('2026-11-20T06:00:00.000Z'),
+    });
+    expect(windows).toEqual([{ start: novStart, end: d('2026-11-12') }]);
+  });
+
+  it('future-dated: marked on Nov 10 with a leaving date of Nov 20, pays through Nov 20', () => {
+    const windows = computeTenureWindows({
+      periodStart: novStart,
+      periodEnd: novEnd,
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: d('2026-11-20'),
+      progression: leftAt('2026-11-10T06:00:00.000Z'),
+    });
+    expect(windows).toEqual([{ start: novStart, end: d('2026-11-20') }]);
+  });
+
+  it('future-dated into the next cycle: only the LEFT row overlaps it, and the days up to the leaving date still count', () => {
+    // Marked Nov 24 with leaving date Nov 28. The Dec cycle (Nov 26 → Dec 25)
+    // loads only the LEFT row (the ACTIVE one closed before the cycle).
+    const windows = computeTenureWindows({
+      periodStart: d('2026-11-26'),
+      periodEnd: d('2026-12-25'),
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: d('2026-11-28'),
+      progression: [{ employment_status: 'LEFT', valid_from: at('2026-11-24T06:00:00.000Z'), valid_to: null }],
+    });
+    expect(windows).toEqual([{ start: d('2026-11-26'), end: d('2026-11-28') }]);
+  });
+
+  it('an earlier leave that ended in a rejoin keeps its gap when the employee leaves again', () => {
+    const windows = computeTenureWindows({
+      periodStart,
+      periodEnd,
+      joinDate: d('2024-01-01'),
+      dateOfLeaving: d('2026-09-20'),
+      progression: [
+        { employment_status: 'ACTIVE', valid_from: d('2024-01-01'), valid_to: d('2026-09-02') },
+        { employment_status: 'LEFT', valid_from: d('2026-09-02'), valid_to: d('2026-09-15') },
+        { employment_status: 'ACTIVE', valid_from: d('2026-09-15'), valid_to: at('2026-09-20T08:00:00.000Z') },
+        { employment_status: 'LEFT', valid_from: at('2026-09-20T08:00:00.000Z'), valid_to: null },
+      ],
+    });
+    expect(windows).toEqual([
+      { start: periodStart, end: d('2026-09-01') },
+      { start: d('2026-09-15'), end: d('2026-09-20') },
+    ]);
+  });
+
+  it('marked left then rejoined the same day by mistake: the cycle is untouched', () => {
+    const windows = computeTenureWindows({
+      periodStart: novStart,
+      periodEnd: novEnd,
+      joinDate: d('2024-11-11'),
+      dateOfLeaving: null,
+      progression: [
+        { employment_status: 'ACTIVE', valid_from: d('2024-11-11'), valid_to: at('2026-11-25T18:55:00.000Z') },
+        { employment_status: 'LEFT', valid_from: at('2026-11-25T18:55:00.000Z'), valid_to: at('2026-11-25T18:58:00.000Z') },
+        { employment_status: 'ACTIVE', valid_from: at('2026-11-25T18:58:00.000Z'), valid_to: null },
+      ],
+    });
+    expect(windows).toEqual([{ start: novStart, end: novEnd }]);
+  });
+
+  it('after a rejoin clears the leaving date, a boundary aligned to the day after it keeps the last day', () => {
+    // alignLeaveBoundary moved the boundary to UTC midnight of Oct 11
+    // (leaving date Oct 10) before the rejoin on Nov 15.
+    const windows = computeTenureWindows({
+      periodStart: d('2026-09-26'),
+      periodEnd: d('2026-10-25'),
+      joinDate: d('2026-11-15'),
+      dateOfLeaving: null,
+      progression: [
+        { employment_status: 'ACTIVE', valid_from: d('2024-01-01'), valid_to: d('2026-10-11') },
+        { employment_status: 'LEFT', valid_from: d('2026-10-11'), valid_to: at('2026-11-15T06:00:00.000Z') },
+      ],
+    });
+    expect(windows).toEqual([{ start: d('2026-09-26'), end: d('2026-10-10') }]);
   });
 });
