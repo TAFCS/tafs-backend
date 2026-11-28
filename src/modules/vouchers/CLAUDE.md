@@ -185,6 +185,13 @@ Both in `FeeChallanPDF.tsx` (mirrored in `FeeChallanPDF_MeezanBank.tsx`):
 
 ### The repeat warning and the REVISED stamp (TAFSD-419, TAFSD-420)
 
+> **Paused (TAFSD-625, 2026-11-28).** Both are off unless switched on in `app_config`:
+> `voucher_revised_enabled` (REVISED) and `pay_immediately_repeat_enabled` (FINAL NOTICE). A missing
+> row means off. While a stamp is off, no new voucher gets its flag (create, split, regenerate can
+> only turn REVISED off), and `prepareVoucherPdfData()` drops it from every render, so vouchers flagged
+> before the pause reprint without it. Set the row to `'true'` to bring back everything below
+> unchanged. Ordinary PAY IMMEDIATELY (`pay_immediately_enabled`) is not affected.
+
 The stamp is one mark with up to three lines, built only by `voucherStampLines()`
 (`voucher-pdf/voucher-stamp.ts`), in this order: **PAY IMMEDIATELY**, **FINAL NOTICE: SERVICES
 MAY BE SUSPENDED**, **REVISED**. Like `pay_immediately`, both flags below are frozen on the row

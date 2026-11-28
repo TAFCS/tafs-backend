@@ -748,6 +748,22 @@ export class VouchersService {
         return row?.value === 'true';
     }
 
+    // TAFSD-625: the REVISED stamp (TAFSD-419) and the repeat PAY IMMEDIATELY
+    // "FINAL NOTICE" line (TAFSD-420) are paused. Each stays off unless its
+    // app_config row is 'true'; a missing row means off. While off, no new
+    // voucher is flagged and no PDF draws the line, including vouchers flagged
+    // before the pause. Setting the row to 'true' restores the old behaviour.
+    private async voucherStampFlags(
+        client: Pick<Prisma.TransactionClient, 'app_config'>,
+    ): Promise<{ revised: boolean; repeat: boolean }> {
+        const rows = await client.app_config.findMany({
+            where: { key: { in: ['voucher_revised_enabled', 'pay_immediately_repeat_enabled'] } },
+            select: { key: true, value: true },
+        });
+        const on = (key: string) => rows.some((r) => r.key === key && r.value === 'true');
+        return { revised: on('voucher_revised_enabled'), repeat: on('pay_immediately_repeat_enabled') };
+    }
+
     /**
      * The head that defines a split's balance-voucher period: the one on the
      * voucher's own fee_date (the "current period" head), else the first head.
@@ -927,8 +943,14 @@ export class VouchersService {
                 isPayImmediate(arrearsInfo) &&
                 (await this.isPayImmediateEnabled(tx));
             // TAFSD-420. Read here, before step 6 voids the voucher it looks at.
+            // TAFSD-625: both stamps are paused unless switched on in app_config.
+            const stampFlags =
+                payImmediate || dto.is_revised === true
+                    ? await this.voucherStampFlags(tx)
+                    : { revised: false, repeat: false };
             const payImmediateRepeat =
                 payImmediate &&
+                stampFlags.repeat &&
                 isRepeatPayImmediate(
                     await this.findPreviousVoucherForRepeat(tx, dto.student_id, feeDate!),
                     feeDate!,
@@ -1054,7 +1076,7 @@ export class VouchersService {
                     surcharge_waived_by: dto.waived_by || null,
                     pay_immediately: payImmediate,
                     pay_immediately_repeat: payImmediateRepeat,
-                    is_revised: dto.is_revised === true,
+                    is_revised: stampFlags.revised && dto.is_revised === true,
                     generated_by_name: generatorName ?? null,
                     generated_at: new Date(),
                     bulk_voucher_job_id: bulkVoucherJobId ?? null,
@@ -1960,8 +1982,14 @@ export class VouchersService {
         const payImmediate = voucher.pay_immediately === true && !paidStamp && !waived;
         // TAFSD-419/420: same reasoning, and the same exceptions. A receipt or a
         // write-off is the final word on the bill, so neither says REVISED.
-        const payImmediateRepeat = payImmediate && voucher.pay_immediately_repeat === true;
-        const revised = voucher.is_revised === true && !paidStamp && !waived && voucher.status !== 'WAIVED';
+        // TAFSD-625: while a stamp is paused, a row flagged earlier prints without it.
+        const stampFlags =
+            voucher.is_revised === true || voucher.pay_immediately_repeat === true
+                ? await this.voucherStampFlags(this.prisma)
+                : { revised: false, repeat: false };
+        const payImmediateRepeat = payImmediate && stampFlags.repeat && voucher.pay_immediately_repeat === true;
+        const revised =
+            stampFlags.revised && voucher.is_revised === true && !paidStamp && !waived && voucher.status !== 'WAIVED';
 
         // Is EVERY head on this voucher written off, or only some of them? The two
         // read completely differently on the challan and must not be conflated:
@@ -5442,7 +5470,14 @@ export class VouchersService {
 
         // TAFSD-419: an explicit regenerate may turn the REVISED stamp on or off.
         // Written before the render below, which reads the stamp from the row.
-        if (opts?.force && opts.is_revised !== undefined && !finalPaidStamp && !finalWaived) {
+        // TAFSD-625: while REVISED is paused it can still be turned off, not on.
+        if (
+            opts?.force &&
+            opts.is_revised !== undefined &&
+            !finalPaidStamp &&
+            !finalWaived &&
+            (opts.is_revised === false || (await this.voucherStampFlags(this.prisma)).revised)
+        ) {
             await this.setVoucherRevised(voucherId, opts.is_revised, opts.changedBy ?? generatedByName ?? 'system');
         }
 
@@ -6110,7 +6145,13 @@ export class VouchersService {
             const payImmediate = await this.splitPayImmediate(tx, original, allHeads);
             // TAFSD-420: the balance is the same bill again, so it keeps the level
             // of the voucher being split rather than escalating it.
-            const payImmediateRepeat = payImmediate && (original as any).pay_immediately_repeat === true;
+            // TAFSD-625: both stamps are paused unless switched on in app_config.
+            const stampFlags =
+                payImmediate || dto.is_revised === true
+                    ? await this.voucherStampFlags(tx)
+                    : { revised: false, repeat: false };
+            const payImmediateRepeat =
+                payImmediate && stampFlags.repeat && (original as any).pay_immediately_repeat === true;
             if (payImmediate && !dto.pay_immediately_custom_dates) {
                 dueDate = payImmediateDueDate(issueDate);
                 validityDate = dueDate;
@@ -6397,7 +6438,7 @@ export class VouchersService {
                     pay_immediately_repeat: payImmediateRepeat,
                     // TAFSD-419: a PAY IMMEDIATELY balance is always REVISED; any other
                     // balance only when the issuer asks for it.
-                    is_revised: payImmediate || dto.is_revised === true,
+                    is_revised: stampFlags.revised && (payImmediate || dto.is_revised === true),
                     // A new voucher of its own — it inherits none of the original's
                     // issuance traits (see CLAUDE.md). It wasn't produced by the
                     // original's bulk job, and it is released now (or held) exactly
