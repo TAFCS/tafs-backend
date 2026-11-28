@@ -104,9 +104,12 @@ interface FrontPaper {
  * this page is laid out exactly like every real student's. A paper without a date yet takes
  * Wednesday, 30 September, the longest date there is.
  */
-function sampleFrontPage(
+/** What a sample front page needs of its campus. TAFSD-603: the footer prints on it too. */
+export type SampleCampus = { campus_name: string; address: string | null; uan_number: string | null; document_footer?: string[] | null };
+
+export function sampleFrontPage(
     s: { title: string; segmentLine: string | null; academicYear: string; documentNotes: string[]; papers: FrontPaper[] },
-    campus: { campus_name: string; address: string | null; uan_number: string | null },
+    campus: SampleCampus,
     classId: number,
     className: string,
 ): ExamDocPage {
@@ -120,6 +123,7 @@ function sampleFrontPage(
             campusName: campus.campus_name,
             campusAddress: campus.address,
             campusUan: campus.uan_number,
+            campusFooter: campus.document_footer,
             papers: s.papers
                 .filter((p) => p.class_id === classId)
                 .map((p) => ({
@@ -146,7 +150,7 @@ function karachiToday(): string {
 
 
 const SCHEDULE_INCLUDE = {
-    campuses: { select: { id: true, campus_name: true, campus_code: true, address: true, uan_number: true } },
+    campuses: { select: { id: true, campus_name: true, campus_code: true, address: true, uan_number: true, document_footer: true } },
     exam_schedule_classes: { include: { classes: { select: { id: true, description: true } } } },
     exam_schedule_papers: { orderBy: [{ paper_date: 'asc' }, { sort_order: 'asc' }, { id: 'asc' }] },
     _count: { select: { exam_documents: true, exam_schedule_fee_dates: true } },
@@ -408,7 +412,7 @@ export class ExamDocumentsService {
         this.scope.assertCampus(user, dto.campus_id);
         const campus = await this.prisma.campuses.findUnique({
             where: { id: dto.campus_id },
-            select: { id: true, campus_name: true, address: true, uan_number: true },
+            select: { id: true, campus_name: true, address: true, uan_number: true, document_footer: true },
         });
         if (!campus) throw new BadRequestException('Unknown campus');
 
@@ -458,7 +462,7 @@ export class ExamDocumentsService {
     private async settleFronts(
         draft: { title?: string; segment_line?: string | null; academic_year?: string; papers: FrontPaper[] },
         documentNotes: string[],
-        campus: { campus_name: string; address: string | null; uan_number: string | null },
+        campus: SampleCampus,
         classes: { id: number; description: string }[],
     ): Promise<{ classId: number; className: string; page: ExamDocPage; settled: SettledFront }[]> {
         const out: { classId: number; className: string; page: ExamDocPage; settled: SettledFront }[] = [];
@@ -491,7 +495,7 @@ export class ExamDocumentsService {
         this.scope.assertCampus(user, dto.campus_id);
         const campus = await this.prisma.campuses.findUnique({
             where: { id: dto.campus_id },
-            select: { campus_name: true, address: true, uan_number: true },
+            select: { campus_name: true, address: true, uan_number: true, document_footer: true },
         });
         if (!campus) throw new BadRequestException('Unknown campus');
         const classIds = [...new Set(dto.class_ids)];
@@ -1796,6 +1800,7 @@ export class ExamDocumentsService {
                 campusName: schedule.campuses.campus_name,
                 campusAddress: schedule.campuses.address,
                 campusUan: schedule.campuses.uan_number,
+                campusFooter: schedule.campuses.document_footer,
                 papers: schedule.exam_schedule_papers,
             },
             classId: doc.class_id,

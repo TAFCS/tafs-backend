@@ -8,6 +8,8 @@ import type { IJwtStaffPayload } from '../auth/interfaces/jwt-payload.interface'
 import { CreateCampusDto } from './dto/create-campus.dto';
 import { BulkUpdateCampusesDto } from './dto/bulk-update-campuses.dto';
 import { UpsertCampusSectionDto } from './dto/upsert-campus-section.dto';
+import { cleanFooterLines, footerProblems } from '../documents/campus-footer';
+import { campusFooterPreview } from './campus-footer-preview';
 
 @Injectable()
 export class CampusesService {
@@ -167,6 +169,50 @@ export class CampusesService {
         });
         if (!campus) throw new NotFoundException('Campus not found');
         return this.transformCampusData(campus);
+    }
+
+    /**
+     * TAFSD-603: the live preview of a campus's document footer in Setup > Campuses, from the
+     * unsaved draft: the bottom of each kind of document as it prints, and per line the size it
+     * prints at. Nothing is saved.
+     */
+    async previewDocumentFooter(id: number, lines: string[], user?: IJwtStaffPayload) {
+        this.assertCanTouchCampus(user, id);
+        const campus = await this.prisma.campuses.findUnique({
+            where: { id },
+            select: { id: true, campus_name: true, address: true, uan_number: true },
+        });
+        if (!campus) throw new NotFoundException('Campus not found');
+        return campusFooterPreview(campus, lines);
+    }
+
+    /**
+     * TAFSD-603: saves a campus's document footer. Refused while a line is too long to fit a
+     * document's footer even at the smallest size, or breaks the line limits, so nothing that
+     * saves can overflow on paper. An empty footer puts every document back on its own.
+     */
+    async updateDocumentFooter(id: number, raw: string[], changedBy?: string, user?: IJwtStaffPayload) {
+        this.assertCanTouchCampus(user, id);
+        const before = await this.prisma.campuses.findUnique({ where: { id }, select: { campus_name: true, document_footer: true } });
+        if (!before) throw new NotFoundException('Campus not found');
+        const lines = cleanFooterLines(raw);
+        const problems = footerProblems(lines);
+        if (problems.length) throw new BadRequestException(problems.join(' '));
+        const record = await this.prisma.campuses.update({ where: { id }, data: { document_footer: lines }, select: { id: true, document_footer: true } });
+        const show = (l: string[]) => (l.length ? l.join(' / ') : '(each document\'s own)');
+        if (show(before.document_footer ?? []) !== show(lines)) {
+            this.auditLogs.log({
+                entity_type: 'CAMPUS',
+                entity_id: String(id),
+                action: 'UPDATED',
+                section: 'school-setup',
+                old_value: show(before.document_footer ?? []),
+                new_value: show(lines),
+                changed_by: changedBy ?? 'system',
+                note: `Document footer of campus #${id} ("${before.campus_name}") changed.`,
+            });
+        }
+        return record;
     }
 
     async getDependencies(id: number) {

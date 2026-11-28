@@ -1,4 +1,4 @@
-import { buildExamDocPage, ExamDocPageInput, longDate } from './exam-document-page';
+import { buildExamDocPage, ExamDocPageInput, longDate, WEB_LINE } from './exam-document-page';
 import { fitAdmit, fitEntry, fitOneLine, fitTable, standardFrontNotes, pageCountLabel, rowPadding, subjectLines } from './ExamDocumentPDF';
 
 const base = (over: Partial<ExamDocPageInput> = {}): ExamDocPageInput => ({
@@ -127,11 +127,28 @@ describe('TAFSD-528 exam document page', () => {
         );
     });
 
-    it('prints the campus address and UAN from the campus record', () => {
+    it('prints the campus address and UAN from the campus record when the campus has no document footer', () => {
         const d = buildExamDocPage(base({ schedule: { ...base().schedule, campusAddress: ' C-61, Block 13 ', campusUan: ' 111-823-723 ' } }));
-        expect([d.campusAddress, d.campusUan]).toEqual(['C-61, BLOCK 13', '111-823-723']);
+        expect(d.footerLines).toEqual(['C-61, BLOCK 13  ·  UAN : 111-823-723', WEB_LINE]);
         const none = buildExamDocPage(base({ schedule: { ...base().schedule, campusAddress: null, campusUan: '' } }));
-        expect([none.campusAddress, none.campusUan]).toEqual([null, null]);
+        expect(none.footerLines).toEqual([WEB_LINE]);
+        const blank = buildExamDocPage(base({ schedule: { ...base().schedule, campusAddress: 'C-61', campusFooter: ['  ', ''] } }));
+        expect(blank.footerLines).toEqual(['C-61', WEB_LINE]);
+    });
+
+    it('TAFSD-603: prints the campus document footer as typed, in place of the address, UAN and web line', () => {
+        const d = buildExamDocPage(
+            base({
+                schedule: {
+                    ...base().schedule,
+                    campusAddress: 'C-61, Block 13',
+                    campusUan: '111-823-723',
+                    campusFooter: ['  C-61, Block 13,   Gulistan-e-Jauhar ', '', 'www.tafs.edu.pk · info@tafs.edu.pk'],
+                },
+            }),
+        );
+        expect(d.footerLines).toEqual(['C-61, Block 13, Gulistan-e-Jauhar', 'www.tafs.edu.pk · info@tafs.edu.pk']);
+        expect(d.campusLine).toBe('CAMPUS # II : SENIOR CAMBRIDGE SEGMENT');
     });
 
         it('keeps a long name on one line of its box', () => {

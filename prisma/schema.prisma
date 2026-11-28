@@ -136,6 +136,10 @@ model campuses {
   address                       String?
   /// TAFSD-549: the campus's UAN phone number, printed on its statements of entry and admit cards.
   uan_number                    String?                         @db.VarChar(40)
+  /// TAFSD-603: the footer the campus's official documents print, one entry a line (at most 3),
+  /// set in Setup > Campuses. Empty: each document keeps its own footer (statements of entry and
+  /// admit cards: address, UAN and the web line; leaving certificates: the blank's printed footer).
+  document_footer               String[]                        @default([])
   campus_prefix                 String?                         @db.VarChar(10)
   is_active                     Boolean                         @default(true)
   academic_calendar_days        academic_calendar_days[]

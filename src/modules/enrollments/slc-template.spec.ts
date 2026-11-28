@@ -1,10 +1,12 @@
-import { PDFDocument } from 'pdf-lib';
+import { PDFArray, PDFDocument, decodePDFRawStream } from 'pdf-lib';
 import {
   PAGE_HEIGHT,
   PAGE_WIDTH,
   SLC_TEMPLATES,
   SLC_STAMP_COORDINATES,
+  SLC_FOOTER_BAND,
   fillLeavingCertificate,
+  renderSlcFooterStrip,
   resolveSlcTemplate,
   type SlcCertificateData,
 } from './slc-template';
@@ -141,5 +143,43 @@ describe('leaving-certificate templates', () => {
     expect(x).toBeLessThan(170.51);
     expect(x + width).toBeGreaterThan(170.51);
   });
-});
 
+  describe('TAFSD-603 the campus footer', () => {
+    /** The page's content streams, decoded: the blank's own, then what pdf-lib appended. */
+    const contents = async (bytes: Uint8Array): Promise<string> => {
+      const doc = await PDFDocument.load(bytes);
+      const c = doc.getPage(0).node.Contents();
+      const refs = c instanceof PDFArray ? c.asArray() : [c];
+      return refs
+        .map((r) => Buffer.from(decodePDFRawStream(doc.context.lookup(r) as any).decode()).toString('latin1'))
+        .join('\n');
+    };
+    /** pdf-lib writes standard-font text as WinAnsi hex. */
+    const hex = (t: string) => `<${Buffer.from(t, 'latin1').toString('hex').toUpperCase()}>`;
+    const footer = ['C-22, BLOCK - I, NORTH NAZIMABAD, KARACHI, PAKISTAN.', 'Phone: 3663-0051 · www.tafs.edu.pk'];
+
+    it.each(templates.map((t) => [t.id, t] as const))('%s: covers the printed footer and writes the campus footer', async (_id, template) => {
+      const plain = await contents(await fillLeavingCertificate(sample, template));
+      const out = await contents(await fillLeavingCertificate(sample, template, footer));
+      expect(out.length).toBeGreaterThan(plain.length);
+      for (const line of footer) expect(out).toContain(`${hex(line)} Tj`);
+      // A white box over the band under the frame, nothing higher.
+      expect(out).toContain(`1 1 1 rg`);
+      expect(out).toMatch(new RegExp(`0 0 m\\s+0 ${SLC_FOOTER_BAND.top} l\\s+${PAGE_WIDTH} ${SLC_FOOTER_BAND.top} l\\s+${PAGE_WIDTH} 0 l\\s+h\\s+f`));
+      expect(SLC_FOOTER_BAND.top).toBeLessThan(49.13 - 0.5);
+    });
+
+    it('leaves the blank footer alone when the campus has none', async () => {
+      const template = SLC_TEMPLATES['tafsal-jauhar'];
+      const plain = await contents(await fillLeavingCertificate(sample, template));
+      expect(await contents(await fillLeavingCertificate(sample, template, ['   ', '']))).toBe(plain);
+    });
+
+    it('crops the preview strip to the bottom of the blank', async () => {
+      const strip = await PDFDocument.load(await renderSlcFooterStrip(SLC_TEMPLATES['tafsal-kaneez-fatima'], footer));
+      const { width, height } = strip.getPage(0).getSize();
+      expect(width).toBeCloseTo(PAGE_WIDTH);
+      expect(height).toBeLessThan(100);
+    });
+  });
+});

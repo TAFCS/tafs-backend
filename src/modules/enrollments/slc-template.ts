@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { PDFDocument, PDFPage, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from 'pdf-lib';
+import { FOOTER_AREAS, cleanFooterLines, fitFooterLine } from '../documents/campus-footer';
 
 /**
  * Leaving Certificate — fills the school's own pre-printed blanks.
@@ -349,6 +350,8 @@ const resolveTemplatePath = (file: string): string => {
 export async function fillLeavingCertificate(
   data: SlcCertificateData,
   template: SlcTemplate,
+  /** TAFSD-603: the campus's document footer. Empty: the blank's own footer stays. */
+  footerLines: readonly string[] = [],
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.load(readFileSync(resolveTemplatePath(template.file)));
   const page = pdfDoc.getPage(0);
@@ -544,10 +547,66 @@ export async function fillLeavingCertificate(
   onRule(RULE.day, data.day);
   onRule(RULE.date, data.date);
 
+  // Before the photo and stamp: the stamp's bottom edge dips into the footer band.
+  drawCampusFooter(page, font, footerLines);
   await drawPhotograph(pdfDoc, page, BOX.photo, data.photograph_base64);
   await drawSchoolStamp(pdfDoc, page, template);
 
   return pdfDoc.save();
+}
+
+/**
+ * TAFSD-603: the footer band of every blank, under the frame. Measured off the four blanks'
+ * content streams: the frame's bottom edge is a 1pt stroke at y 49.13 (pdf-lib's bottom-up
+ * origin), its sides at x 47.99 and 545.37, and the printed footer's three lines sit between
+ * y 7.5 and 43 on all of them (baselines 35.3-36.3, 21.9-25.7, 7.5-14.0). Nothing else is drawn
+ * below the frame; the school stamp, drawn after the footer, dips to y 43.67.
+ */
+export const SLC_FOOTER_BAND = { bottom: 0, top: 48.3, centreY: 25, x0: 47.99, x1: 545.37 } as const;
+
+/** TAFSD-603: how much of the blank's bottom the Setup > Campuses preview shows: the footer band, the frame's last line and its bottom edge. */
+export const SLC_FOOTER_STRIP_HEIGHT = 78;
+
+/**
+ * TAFSD-603: the bottom of a blank as it prints with these footer lines (none: the blank's own
+ * footer), cropped to a strip for the Setup > Campuses preview. The same blank and the same
+ * drawing a certificate gets.
+ */
+export async function renderSlcFooterStrip(template: SlcTemplate, footerLines: readonly string[]): Promise<Uint8Array> {
+  const pdfDoc = await PDFDocument.load(readFileSync(resolveTemplatePath(template.file)));
+  const page = pdfDoc.getPage(0);
+  drawCampusFooter(page, await pdfDoc.embedFont(StandardFonts.TimesRomanBold), footerLines);
+  page.setMediaBox(0, 0, PAGE_WIDTH, SLC_FOOTER_STRIP_HEIGHT);
+  page.setCropBox(0, 0, PAGE_WIDTH, SLC_FOOTER_STRIP_HEIGHT);
+  return pdfDoc.save();
+}
+
+/** Line height of the stamped footer, as a multiple of its size. */
+const SLC_FOOTER_LEADING = 1.25;
+
+/**
+ * Covers the blank's printed footer and writes the campus's own in its place: each line centred
+ * under the frame in Times-Bold (the blank's labels are set in it), shrunk to fit its width
+ * (campus-footer.ts, the same measure the Setup > Campuses preview and the save check use), the
+ * block centred in the band. No lines, nothing drawn.
+ */
+export function drawCampusFooter(page: PDFPage, font: PDFFont, footerLines: readonly string[]): void {
+  const lines = cleanFooterLines(footerLines);
+  if (!lines.length) return;
+  const band = SLC_FOOTER_BAND;
+  page.drawRectangle({ x: 0, y: band.bottom, width: PAGE_WIDTH, height: band.top - band.bottom, color: rgb(1, 1, 1) });
+  const fits = lines.map((l) => fitFooterLine(l, FOOTER_AREAS.LEAVING_CERTIFICATE));
+  const total = fits.reduce((h, f) => h + f.size * SLC_FOOTER_LEADING, 0);
+  let top = band.centreY + total / 2;
+  const centreX = (band.x0 + band.x1) / 2;
+  for (const f of fits) {
+    const lh = f.size * SLC_FOOTER_LEADING;
+    // The baseline sits a descender above the line box's bottom (Times: 0.217em), plus half the leading.
+    const baseline = top - lh + f.size * 0.217 + (lh - f.size) / 2;
+    const width = font.widthOfTextAtSize(f.text, f.size);
+    page.drawText(f.text, { x: centreX - width / 2, y: baseline, size: f.size, font, color: rgb(0, 0, 0) });
+    top -= lh;
+  }
 }
 
 /**

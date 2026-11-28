@@ -1,6 +1,7 @@
 import { EXAM_LOGO, ExamDocPage } from './ExamDocumentPDF';
 import { docTypeForClass, examGroup, formatSerial, isSecondaryClass } from './exam-document-rules';
 import { backPageNotes, noticeForSchedule } from './exam-notices';
+import { cleanFooterLines } from '../documents/campus-footer';
 
 /**
  * TAFSD-528: what one student's admit card / statement of entry shows, from plain
@@ -15,6 +16,21 @@ export const CAMBRIDGE_CENTRE = 'PK 564';
 export const WEB_LINE = 'info@tafs.edu.pk  ·  american@cyber.net.pk  ·  www.tafs.edu.pk';
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+/**
+ * TAFSD-603: the lines under the campus line in a statement of entry's or admit card's footer.
+ * The campus's own document footer when it has one, as typed. Otherwise what printed before it
+ * existed: the campus's address in capitals with its UAN (TAFSD-528, TAFSD-549; no address and
+ * no UAN, no line), then the school's emails and website.
+ */
+export function examFooterLines(c: { footer?: readonly string[] | null; address?: string | null; uan?: string | null }): string[] {
+    const own = cleanFooterLines(c.footer);
+    if (own.length) return own;
+    const address = c.address?.trim().toUpperCase() || null;
+    const uan = c.uan?.trim() || null;
+    const first = [address, uan ? `UAN : ${uan}` : null].filter(Boolean).join('  ·  ');
+    return [...(first ? [first] : []), WEB_LINE];
+}
 
 export function karachiLong(d: Date): string {
     return new Intl.DateTimeFormat('en-US', {
@@ -64,6 +80,8 @@ export interface ExamDocPageInput {
         campusAddress: string | null;
         /** TAFSD-549: the campus's UAN number, from its record. */
         campusUan?: string | null;
+        /** TAFSD-603: the campus's document footer, from its record. Empty: address, UAN and the web line. */
+        campusFooter?: string[] | null;
         papers: { class_id: number; paper_date: Date; time_text: string; subject: string; code: string | null }[];
     };
     classId: number;
@@ -136,10 +154,11 @@ export function buildExamDocPage(p: ExamDocPageInput): ExamDocPage {
         notice,
         assessment: schedule.title.toUpperCase(),
         campusLine: [schedule.campusName.toUpperCase(), segment].filter(Boolean).join(' : '),
-        // TAFSD-528: the campus's own address from its record; nothing hard-coded. No address, no line.
-        campusAddress: schedule.campusAddress?.trim().toUpperCase() || null,
-        campusUan: schedule.campusUan?.trim() || null,
-        webLine: WEB_LINE,
+        footerLines: examFooterLines({
+            footer: schedule.campusFooter,
+            address: schedule.campusAddress,
+            uan: schedule.campusUan,
+        }),
         issuedLong: karachiLong(p.issuedAt),
     };
 }

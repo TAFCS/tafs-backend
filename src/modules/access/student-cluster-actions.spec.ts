@@ -7,6 +7,8 @@ jest.mock('uuid', () => ({ v4: () => 'mock-uuid' }));
 // virtual: jest here has no tsx in moduleFileExtensions, so it cannot resolve the file.
 jest.mock('../unconfirmed-admissions/DepositSlipPDF', () => ({ DepositSlipPDF: () => null }), { virtual: true });
 jest.mock('../transfers/TransferOrderPDF', () => ({ TransferOrderPDF: () => null }), { virtual: true });
+// TAFSD-603: the campus footer preview renders the exam documents' footer.
+jest.mock('../campuses/campus-footer-preview', () => ({ campusFooterPreview: jest.fn() }));
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { StaffRole } from '@prisma/client';
 import { TransferController } from '../transfers/transfer.controller';
